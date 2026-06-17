@@ -1,6 +1,7 @@
 import numpy as np
+from components import Plant
 
-class HolonomicMobileRobot:
+class HolonomicMobileRobot(Plant):
     """
     Represents a holonomic mobile robot with multiple wheels.
     """
@@ -83,7 +84,7 @@ class HolonomicMobileRobot:
         """
         return self.state
 
-    def get_model_matrices(self):
+    def get_model(self):
         A=np.eye(3)
         B=self.dt*np.eye(3)
         return A,B
