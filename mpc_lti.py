@@ -88,7 +88,7 @@ class MPC_LTI:
         self.H = 2 * (R_bar + self.S_bar.T @ Q_bar @ self.S_bar)
         self.F = 2 * (self.T_bar @ Q_bar @ self.S_bar)
 
-    def solve(self, x0):
+    def compute(self, x0):
         """
         Solve the MPC optimization problem for a given initial state.
 

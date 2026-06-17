@@ -24,6 +24,8 @@ class HolonomicMobileRobot:
         self.r=radius_wheels
         self.dt=dt
         self.state=np.zeros(3)
+        self.A_kinematics, self.A_pinv_kin=self.mobilerobotkinematics()
+
 
     def mobilerobotkinematics(self):
         """
@@ -56,9 +58,8 @@ class HolonomicMobileRobot:
         theta=self.state[2]
         c, s= np.cos(theta), np.sin(theta)
         rot_matrix= np.array([[c,s,0],[-s,c,0],[0,0,1]])
-        A_kinematics, A_pinv_kin=self.mobilerobotkinematics()
         u_body=rot_matrix@u_world
-        wheel_speeds=(1/self.r)*A_kinematics@u_body
+        wheel_speeds=(1/self.r)*self.A_kinematics@u_body
         self.state+=u_world*self.dt
         return wheel_speeds
 
