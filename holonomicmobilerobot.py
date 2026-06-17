@@ -81,6 +81,11 @@ class HolonomicMobileRobot:
             The state vector [x, y, theta].
         """
         return self.state
+
+    def get_model_matrices(self):
+        A=np.eye(3)
+        B=self.dt*np.eye(3)
+        return A,B
         
 
         

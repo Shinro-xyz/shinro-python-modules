@@ -35,6 +35,9 @@ class MPC_LTI:
         self.B = B_dynamics
         self.P = terminal_cost
 
+        self._mpc_cost_matrices()
+        self._mpc_dynamics_matrices()
+
     def constraints(self, constraint_matrix: np.ndarray, upper_bounds: np.ndarray, lower_bounds: np.ndarray):
         """
         Set the constraints for the optimization problem.
