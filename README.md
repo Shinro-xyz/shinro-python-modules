@@ -5,30 +5,41 @@ A clean, modular control framework built on three abstract base classes — **Co
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Controller (ABC)                        │
-│  compute() · reset()                                       │
-├─────────────┬───────────────────┬──────────────────────────┤
-│ PIDController│    MPC_LTI       │         LQR              │
-│ Joint-space  │  Trajectory opt  │   Regulation / stab.     │
-│ Anti-windup  │  OSQP solver     │   DARE solve             │
-├─────────────┴───────────────────┴──────────────────────────┤
-│                         ↓ u (control input)                │
-├─────────────────────────────────────────────────────────────┤
-│                      Plant (ABC)                           │
-│  get_state() · get_model() · step()                        │
-├─────────────────────┬───────────────────────────────────────┤
-│ HolonomicMobileRobot│           ArmRobot                    │
-│ 3-DOF [x, y, θ]     │  6-DOF Cartesian [x,y,z,roll,pitch,yaw]│
-│ Omni-wheel kin.     │  FK · Jacobian · IK                  │
-│ step: velocity→wheels│  step: integrate pose → IK → joints │
-│                     │                                      │
-│                     └────────── SO-ARM100 (config)          │
-└─────────────────────┴───────────────────────────────────────┘
-```
+```mermaid
+flowchart TB
+    subgraph ABCs["Abstract Base Classes"]
+        C[Controller ABC] -->|compute, reset| PID[PIDController]
+        C --> MPC[MPC_LTI]
+        C --> LQR[LQR]
+        P[Plant ABC] -->|get_state, get_model, step| HMR[HolonomicMobileRobot]
+        P --> AR[ArmRobot]
+        SE[StateEstimator ABC]
+    end
 
-See [`ARCHITECTURE.html`](ARCHITECTURE.html) for the full interactive diagram.
+    subgraph Plants["Concrete Plants"]
+        HMR -->|3-DOF [x, y, θ]| HMR_desc["Omni-wheel kinematics<br/>step: velocity → wheel speeds"]
+        AR -->|6-DOF Cartesian| AR_desc["FK · Jacobian · IK<br/>step: integrate pose → IK → joints"]
+        AR --> SO[SO-ARM100]
+        SO -->|position-controlled servos| SO_desc["Inherits ArmRobot<br/>just configures params"]
+    end
+
+    subgraph Controllers["Concrete Controllers"]
+        PID --> PID_desc["Joint-space position<br/>Anti-windup"]
+        MPC --> MPC_desc["Trajectory optimization<br/>OSQP QP solver"]
+        LQR --> LQR_desc["Regulation / stabilization<br/>DARE solve"]
+    end
+
+    Controllers -->|u = control input| Plants
+    Plants -->|state feedback| Controllers
+
+    subgraph Sim["Simulation"]
+        MJ[MuJoCo] -->|joint angles| Plants
+    end
+
+    subgraph Integration["Planned"]
+        SH[Shinro IDE] --> Controllers
+    end
+```
 
 ## Key Design Decisions
 
