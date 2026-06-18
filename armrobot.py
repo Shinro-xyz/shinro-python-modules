@@ -54,6 +54,25 @@ class ArmRobot(Plant):
     def _jacobian(self,joint_angles:np.ndarray):
         T_endeffector, pos, axes= self.forward_kinematics(joint_angles)
         p_endeffector=pos[-1]
+        J=np.zeros((6,self.num_dof))
+        for i in range(self.num_dof):
+            J[:3,i]=np.cross(self.axes[i],p_endeffector-pos[i])
+            J[3:,i]=axes[i]
+        return J
+
+    def inverse_kinematics(self,target_pos:np.ndarray,max_iters:int, q_init=None,tol:float=1e-4):
+        q=q_init if q_init is not None else self.get_state()
+        for j in range(max_iters):
+            T_cur, positions,axes=self.forward_kinematics(q)
+            pos_err=target_pos[:3,3]-T_cur[:3,3]
+            R_err=target_pos[:3,:3]@T_cur[:3,:3].T
+            angle=np.arccos(np.clip(np.))
+            
+            
+            
+            
+        
+        
         
            
             
