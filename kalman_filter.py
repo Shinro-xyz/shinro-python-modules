@@ -15,5 +15,24 @@ class KalmanFilter(StateEstimator):
         self.P=np.eye(A.shape[0])*0.1
 
     def estimate(self, measurement: np.ndarray, control_input: np.ndarray):
-        x_pred=
+        # step 1: predict
+        x_pred=self.A@self.x_hat+self.B@control_input
+        self.P= self.A@self.P@self.A.T+self.Q
+
+        #step 2: Kalman calculations
+        S= self.C@self.P@self.C.T+self.R
+        K_gain=self.P@self.C.T@np.linalg.inv(S)
+
+        #step 3: Updates
+        y_pred=self.C@x_pred+self.D@control_input
+        innovations=measurement-y_pred
+
+        self.x_hat=x_pred+K_gain@innovations
+        self.P=(np.eye(self.A.shape[0])-K_gain@self.C)@self.P
+
+        return self.x_hat
+
+    def reset(self, x0:np.ndarray | None=None):
+        self.x_hat=np.zeros((self.A.shape[0],1)) if x0 is None else x0.copy()
+        self.P=np.eye(self.A.shape[0])*0.1
         
