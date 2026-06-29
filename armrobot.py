@@ -120,8 +120,12 @@ class ArmRobot(Plant):
             jacr = np.zeros((3, self._engine.model.nv))
             mujoco.mj_jac(self._engine.model, self._engine.data, jacp, jacr,
                           self._engine.data.xpos[self._ee_body_id], self._ee_body_id)
-            # Extract arm-relevant columns (indices 3-8, after 3 drive joints)
-            J = np.vstack([jacp[:, 3:9], jacr[:, 3:9]])
+            # Extract arm-relevant columns from the full Jacobian
+            # With free joint: arm velocity starts at index 6+3=9 (6 free + 3 drive)
+            # Without free joint: arm velocity starts at index 3 (3 drive)
+            arm_jac_start = 3 if not hasattr(self._engine, 'has_free_joint') or not self._engine.has_free_joint else 9
+            J = np.vstack([jacp[:, arm_jac_start:arm_jac_start + 6],
+                           jacr[:, arm_jac_start:arm_jac_start + 6]])
             # Map EE velocity to joint velocity via pseudoinverse
             dq = np.linalg.pinv(J) @ u
             # Integrate: joint velocity → joint position target

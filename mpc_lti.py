@@ -36,21 +36,24 @@ class MPC_LTI(Controller):
         self.B = B_dynamics
         self.P = terminal_cost
 
-        self._mpc_cost_matrices()
         self._mpc_dynamics_matrices()
+        self._mpc_cost_matrices()
 
     def constraints(self, constraint_matrix: np.ndarray, upper_bounds: np.ndarray, lower_bounds: np.ndarray):
         """
         Set the constraints for the optimization problem.
 
         Args:
-            constraint_matrix: Matrix defining linear constraints.
-            upper_bounds: Upper limit for the constraints.
-            lower_bounds: Lower limit for the constraints.
+            constraint_matrix: Matrix defining linear constraints (per time step).
+            upper_bounds: Upper limit for the constraints (per time step).
+            lower_bounds: Lower limit for the constraints (per time step).
         """
-        self.A_constraints = sparse.csc_matrix(constraint_matrix)
-        self.lcons = lower_bounds
-        self.ucons = upper_bounds
+        # Tile constraints across the horizon
+        self.A_constraints = sparse.csc_matrix(
+            block_diag([constraint_matrix] * self.N)
+        )
+        self.lcons = np.tile(lower_bounds, self.N)
+        self.ucons = np.tile(upper_bounds, self.N)
 
     def _mpc_dynamics_matrices(self):
         """
@@ -87,7 +90,7 @@ class MPC_LTI(Controller):
         # R_bar: block diagonal of R
         R_bar = np.kron(np.eye(self.N), self.R)
         self.H = 2 * (R_bar + self.S_bar.T @ Q_bar @ self.S_bar)
-        self.F = 2 * (self.T_bar @ Q_bar @ self.S_bar)
+        self.F = 2 * (self.T_bar.T @ Q_bar @ self.S_bar)
 
     def compute(self, x0):
         """
@@ -102,7 +105,8 @@ class MPC_LTI(Controller):
         prob = osqp.OSQP()
         q = self.F.T @ x0
         prob.setup(
-            sparse.csc_matrix(self.H), q.flatten(), self.A_constraints, self.lcons, self.ucons, warm_starting=True
+            sparse.csc_matrix(self.H), q.flatten(), self.A_constraints, self.lcons, self.ucons,
+            warm_starting=True, verbose=False,
         )
         res = prob.solve()
 

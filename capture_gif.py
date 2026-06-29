@@ -150,18 +150,38 @@ def inject_waypoint_markers(xml_string, base_wps, ee_keyframes, base_steps):
 
 
 def inject_free_joint(xml_string):
-    """Add a free joint to the base body so it moves in the MuJoCo scene."""
+    """Restructure: make arm body a child of wheel base, add free joint to wheel base."""
     import xml.etree.ElementTree as ET
     root = ET.fromstring(xml_string)
     worldbody = root.find('.//worldbody')
     
-    # Find the base body (first child of worldbody that's a body)
-    for child in worldbody:
+    # Find the two sibling bodies
+    wheel_base = None
+    arm_base = None
+    for child in list(worldbody):
         if child.tag == 'body':
-            # Add freejoint as first child
-            fj = ET.Element('freejoint')
-            child.insert(0, fj)
-            break
+            name = child.get('name', '')
+            if 'base_plate_layer1' in name:
+                wheel_base = child
+            elif 'base_plate_layer2' in name:
+                arm_base = child
+    
+    if wheel_base is not None and arm_base is not None:
+        # Get wheel base world position
+        wb_pos = [float(x) for x in wheel_base.get('pos', '0 0 0').split()]
+        # Get arm world position
+        ab_pos = [float(x) for x in arm_base.get('pos', '0 0 0').split()]
+        # Make arm position relative to wheel base
+        rel_pos = [ab_pos[i] - wb_pos[i] for i in range(3)]
+        arm_base.set('pos', f'{rel_pos[0]} {rel_pos[1]} {rel_pos[2]}')
+        
+        # Remove arm from worldbody first
+        worldbody.remove(arm_base)
+        # Add free joint to wheel base
+        fj = ET.Element('freejoint')
+        wheel_base.insert(0, fj)
+        # Move arm base inside wheel base
+        wheel_base.append(arm_base)
     
     return ET.tostring(root, encoding='unicode')
 
@@ -226,20 +246,16 @@ NOISE_BASE_THETA = 0.05  # rad std for θ
 NOISE_ARM_POS = 0.01     # m std for x, y, z
 
 # ── Luenberger observer for base ────────────────────────────────────────────
-class LuenbergerObserver:
-    """Discrete-time observer: x̂_{k+1} = A x̂_k + B u_k + L (y_k - C x̂_k)"""
-    def __init__(self, A, B, C, L):
-        self.A, self.B, self.C, self.L = A, B, C, L
-        self.x_hat = np.zeros(A.shape[0])
-    def update(self, u, y):
-        x_pred = self.A @ self.x_hat + self.B @ u
-        innovation = y - self.C @ x_pred
-        self.x_hat = x_pred + self.L @ innovation
-        return self.x_hat.copy()
+from luenberger_observer import LuenbergerObserver
 
 # Observer gain: poles at ~0.1 (faster than LQR closed-loop ~0.37)
 L_obs = np.diag([0.8, 0.8, 0.8])
-base_observer = LuenbergerObserver(np.eye(3), 0.02 * np.eye(3), np.eye(3), L_obs)
+base_observer = LuenbergerObserver(
+    A=np.eye(3), B=0.02 * np.eye(3),
+    observer_gain=L_obs,
+    C=np.eye(3), D=np.zeros((3, 3)),
+    x0=np.zeros((3, 1)),
+)
 
 # ── Arm EE estimator (exponential moving average) ───────────────────────────
 arm_estimated_ee = [np.zeros(3)]  # list wrapper to avoid Python scoping issues
@@ -402,7 +418,9 @@ for step in range(total_steps):
     )
 
     # ── Base: Luenberger observer (uses previous control input) ──
-    estimated_base = base_observer.update(base_vel, noisy_base)
+    estimated_base = base_observer.estimate(
+        noisy_base.reshape(-1, 1), base_vel.reshape(-1, 1)
+    ).flatten()
 
     # ── Arm: EMA estimator ──
     arm_estimated_ee[0] = ALPHA_ARM * noisy_ee + (1 - ALPHA_ARM) * arm_estimated_ee[0]
