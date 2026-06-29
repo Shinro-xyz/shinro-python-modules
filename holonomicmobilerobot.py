@@ -61,7 +61,8 @@ class HolonomicMobileRobot(Plant):
             Calculated wheel speeds.
         """
         if hasattr(self, '_engine') and self._engine is not None:
-            # Base: simple integrator (accurate for holonomic kinematics)
+            # Base: kinematic integrator
+            # The arm uses MuJoCo physics; the base is purely kinematic.
             theta = self.state[2]
             c, s = np.cos(theta), np.sin(theta)
             rot_matrix = np.array([[c, s, 0], [-s, c, 0], [0, 0, 1]])
@@ -69,18 +70,8 @@ class HolonomicMobileRobot(Plant):
             wheel_speeds = (1.0 / self.r) * self.A_kinematics @ u_body
             self.state += u_world * self.dt
 
-            # Update MuJoCo base position to match
-            self._engine.data.qpos[0] = self.state[0]
-            self._engine.data.qpos[1] = self.state[1]
-            # Convert yaw to quaternion
-            yaw = self.state[2]
-            self._engine.data.qpos[3] = np.cos(yaw / 2)
-            self._engine.data.qpos[4] = 0.0
-            self._engine.data.qpos[5] = 0.0
-            self._engine.data.qpos[6] = np.sin(yaw / 2)
-
-            # Step arm physics only (base is kinematic)
-            self._engine.step()
+            # Store wheel delta for visual rolling (applied in LeKiwiSim.step())
+            self._target_wheel_delta = wheel_speeds * self.dt
 
             return wheel_speeds
 

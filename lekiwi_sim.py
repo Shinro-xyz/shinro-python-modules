@@ -34,13 +34,13 @@ HERE = Path(__file__).parent
 MJCF_PATH = str(HERE / "lekiwi-sim" / "mjcf_lcmm_robot.xml")
 
 # ── Joint / Actuator Index Constants ───────────────────────────────────────
-# Free joint (body 1) adds 7 qpos (xyz + quat) and 6 qvel.
-# Drive joints (3 omni wheels) are at qpos[7:10], ctrl[0:3].
-# Arm joints (6-DOF + gripper) are at qpos[10:16], ctrl[3:9].
-DRIVE_QPOS_SLICE = slice(7, 10)    # qpos[7:10]
-ARM_QPOS_SLICE   = slice(10, 16)   # qpos[10:16]
-DRIVE_CTRL_SLICE = slice(0, 3)     # ctrl[0:3]
-ARM_CTRL_SLICE   = slice(3, 9)     # ctrl[3:9]
+# No free joint — base is welded to world, arm and drive joints only.
+# Drive joints (3 omni wheels) are at qpos[0:3], ctrl[0:3].
+# Arm joints (6-DOF + gripper) are at qpos[3:9], ctrl[3:9].
+DRIVE_QPOS_SLICE = slice(0, 3)    # qpos[0:3]
+ARM_QPOS_SLICE   = slice(3, 9)    # qpos[3:9]
+DRIVE_CTRL_SLICE = slice(0, 3)    # ctrl[0:3]
+ARM_CTRL_SLICE   = slice(3, 9)    # ctrl[3:9]
 
 ARM_JOINT_NAMES   = ["Rotation", "Pitch", "Elbow", "Wrist_Pitch", "Wrist_Roll", "Jaw"]
 DRIVE_JOINT_NAMES = [
@@ -66,10 +66,10 @@ class MuJoCoEngine:
         self.model.opt.timestep = dt
         self.dt = dt
 
-        # Cache arm joint limits (indices 4-9 after free joint at 0)
+        # Cache arm joint limits (indices 3-8, after 3 drive joints)
         self.arm_limits = np.zeros((6, 2))
         for i in range(6):
-            self.arm_limits[i] = self.model.jnt_range[4 + i, :]
+            self.arm_limits[i] = self.model.jnt_range[3 + i, :]
 
         mujoco.mj_forward(self.model, self.data)
 
@@ -84,17 +84,15 @@ class MuJoCoEngine:
         return self.data.qpos[DRIVE_QPOS_SLICE].copy()
 
     def get_base_pose(self) -> np.ndarray:
-        """3-dim base pose [x, y, yaw] from the free joint."""
-        # Free joint qpos: [x, y, z, qw, qx, qy, qz]
-        x = self.data.qpos[0]
-        y = self.data.qpos[1]
-        # Extract yaw from quaternion
-        qw, qx, qy, qz = self.data.qpos[3:7]
-        yaw = np.arctan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy**2 + qz**2))
-        return np.array([x, y, yaw])
+        """3-dim base pose [x, y, yaw].
+        
+        Base is welded to world (no free joint), so pose is always [0, 0, 0].
+        The kinematic base state is tracked in HolonomicMobileRobot.state.
+        """
+        return np.array([0.0, 0.0, 0.0])
 
     def get_full_qpos(self) -> np.ndarray:
-        """Full joint position vector (16-dim: 7 free + 3 drive + 6 arm)."""
+        """Full joint position vector (9-dim: 3 drive + 6 arm)."""
         return self.data.qpos.copy()
 
     def get_sensor_data(self) -> dict:
@@ -134,11 +132,6 @@ class MuJoCoEngine:
             self.data.qpos[:] = qpos
         else:
             self.data.qpos[:] = 0.0
-            # Lift base so wheels contact ground (not base plate)
-            # Wheel sphere radius = 0.045, wheel body z ≈ 0.0164 at qpos z=0
-            # Need qpos[2] such that wheel_z - 0.045 ≈ -0.01 (ground)
-            # wheel_z = qpos[2] + 0.0164, so qpos[2] = -0.01 + 0.045 - 0.0164 = 0.0186
-            self.data.qpos[2] = 0.0186
         self.data.qvel[:] = 0.0
         mujoco.mj_forward(self.model, self.data)
 
@@ -206,10 +199,15 @@ class LeKiwiSim:
 
     def reset(self):
         self.engine.reset()
+        self.base.state = np.zeros(3, dtype=np.float64)
 
     def step(self):
         """Advance physics. Call after setting arm/base targets."""
         self.engine.step()
+        # Roll the wheels visually to match the kinematic base motion
+        if hasattr(self.base, '_target_wheel_delta') and self.base._target_wheel_delta is not None:
+            self.engine.data.qpos[0:3] += self.base._target_wheel_delta
+            self.base._target_wheel_delta = None
 
     def get_state(self) -> dict:
         return self.engine.get_sensor_data()

@@ -26,7 +26,12 @@ class ArmRobot(Plant):
         self._last_joints=np.zeros(num_dof)
 
     def get_state(self):
-        """Returns a copy of the current 6D end-effector pose state."""
+        """Returns a copy of the current 6D end-effector pose state.
+        
+        If a MuJoCoEngine is attached, reads the actual physics state.
+        """
+        if hasattr(self, '_engine') and self._engine is not None:
+            return self._engine.get_arm_qpos()
         return self.state.copy()
  
     def get_model(self):
@@ -72,7 +77,7 @@ class ArmRobot(Plant):
         if hasattr(self, '_engine') and self._engine is not None:
             # MuJoCo backend: send position targets to arm actuators
             self._engine.set_arm_ctrl(u)
-            self._engine.step()
+            # Don't step here — LeKiwiSim.step() does the single physics step
             self._last_joints = self._engine.get_arm_qpos()
             self.state = self._last_joints.copy()
             return self._last_joints

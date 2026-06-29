@@ -86,7 +86,7 @@
 
 
     <actuator>
-        <!-- Base drive motors (velocity control, high gear for traction) -->
+        <!-- Base drive motors -->
         <motor name="drive_motor_1" joint="ST3215_Servo_Motor-v1-2_Hub---Servo" gear="20" ctrlrange="-10 10" forcerange="-50 50" />
         <motor name="drive_motor_2" joint="ST3215_Servo_Motor-v1-1_Hub-2---Servo" gear="20" ctrlrange="-10 10" forcerange="-50 50" />
         <motor name="drive_motor_3" joint="ST3215_Servo_Motor-v1_Revolute-40" gear="20" ctrlrange="-10 10" forcerange="-50 50" />
@@ -103,8 +103,12 @@
     <worldbody>
         <light directional="true" pos="-0.5 0.5 3" dir="0 0 -1" />
         <geom pos="0 0 -0.01" size="2 2 0.01" type="plane" rgba="0.8 0.8 0.8 1" friction="0.5 0.005 0.0001" />
-        <body name="base_plate_layer1-v5-1" pos="0.0 0.0 0.0" euler="-0.0 0.0 -0.0">
-            <freejoint />
+        <!-- Target object: a small box to pick up -->
+        <body name="target_box" pos="0.15 0.0 0.025" euler="0 0 0">
+            <geom name="box_geom" type="box" size="0.02 0.02 0.02" rgba="1 0.5 0 0.9" friction="0.5 0.005 0.0001" />
+            <inertial mass="0.02" pos="0 0 0" fullinertia="1e-6 1e-6 1e-6 0 0 0" />
+        </body>
+        <body name="base_plate_layer1-v5-1" pos="0.0 0.0 0.0186" euler="-0.0 0.0 -0.0">
             <site name="red_sphere" pos="0 0 0" size="0.01" rgba="1 0 0 1" type="sphere"/>
             <geom name="base_plate_layer1-v5-1_geom" type="mesh" mesh="base_plate_layer1-v5-1" pos="0 0 0" euler="0 0 0" contype="0" conaffinity="0" />
             <inertial mass="1.9468624348344596" pos="-4.730687660675253e-15 -2.7155537377808555e-05 -0.0035000000000000005" fullinertia="0.005637109888809055 0.005628440956780792 0.0112496514690387 1.3447333053523504e-16 1.7848833522297417e-20 2.6469779601696886e-23" />

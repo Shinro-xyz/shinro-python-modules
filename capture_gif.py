@@ -63,8 +63,8 @@ for step in range(total_steps):
     sim.base.step(base_vel)
     sim.step()
 
-    # Update camera to follow base
-    base_pose = sim.engine.get_base_pose()
+    # Update camera to follow base (from kinematic state)
+    base_pose = sim.base.state
     camera.lookat[:] = [base_pose[0], base_pose[1], 0.1]
 
     # ── Render (every Nth frame) ──

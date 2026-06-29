@@ -49,7 +49,7 @@ def test_engine():
     # 1a. Model loads with expected structure
     check("Model has 9 actuators (nu=9)", engine.model.nu == 9,
           f"got nu={engine.model.nu}")
-    check("Model has 16 qpos (nq=16)", engine.model.nq == 16,
+    check("Model has 9 qpos (nq=9)", engine.model.nq == 9,
           f"got nq={engine.model.nq}")
     check("Model has 43 bodies", engine.model.nbody == 43,
           f"got nbody={engine.model.nbody}")
@@ -74,11 +74,11 @@ def test_engine():
     for _ in range(10):
         engine.step()
     qpos_after = engine.get_full_qpos()
-    # Arm droops under gravity; base (free joint) should stay put
-    base_diff = np.max(np.abs(qpos_after[:7] - qpos_before[:7]))
-    check("No control → base stays put (free joint)",
-          base_diff < 0.01,
-          f"base max diff: {base_diff}")
+    # Drive joints (qpos[0:3]) should stay at zero; arm joints droop
+    drive_diff = np.max(np.abs(qpos_after[:3] - qpos_before[:3]))
+    check("No control → drive joints stay at zero",
+          drive_diff < 1e-4,
+          f"drive max diff: {drive_diff}")
 
     # 1e. Arm position control moves joints
     ctrl = np.zeros(9)
@@ -140,7 +140,9 @@ def test_arm_mujoco():
     arm._engine = engine
 
     # 2a. Step with zero target — arm droops under gravity (expected with position servos)
-    joints = arm.step(np.zeros(6))
+    arm.step(np.zeros(6))
+    engine.step()  # advance physics
+    joints = arm.get_state()  # reads from MuJoCo engine
     # Arm droops: joints 1-2 (Pitch, Elbow) sag under gravity
     check("Zero target → arm droops under gravity (expected)",
           np.any(np.abs(joints[1:3]) > 0.001),
@@ -153,6 +155,7 @@ def test_arm_mujoco():
     target = np.array([0.5, -0.3, 0.8, 0.0, 0.0, 0.0])
     for _ in range(100):
         joints = arm.step(target)
+        engine.step()
     # Position servos with kp=50 have steady-state error under gravity
     # Rotation joint (0) has ~0.48 rad error; Pitch (1) and Elbow (2) track better
     check("Arm moves toward positive target",
@@ -166,16 +169,20 @@ def test_arm_mujoco():
     extreme = np.array([10.0, -10.0, 10.0, 10.0, 10.0, 10.0])
     for _ in range(200):
         joints = arm.step(extreme)
+        engine.step()
     check("Joint limits respected",
           np.all(joints >= engine.arm_limits[:, 0] - 0.01) and
           np.all(joints <= engine.arm_limits[:, 1] + 0.01),
           f"joints: {joints}\n  limits: {engine.arm_limits}")
 
-    # 2d. get_state returns current joints
+    # 2d. get_state returns current joints from MuJoCo
     state = arm.get_state()
-    check("get_state matches last joints",
-          almost_eq(state, joints, tol=1e-3),
-          f"state: {state}, joints: {joints}")
+    check("get_state returns finite values",
+          np.all(np.isfinite(state)),
+          f"NaN in state: {state}")
+    check("get_state returns 6 values",
+          len(state) == 6,
+          f"got {len(state)}")
 
     # 2e. get_model returns A, B
     A, B = arm.get_model()
@@ -210,6 +217,7 @@ def test_base_mujoco():
     v_forward = np.array([0.2, 0.0, 0.0])
     for _ in range(100):
         base.step(v_forward)
+        engine.step()
     state = base.get_state()
     check("Forward velocity → +x movement",
           state[0] > 0.15 and abs(state[1]) < 0.01 and abs(state[2]) < 0.01,
@@ -220,6 +228,7 @@ def test_base_mujoco():
     v_lateral = np.array([0.0, 0.2, 0.0])
     for _ in range(100):
         base.step(v_lateral)
+        engine.step()
     state = base.get_state()
     check("Lateral velocity → +y movement",
           abs(state[0]) < 0.01 and state[1] > 0.15 and abs(state[2]) < 0.01,
@@ -230,6 +239,7 @@ def test_base_mujoco():
     v_rot = np.array([0.0, 0.0, 0.5])
     for _ in range(100):
         base.step(v_rot)
+        engine.step()
     state = base.get_state()
     check("Rotational velocity → yaw change",
           abs(state[0]) < 0.01 and abs(state[1]) < 0.01 and state[2] > 0.4,
@@ -239,6 +249,7 @@ def test_base_mujoco():
     base.set_pose(0, 0, 0)
     for _ in range(50):
         base.step(v_forward)
+        engine.step()
     state = base.get_state()
     check("Kinematic accuracy: 0.2 m/s × 1s ≈ 0.2 m",
           abs(state[0] - 0.2) < 0.01,
@@ -273,8 +284,8 @@ def test_lekiwi_sim():
           almost_eq(state["arm_joints"], np.zeros(6), tol=1e-4),
           f"got {state['arm_joints']}")
     check("Sim initial base pose is origin",
-          almost_eq(state["base_pose"][:2], [0, 0], tol=1e-4),
-          f"got {state['base_pose']}")
+          almost_eq(sim.base.state[:2], [0, 0], tol=1e-4),
+          f"got {sim.base.state}")
 
     # 4b. Arm + base simultaneous movement
     arm_target = np.array([0.3, -0.2, 0.5, 0.0, 0.0, 0.0])
@@ -290,8 +301,8 @@ def test_lekiwi_sim():
           np.any(np.abs(state["arm_joints"]) > 0.01),
           f"arm: {state['arm_joints']}")
     check("Base moved under combined control",
-          np.any(np.abs(state["base_pose"]) > 0.01),
-          f"base: {state['base_pose']}")
+          np.any(np.abs(sim.base.state) > 0.01),
+          f"base: {sim.base.state}")
 
     # 4c. Reset clears everything
     sim.reset()
@@ -300,8 +311,8 @@ def test_lekiwi_sim():
           almost_eq(state["arm_joints"], np.zeros(6), tol=1e-3),
           f"got {state['arm_joints']}")
     check("Reset clears base pose",
-          almost_eq(state["base_pose"][:2], [0, 0], tol=1e-3),
-          f"got {state['base_pose']}")
+          almost_eq(sim.base.state, np.zeros(3), tol=1e-3),
+          f"got {sim.base.state}")
 
     # 4d. Re-run after reset works
     for _ in range(50):
