@@ -134,6 +134,11 @@ class MuJoCoEngine:
             self.data.qpos[:] = qpos
         else:
             self.data.qpos[:] = 0.0
+            # Lift base so wheels contact ground (not base plate)
+            # Wheel sphere radius = 0.045, wheel body z ≈ 0.0164 at qpos z=0
+            # Need qpos[2] such that wheel_z - 0.045 ≈ -0.01 (ground)
+            # wheel_z = qpos[2] + 0.0164, so qpos[2] = -0.01 + 0.045 - 0.0164 = 0.0186
+            self.data.qpos[2] = 0.0186
         self.data.qvel[:] = 0.0
         mujoco.mj_forward(self.model, self.data)
 

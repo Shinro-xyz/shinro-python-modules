@@ -24,7 +24,7 @@ class HolonomicMobileRobot(Plant):
         self.gamma=gamma
         self.r=radius_wheels
         self.dt=dt
-        self.state=np.zeros(3)
+        self.state=np.zeros(3, dtype=np.float64)
         self.A_kinematics, self.A_pinv_kin=self.mobilerobotkinematics()
 
 
@@ -50,8 +50,9 @@ class HolonomicMobileRobot(Plant):
         """
         Update robot state and compute wheel speeds for a given world-frame velocity.
 
-        If a MuJoCoEngine is attached (via _engine), delegates to physics.
-        Otherwise uses the simple integrator model.
+        If a MuJoCoEngine is attached (via _engine), the arm uses MuJoCo physics
+        but the base uses the simple integrator (omni-wheel contact physics is
+        unreliable with simplified collision geoms).
 
         Args:
             u_world: Desired velocity vector in world coordinates.
@@ -60,15 +61,27 @@ class HolonomicMobileRobot(Plant):
             Calculated wheel speeds.
         """
         if hasattr(self, '_engine') and self._engine is not None:
-            # MuJoCo backend: convert world velocity to wheel speeds, send to drive motors
+            # Base: simple integrator (accurate for holonomic kinematics)
             theta = self.state[2]
             c, s = np.cos(theta), np.sin(theta)
             rot_matrix = np.array([[c, s, 0], [-s, c, 0], [0, 0, 1]])
             u_body = rot_matrix @ u_world
             wheel_speeds = (1.0 / self.r) * self.A_kinematics @ u_body
-            self._engine.set_drive_ctrl(wheel_speeds)
+            self.state += u_world * self.dt
+
+            # Update MuJoCo base position to match
+            self._engine.data.qpos[0] = self.state[0]
+            self._engine.data.qpos[1] = self.state[1]
+            # Convert yaw to quaternion
+            yaw = self.state[2]
+            self._engine.data.qpos[3] = np.cos(yaw / 2)
+            self._engine.data.qpos[4] = 0.0
+            self._engine.data.qpos[5] = 0.0
+            self._engine.data.qpos[6] = np.sin(yaw / 2)
+
+            # Step arm physics only (base is kinematic)
             self._engine.step()
-            self.state = self._engine.get_base_pose()
+
             return wheel_speeds
 
         # Fallback: simple integrator
@@ -89,7 +102,7 @@ class HolonomicMobileRobot(Plant):
             y: Y-coordinate.
             theta: Orientation.
         """
-        self.state=np.array([x,y,theta])
+        self.state=np.array([x,y,theta], dtype=np.float64)
 
     def get_state(self):
         """

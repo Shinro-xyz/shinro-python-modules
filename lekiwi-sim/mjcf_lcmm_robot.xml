@@ -86,10 +86,10 @@
 
 
     <actuator>
-        <!-- Base drive motors (velocity control) -->
-        <motor name="drive_motor_1" joint="ST3215_Servo_Motor-v1-2_Hub---Servo" gear="5" ctrlrange="-10 10" forcerange="-20 20" />
-        <motor name="drive_motor_2" joint="ST3215_Servo_Motor-v1-1_Hub-2---Servo" gear="5" ctrlrange="-10 10" forcerange="-20 20" />
-        <motor name="drive_motor_3" joint="ST3215_Servo_Motor-v1_Revolute-40" gear="5" ctrlrange="-10 10" forcerange="-20 20" />
+        <!-- Base drive motors (velocity control, high gear for traction) -->
+        <motor name="drive_motor_1" joint="ST3215_Servo_Motor-v1-2_Hub---Servo" gear="20" ctrlrange="-10 10" forcerange="-50 50" />
+        <motor name="drive_motor_2" joint="ST3215_Servo_Motor-v1-1_Hub-2---Servo" gear="20" ctrlrange="-10 10" forcerange="-50 50" />
+        <motor name="drive_motor_3" joint="ST3215_Servo_Motor-v1_Revolute-40" gear="20" ctrlrange="-10 10" forcerange="-50 50" />
 
         <!-- Arm joints -->
         <position class="Rotation" name="Rotation" joint="Rotation"/>
@@ -106,7 +106,7 @@
         <body name="base_plate_layer1-v5-1" pos="0.0 0.0 0.0" euler="-0.0 0.0 -0.0">
             <freejoint />
             <site name="red_sphere" pos="0 0 0" size="0.01" rgba="1 0 0 1" type="sphere"/>
-            <geom name="base_plate_layer1-v5-1_geom" type="mesh" mesh="base_plate_layer1-v5-1" pos="0 0 0" euler="0 0 0" />
+            <geom name="base_plate_layer1-v5-1_geom" type="mesh" mesh="base_plate_layer1-v5-1" pos="0 0 0" euler="0 0 0" contype="0" conaffinity="0" />
             <inertial mass="1.9468624348344596" pos="-4.730687660675253e-15 -2.7155537377808555e-05 -0.0035000000000000005" fullinertia="0.005637109888809055 0.005628440956780792 0.0112496514690387 1.3447333053523504e-16 1.7848833522297417e-20 2.6469779601696886e-23" />
             <body name="drive_motor_mount-v4-3" pos="-0.020610000007450578 -0.09 0.0020000000000000018" euler="-0.0 0.0 -1.5707963267948966">
                 <geom name="drive_motor_mount-v4-3_geom" type="mesh" mesh="drive_motor_mount-v4-3" pos="0 0 0" euler="0 0 0" />
@@ -119,8 +119,8 @@
                         <geom name="3_8-Hex-Bore-Plastic-VersaHub-217-5828-v2-2_geom" type="mesh" mesh="3_8-Hex-Bore-Plastic-VersaHub-217-5828-v2-2" pos="0 0 0" euler="0 0 0" />
                         <inertial mass="0.08665496109754897" pos="8.50877658112488e-09 7.358945011137765e-09 0.0023811166424899887" fullinertia="1.2296291761641504e-05 1.2296276073121143e-05 2.2911778015411222e-05 -3.19167294920219e-12 1.755992026942528e-12 1.5186622033709633e-12" />
                         <body name="4-Omni-Directional-Wheel_Single_Body-v1-2" pos="-2.453269466693399e-18 0.0 0.0174625" euler="-3.141592653589793 -1.5192908393215678e-64 -0.2617993877991494">
-                            <geom name="4-Omni-Directional-Wheel_Single_Body-v1-2_geom" type="mesh" mesh="4-Omni-Directional-Wheel_Single_Body-v1-2" pos="0 0 0" euler="0 0 0" />
-                            <geom name="wheel_collision_1" type="cylinder" size="0.045 0.01" pos="0 0 0" friction="0.8 0.01 0.0001" group="3" />
+                            <geom name="4-Omni-Directional-Wheel_Single_Body-v1-2_geom" type="mesh" mesh="4-Omni-Directional-Wheel_Single_Body-v1-2" pos="0 0 0" euler="0 0 0" contype="0" conaffinity="0" />
+                            <geom name="wheel_collision_1" type="sphere" size="0.045" pos="0 0 0" friction="0.8 0.01 0.0001" group="3" />
                             <inertial mass="1.3542854082324305" pos="-7.105207895657716e-08 -1.1369917947312704e-07 -1.2090586078983279e-08" fullinertia="0.0010936200374455458 0.0010936108480286116 0.0018798127501507855 -5.245142023675448e-09 4.046730352778215e-10 1.0004485488405523e-10" />
                         </body>
                     </body>
@@ -137,8 +137,8 @@
                         <geom name="3_8-Hex-Bore-Plastic-VersaHub-217-5828-v2-1_geom" type="mesh" mesh="3_8-Hex-Bore-Plastic-VersaHub-217-5828-v2-1" pos="0 0 0" euler="0 0 0" />
                         <inertial mass="0.08665496109754897" pos="8.508776579152501e-09 7.358945011269938e-09 0.0023811166424899787" fullinertia="1.2296291761641589e-05 1.2296276073121566e-05 2.2911778015411107e-05 -3.1916729680995547e-12 1.755991986238418e-12 1.5186621750295066e-12" />
                         <body name="4-Omni-Directional-Wheel_Single_Body-v1-1" pos="-8.88178419700111e-18 3.3306690738754695e-17 0.01746250000000007" euler="3.141592653589793 5.5511151231257747e-17 1.8325957145940461">
-                            <geom name="4-Omni-Directional-Wheel_Single_Body-v1-1_geom" type="mesh" mesh="4-Omni-Directional-Wheel_Single_Body-v1-1" pos="0 0 0" euler="0 0 0" />
-                            <geom name="wheel_collision_2" type="cylinder" size="0.045 0.01" pos="0 0 0" friction="0.8 0.01 0.0001" group="3" />
+                            <geom name="4-Omni-Directional-Wheel_Single_Body-v1-1_geom" type="mesh" mesh="4-Omni-Directional-Wheel_Single_Body-v1-1" pos="0 0 0" euler="0 0 0" contype="0" conaffinity="0" />
+                            <geom name="wheel_collision_2" type="sphere" size="0.045" pos="0 0 0" friction="0.8 0.01 0.0001" group="3" />
                             <inertial mass="1.3542854082324305" pos="-7.105207896524954e-08 -1.1369917948959942e-07 -1.2090586104095832e-08" fullinertia="0.0010936200374455313 0.0010936108480285981 0.0018798127501507892 -5.2451420243259696e-09 4.0467303541420525e-10 1.0004485627777097e-10" />
                         </body>
                     </body>
@@ -155,8 +155,8 @@
                         <geom name="3_8-Hex-Bore-Plastic-VersaHub-217-5828-v2_geom" type="mesh" mesh="3_8-Hex-Bore-Plastic-VersaHub-217-5828-v2" pos="0 0 0" euler="0 0 0" />
                         <inertial mass="0.08665496109754897" pos="8.508776583007207e-09 7.358945014555165e-09 0.0023811166424899874" fullinertia="1.2296291761641274e-05 1.2296276073121517e-05 2.291177801541124e-05 -3.1916729470190563e-12 1.7559920314671269e-12 1.5186621186676676e-12" />
                         <body name="4-Omni-Directional-Wheel_Single_Body-v1" pos="-2.220446049250313e-18 -7.105427357601001e-17 0.017462499999999947" euler="-3.141592653589793 6.689058043222894e-18 -0.2617993877991494">
-                            <geom name="4-Omni-Directional-Wheel_Single_Body-v1_geom" type="mesh" mesh="4-Omni-Directional-Wheel_Single_Body-v1" pos="0 0 0" euler="0 0 0" />
-                            <geom name="wheel_collision_3" type="cylinder" size="0.045 0.01" pos="0 0 0" friction="0.8 0.01 0.0001" group="3" />
+                            <geom name="4-Omni-Directional-Wheel_Single_Body-v1_geom" type="mesh" mesh="4-Omni-Directional-Wheel_Single_Body-v1" pos="0 0 0" euler="0 0 0" contype="0" conaffinity="0" />
+                            <geom name="wheel_collision_3" type="sphere" size="0.045" pos="0 0 0" friction="0.8 0.01 0.0001" group="3" />
                             <inertial mass="1.3542854082324305" pos="-7.105207895771595e-08 -1.1369917947234093e-07 -1.2090586101420118e-08" fullinertia="0.0010936200374455356 0.0010936108480285988 0.0018798127501507824 -5.245142023187557e-09 4.046730340142343e-10 1.0004485862393181e-10" />
                         </body>
                     </body>
