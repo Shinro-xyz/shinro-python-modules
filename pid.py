@@ -24,6 +24,9 @@ class PIDController(Controller):
     
         self.min_limits=output_limits[0] if output_limits else None
         self.max_limits=output_limits[1] if output_limits else None
+        self._integral=np.zeros_like(self.ki)
+        self._prev_error=np.zeros_like(self.kd)
+        self.has_run=False
     def compute(self,current_state:np.ndarray,target_state:np.ndarray):
         """
         Compute the control effort based on the error between target and current state.

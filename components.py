@@ -150,12 +150,12 @@ class TrajectoryGenerator(ABC):
         generator.reset()
     """
     @abstractmethod
-    def generate(self, start_postion:Any, end_position: Any, duration: Any)-> Any:
+    def generate(self, start_position: Any, end_position: Any, duration: Any) -> Any:
         """
         Generate a trajectory from start to end position over a given duration.
 
         Args:
-            start_postion: Initial configuration.
+            start_position: Initial configuration.
             end_position: Final target configuration.
             duration: Total time duration of the trajectory in seconds.
 
