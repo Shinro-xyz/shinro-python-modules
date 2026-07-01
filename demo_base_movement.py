@@ -47,7 +47,7 @@ HERE = Path(__file__).parent
 OUTPUT_PATH = str(HERE / "lekiwi_demo.gif")
 
 from lekiwi_sim import LeKiwiSim
-from lqr import LQR
+from controllers.lqr import LQR
 
 
 # ── Trajectory presets ──────────────────────────────────────────────────────
@@ -188,7 +188,7 @@ Q_base = np.diag([100.0, 100.0, 50.0])
 R_base = np.diag([0.1, 0.1, 0.1])
 
 if CONTROLLER == "mpc":
-    from mpc_lti import MPC_LTI_DeltaU
+    from controllers.mpc_lti import MPC_LTI_DeltaU
     # Δu penalty: S = diag(1.0, 1.0, 2.0) — penalizes rapid changes in vx, vy, ω
     # Higher ω penalty because yaw chatter is most visible
     S_delta = np.diag([1.0, 1.0, 2.0])
@@ -209,7 +209,7 @@ if CONTROLLER == "mpc":
     )
     CTRL_LABEL = "MPC"
 else:
-    from lqr import LQR
+    from controllers.lqr import LQR
     base_ctrl = LQR(Q_base, R_base, A_base, B_base)
     CTRL_LABEL = "LQR"
 
@@ -218,7 +218,7 @@ NOISE_BASE_POS = 0.02    # m std for x, y
 NOISE_BASE_THETA = 0.05  # rad std for θ
 
 # ── Luenberger observer for base ────────────────────────────────────────────
-from luenberger_observer import LuenbergerObserver
+from estimators.luenberger_observer import LuenbergerObserver
 
 # Observer gain: poles at ~0.1 (faster than LQR closed-loop ~0.37)
 L_obs = np.diag([0.8, 0.8, 0.8])

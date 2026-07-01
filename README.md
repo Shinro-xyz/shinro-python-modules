@@ -1,7 +1,6 @@
 # Lekiwi MPC — Whole-Body Control Framework
 
-
-A clean, modular control framework built on three abstract base classes — **Controller**, **Plant**, and **StateEstimator** — with concrete implementations for the lekiwi robot's holonomic base and 6-DOF arm. Designed for the Shinro robotics IDE integration.
+A clean, modular control framework built on four abstract base classes — **Controller**, **Plant**, **StateEstimator**, and **TrajectoryGenerator** — with concrete implementations for the lekiwi robot's holonomic base and 6-DOF arm. Designed for the Shinro robotics IDE integration.
 
 ## Architecture
 
@@ -15,6 +14,8 @@ flowchart TB
         P --> AR[ArmRobot]
         SE[StateEstimator ABC] -->|estimate, reset| KF[KalmanFilter]
         SE --> LO[LuenbergerObserver]
+        TG[TrajectoryGenerator ABC] -->|generate, position_at| CP[CubicPolynomial]
+        TG --> QP[QuinticPolynomial]
     end
 
     subgraph Plants["Concrete Plants"]
@@ -35,10 +36,16 @@ flowchart TB
         LO --> LO_desc["Observer dynamics<br/>x̂ = Ax̂ + Bu + L(y − Cx̂)"]
     end
 
+    subgraph Trajectories["Concrete Trajectory Generators"]
+        CP --> CP_desc["Cubic polynomial<br/>Closed-form coefficients<br/>Position + velocity continuity"]
+        QP --> QP_desc["Quintic polynomial<br/>Matrix solve or closed-form<br/>Position + velocity + acceleration continuity"]
+    end
+
     Controllers -->|u = control input| Plants
     Plants -->|state feedback| Controllers
     Plants -->|measurements| Estimators
     Estimators -->|state estimates| Controllers
+    Trajectories -->|reference path| Controllers
 
     subgraph Sim["Simulation"]
         MJ[MuJoCo] -->|joint angles| Plants
@@ -66,8 +73,9 @@ Servos
 - **Controller** = algorithm (MPC, PID, LQR)
 - **Plant** = what you're controlling (base, arm)
 - **StateEstimator** = what you measure (KalmanFilter, LuenbergerObserver)
+- **TrajectoryGenerator** = reference path (cubic, quintic, more coming)
 
-Swap any controller onto any plant, any estimator onto any plant — same interface.
+Swap any controller onto any plant, any estimator onto any plant, any trajectory onto any controller — same interface.
 
 ### Verified Kinematics
 - Forward kinematics via homogeneous transforms
@@ -79,18 +87,40 @@ Swap any controller onto any plant, any estimator onto any plant — same interf
 
 ```
 lerobot-mpc-lekiwi/
-├── components.py              # ABCs: Controller, Plant, StateEstimator
-├── holonomicmobilerobot.py    # 3-DOF base with omni-wheel kinematics
-├── armrobot.py                # 6-DOF arm: FK, Jacobian, IK, Cartesian step
-├── pid.py                     # PID controller with anti-windup
-├── mpc_lti.py                 # MPC with OSQP QP solver
-├── lqr.py                     # LQR with DARE solve
-├── kalman_filter.py           # Discrete Kalman filter state estimator
-├── luenberger_observer.py     # Luenberger observer state estimator
+├── components.py              # ABCs: Controller, Plant, StateEstimator, TrajectoryGenerator
+├── __init__.py                # Package marker
+│
+├── trajectories/              # Reference path generators
+│   ├── __init__.py
+│   ├── cubic_polynomial.py    # 3rd-order, position + velocity continuity
+│   └── quintic_polynomial.py # 5th-order, position + velocity + acceleration continuity
+│
+├── controllers/               # Control algorithms
+│   ├── __init__.py
+│   ├── lqr.py                 # LQR with DARE solve
+│   ├── pid.py                 # PID with anti-windup
+│   └── mpc_lti.py             # MPC with OSQP QP solver
+│
+├── plants/                    # Robot models
+│   ├── __init__.py
+│   ├── armrobot.py            # 6-DOF arm: FK, Jacobian, IK, Cartesian step
+│   └── holonomicmobilerobot.py# 3-DOF base with omni-wheel kinematics
+│
+├── estimators/                # State estimation
+│   ├── __init__.py
+│   ├── kalman_filter.py       # Discrete Kalman filter
+│   └── luenberger_observer.py # Luenberger observer
+│
 ├── lekiwi-sim/                # MuJoCo simulation files
 │   ├── mjcf_lcmm_robot.xml    # Full robot model
 │   ├── so_arm100.xml          # SO-ARM100 arm model
 │   └── meshes/                # STL meshes for all parts
+│
+├── lekiwi_sim.py              # MuJoCo simulation wrapper
+├── demo_base_movement.py      # Base tracking demo (LQR/MPC + observer)
+├── capture_gif.py             # Arm extension demo (cubic trajectory + IK)
+├── capture_demo.py            # Pick-and-place GIF capture
+├── test_pick_and_place.py     # Integration tests
 └── README.md
 ```
 
@@ -104,24 +134,21 @@ cd lerobot-mpc-lekiwi
 # Dependencies
 pip install numpy scipy osqp
 
-# Run a test
+# Generate a smooth trajectory
 python3 -c "
 import numpy as np
-from armrobot import ArmRobot
+from trajectories import QuinticPolynomial
 
-robot = ArmRobot(
-    num_dof=6, dt=0.01,
-    joint_limits=np.array([[-np.pi, np.pi]]*6),
-    joint_offsets=np.array([[0,0,0.2],[0,0,0],[0.3,0,0],[0,0,0],[0.25,0,0],[0,0,0]]),
-    rot_axes=['z','y','y','x','y','x']
+traj = QuinticPolynomial()
+traj.generate(
+    start_position=np.array([0.0, 0.0, 0.0]),
+    end_position=np.array([1.0, 0.5, 0.3]),
+    duration=2.0,
 )
 
-# Move in X
-for _ in range(20):
-    robot.step(np.array([0.05, 0, 0, 0, 0, 0]))
-
-T, _, _ = robot.forward_kinematics(robot._last_joints)
-print(f'End effector at: {T[:3, 3]}')
+for t in [0.0, 0.5, 1.0, 1.5, 2.0]:
+    pos, vel, acc = traj.position_at(t)
+    print(f't={t:.1f}: pos={pos}  vel={vel}  acc={acc}')
 "
 ```
 
@@ -133,6 +160,15 @@ print(f'End effector at: {T[:3, 3]}')
 | **MPC_LTI** | Base (3D) | Trajectory optimization for holonomic drive |
 | **MPC_LTI** | Arm (6D Cartesian) | End-effector trajectory — IK handles joint math |
 | **LQR** | Base (3D) | Regulation / stabilization |
+
+## Trajectory Generators
+
+| Generator | DOF | Continuity | Use Case |
+|-----------|-----|------------|----------|
+| **CubicPolynomial** | 3D (x, y, z) | Position + velocity | Smooth point-to-point, no accel constraints |
+| **QuinticPolynomial** | 3D (x, y, z) | Position + velocity + acceleration | Smooth point-to-point with accel limits, rest-to-rest (min-jerk) |
+
+Both support arbitrary 3D start/end positions via numpy broadcasting — one solve, all dimensions.
 
 ## State Estimators
 
@@ -146,8 +182,11 @@ print(f'End effector at: {T[:3, 3]}')
 - ✅ Base kinematics (3-DOF holonomic)
 - ✅ Arm kinematics (6-DOF: FK, Jacobian, IK)
 - ✅ Cartesian state + IK-in-step pipeline
+- ✅ Trajectory generators: CubicPolynomial, QuinticPolynomial
 - ✅ PID, MPC_LTI, LQR controllers
 - ✅ KalmanFilter, LuenbergerObserver state estimators
+- ✅ Organized subpackage structure (trajectories/, controllers/, plants/, estimators/)
 - 🔄 Combined state space (base + arm coupling) — *in progress*
+- 🔄 More trajectory types (min-jerk, trapezoidal, S-curve, Bézier) — *planned*
 - 🔄 MuJoCo closed-loop simulation — *in progress*
 - 🔄 Shinro IDE integration — *planned*

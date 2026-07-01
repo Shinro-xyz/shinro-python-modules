@@ -39,7 +39,7 @@ HERE = Path(__file__).parent
 OUTPUT_PATH = str(HERE / "lekiwi_arm_demo.gif")
 
 from lekiwi_sim import MJCF_PATH, HERE as LEKIWI_HOME, MuJoCoEngine
-from armrobot import ArmRobot
+from plants.armrobot import ArmRobot
 
 
 # ── Smooth trajectory (cubic interpolation between waypoints) ──────────────
