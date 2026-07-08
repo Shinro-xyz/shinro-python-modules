@@ -86,17 +86,20 @@ class CubicPolynomial(TrajectoryGenerator):
     def from_config(cls, config):
         dt = config["dt"]
         schedule = []
+        default_vel = np.array([0.0, 0.0, 0.0])
         for seg in config["segments"]:
             n_steps = int(np.round(seg["duration"] / dt))
             p0 = np.array(seg["start"])
             pf = np.array(seg["end"])
             T = seg["duration"]
-            a0 = p0
-            a2 = 3.0 * (pf - p0) / (T * T)
-            a3 = -2.0 * (pf - p0) / (T * T * T)
+            start_vel = np.array(seg.get("start_vel", default_vel))
+            end_vel = np.array(seg.get("end_vel", default_vel))
+            traj = cls()
+            traj.generate(p0, pf, T, start_vel, end_vel)
             for k in range(n_steps):
                 t = k * dt
-                schedule.append(a0 + a2 * t * t + a3 * t * t * t)
+                pos, _, _ = traj.position_at(t)
+                schedule.append(pos)
         return np.array(schedule)
 
     
