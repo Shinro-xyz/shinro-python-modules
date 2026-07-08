@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Any, Optional
 import numpy as np
+from utils.array_backend import ArrayBackend, NumpyBackend
 
 
 class PhysicsEngine(ABC):
@@ -106,6 +107,11 @@ class PhysicsEngine(ABC):
     def body_names(self) -> list[str]:
         """List of all body names in the model."""
         pass
+
+    @property
+    def backend(self) -> ArrayBackend:
+        """Array backend for this engine. Subclasses may override."""
+        return NumpyBackend()
 
 
 class Controller(ABC):

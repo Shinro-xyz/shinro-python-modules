@@ -15,8 +15,7 @@ Usage:
     # python -m demos.demo_base_tracking --controller lerobot_diffusion
 """
 
-import numpy as np
-from typing import Optional
+from typing import Optional, Union
 from components import Controller
 from factories.registry import register_controller
 
@@ -29,52 +28,52 @@ class LeRobotDiffusionAdapter(Controller):
     The `compute()` method converts the plant state into LeRobot's
     observation dict format, runs the policy, and returns the action.
 
-    When no camera is available, the observation dict contains only
-    state/position data. When a camera is connected, the adapter
-    accepts image frames via `update_camera()`.
+    Accepts both numpy arrays and torch tensors for state and camera
+    frames, so it works with any ArrayBackend.
     """
 
     def __init__(self, policy, use_camera: bool = False, device: str = "cpu"):
         self.policy = policy
         self.use_camera = use_camera
         self.device = device
-        self._latest_camera_frame: Optional[np.ndarray] = None
+        self._latest_camera_frame = None
 
-    def update_camera(self, frame: np.ndarray):
+    def update_camera(self, frame):
         """Feed a camera frame for the next policy step."""
         self._latest_camera_frame = frame
 
-    def compute(self, state: np.ndarray, target: Optional[np.ndarray] = None) -> np.ndarray:
+    def compute(self, state, target=None):
         """Run the LeRobot policy on the current state.
 
         Args:
-            state: Plant state vector (n_x,). For the arm, this is
-                   joint positions. For the base, this is [x, y, theta].
-            target: Ignored for learned policies — they generate actions
-                    from observation alone.
+            state: Plant state vector (n_x,). Can be numpy or torch tensor.
+            target: Ignored for learned policies.
 
         Returns:
-            Action vector (n_u,) that the plant can consume.
+            Action vector (n_u,) as numpy array.
         """
         import torch
 
-        # Build LeRobot observation dict
-        obs = {"observation.state": torch.from_numpy(state).float().unsqueeze(0)}
+        if isinstance(state, torch.Tensor):
+            obs = {"observation.state": state.float().unsqueeze(0)}
+        else:
+            obs = {"observation.state": torch.from_numpy(state).float().unsqueeze(0)}
 
         if self.use_camera and self._latest_camera_frame is not None:
-            # Convert HWC numpy to CHW tensor and add batch dim
-            frame_tensor = torch.from_numpy(self._latest_camera_frame).float()
-            if frame_tensor.ndim == 3:  # HWC
-                frame_tensor = frame_tensor.permute(2, 0, 1)  # CHW
+            frame = self._latest_camera_frame
+            if isinstance(frame, torch.Tensor):
+                frame_tensor = frame.float()
+            else:
+                frame_tensor = torch.from_numpy(frame).float()
+            if frame_tensor.ndim == 3:
+                frame_tensor = frame_tensor.permute(2, 0, 1)
             obs["observation.images.cam"] = frame_tensor.unsqueeze(0)
             self._latest_camera_frame = None
 
-        # Move to device and run policy
         obs = {k: v.to(self.device) for k, v in obs.items()}
         with torch.no_grad():
             action = self.policy.select_action(obs)
 
-        # Return as numpy array, squeezing batch dim
         return action.squeeze(0).cpu().numpy()
 
     def reset(self):

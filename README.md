@@ -59,6 +59,9 @@ All robot, controller, estimator, and trajectory parameters live in YAML files. 
 ### Separated Physics Engine
 The `PhysicsEngine` ABC decouples plants from MuJoCo. `MuJoCoEngine` implements it, but any engine (PyBullet, Drake, Isaac Sim) can be swapped in. Plants talk to the engine through the protocol — no direct MuJoCo imports in plant code.
 
+### Backend-Agnostic Array Operations
+All components use an `ArrayBackend` abstraction (`utils/array_backend.py`) instead of calling `np.xxx` directly. Every class accepts an optional `backend` parameter — defaults to `NumpyBackend`, but `TorchBackend` is available for GPU-accelerated or differentiable control pipelines. The backend propagates automatically from the physics engine to plants to controllers.
+
 ### Cartesian Arm Abstraction
 The arm's `step()` method takes a Cartesian velocity twist `[dx, dy, dz, droll, dpitch, dyaw]`, integrates it into a target pose, runs inverse kinematics internally, and sends joint angles to the servos. The controller **never touches joint space**.
 
@@ -67,6 +70,10 @@ The arm's `step()` method takes a Cartesian velocity twist `[dx, dy, dz, droll, 
 ```
 lerobot-mpc-lekiwi/
 ├── components.py              # ABCs: PhysicsEngine, Controller, Plant, StateEstimator, TrajectoryGenerator
+│
+├── utils/
+│   ├── __init__.py
+│   └── array_backend.py       # ArrayBackend ABC + NumpyBackend + TorchBackend
 │
 ├── physics_engine/
 │   ├── __init__.py             # Re-exports PhysicsEngine, MuJoCoEngine

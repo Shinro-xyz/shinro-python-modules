@@ -1,3 +1,3 @@
-from simulation.robotsim import RobotSim
+from .robotsim import RobotSim
 
 __all__ = ["RobotSim"]
