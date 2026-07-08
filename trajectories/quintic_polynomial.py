@@ -1,8 +1,10 @@
 import numpy as np
 from typing import Optional
 from components import TrajectoryGenerator
+from factories.registry import register_trajectory
 
 
+@register_trajectory("quintic_segments")
 class QuinticPolynomial(TrajectoryGenerator):
     """5th-order polynomial trajectory generator with full boundary condition control.
 
@@ -114,3 +116,35 @@ class QuinticPolynomial(TrajectoryGenerator):
         acc = 20 * self.A * t ** 3 + 12 * self.B * t ** 2 + 6 * self.C * t + 2 * self.D
 
         return pos, vel, acc
+
+
+@register_trajectory("waypoints")
+class WaypointSchedule:
+    @classmethod
+    def from_config(cls, config):
+        dt = config["dt"]
+        schedule = []
+        for wp in config["waypoints"]:
+            n_steps = int(np.round(wp["duration"] / dt))
+            schedule.extend([np.array(wp["position"])] * n_steps)
+        return np.array(schedule)
+
+
+@register_trajectory("phase_list")
+class PhaseSchedule:
+    @classmethod
+    def from_config(cls, config):
+        dt = config["dt"]
+        arm_sched = []
+        base_sched = []
+        jaw_sched = []
+        for phase in config["phases"]:
+            n_steps = int(np.round(phase["duration"] / dt))
+            arm = np.array(phase["arm"])
+            base = np.array(phase["base"])
+            jaw = float(phase["jaw"])
+            for _ in range(n_steps):
+                arm_sched.append(arm.copy())
+                base_sched.append(base.copy())
+                jaw_sched.append(jaw)
+        return {"arm": np.array(arm_sched), "base": np.array(base_sched), "jaw": np.array(jaw_sched)}

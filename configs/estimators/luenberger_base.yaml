@@ -1,0 +1,5 @@
+# Luenberger observer for base state estimation
+type: LuenbergerObserver
+name: base_observer
+dt: 0.02
+observer_gain: [0.8, 0.8, 0.8]

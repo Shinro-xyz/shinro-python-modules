@@ -1,0 +1,18 @@
+# Base waypoints trajectory (straight line) — [x, y, theta]
+type: waypoints
+dt: 0.02
+waypoints:
+  - position: [0.0, 0.0, 0.0]
+    duration: 1.0
+  - position: [0.4, 0.0, 0.0]
+    duration: 1.0
+  - position: [0.4, 0.0, 0.0]
+    duration: 3.0
+  - position: [0.4, 0.0, 0.0]
+    duration: 2.0
+  - position: [1.2, 0.0, 0.0]
+    duration: 4.0
+  - position: [1.2, 0.0, 0.0]
+    duration: 3.0
+  - position: [1.2, 0.0, 0.0]
+    duration: 2.0

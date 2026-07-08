@@ -2,8 +2,10 @@ import numpy as np
 from typing import Optional
 from components import Controller
 from scipy.linalg import solve_discrete_are
+from factories.registry import register_controller
 
 
+@register_controller("LQR")
 class LQR(Controller):
     """Linear Quadratic Regulator (LQR) for discrete-time systems.
 
@@ -69,4 +71,14 @@ class LQR(Controller):
     def reset(self):
         """Reset the controller state. No internal state for LQR."""
         pass
+
+    @classmethod
+    def from_config(cls, config):
+        n = len(config["state_cost"])
+        return cls(
+            state_cost_matrix=np.diag(config["state_cost"]),
+            control_cost_matrix=np.diag(config["control_cost"]),
+            dynamics_state_matrix=np.eye(n),
+            dynamics_control_matrix=config["dt"] * np.eye(n),
+        )
     

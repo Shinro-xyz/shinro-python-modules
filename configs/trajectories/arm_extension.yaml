@@ -1,0 +1,22 @@
+# Arm EE extension trajectory (cubic segments from home)
+type: cubic_segments
+dt: 0.02
+segments:
+  - start: [0.0, 0.0, 0.0]
+    end: [0.0, 0.08, 0.05]
+    duration: 1.0
+  - start: [0.0, 0.08, 0.05]
+    end: [0.0, 0.16, 0.10]
+    duration: 1.0
+  - start: [0.0, 0.16, 0.10]
+    end: [0.0, 0.24, 0.15]
+    duration: 1.0
+  - start: [0.0, 0.24, 0.15]
+    end: [0.0, 0.16, 0.10]
+    duration: 1.0
+  - start: [0.0, 0.16, 0.10]
+    end: [0.0, 0.08, 0.05]
+    duration: 1.0
+  - start: [0.0, 0.08, 0.05]
+    end: [0.0, 0.0, 0.0]
+    duration: 1.0

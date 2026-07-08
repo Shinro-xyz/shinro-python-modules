@@ -1,8 +1,10 @@
 import numpy as np
 from typing import Optional
 from components import StateEstimator
+from factories.registry import register_estimator
 
 
+@register_estimator("LuenbergerObserver")
 class LuenbergerObserver(StateEstimator):
     """Luenberger observer for deterministic linear state estimation.
 
@@ -71,9 +73,17 @@ class LuenbergerObserver(StateEstimator):
         return self.x_hat
 
     def reset(self, x0: Optional[np.ndarray] = None):
-        """Reset the state estimate to a given value or zeros.
-
-        Args:
-            x0: New initial state estimate (n x 1). If None, resets to zeros.
-        """
         self.x_hat = np.zeros((self.A.shape[0], 1)) if x0 is None else x0.copy()
+
+    @classmethod
+    def from_config(cls, config):
+        gain = np.diag(config["observer_gain"])
+        n = gain.shape[0]
+        return cls(
+            A=np.eye(n),
+            B=config["dt"] * np.eye(n),
+            observer_gain=gain,
+            C=np.eye(n),
+            D=np.zeros((n, n)),
+            x0=np.zeros((n, 1)),
+        )

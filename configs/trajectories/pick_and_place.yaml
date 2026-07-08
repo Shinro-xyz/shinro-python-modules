@@ -1,0 +1,33 @@
+# Pick-and-place phase schedule
+# Each phase: arm twist (6D), base velocity (3D), jaw position (0.0=open, 0.5=closed)
+type: phase_list
+dt: 0.02
+phases:
+  - duration: 1.5
+    arm: [0.0, -0.8, 1.2, 0.5, 0.0, 0.0]
+    base: [0.0, 0.0, 0.0]
+    jaw: 0.0
+  - duration: 1.0
+    arm: [0.0, -0.8, 1.2, 0.5, 0.0, 0.0]
+    base: [0.0, 0.0, 0.0]
+    jaw: 0.5
+  - duration: 1.5
+    arm: [0.0, -0.3, 0.8, 0.0, 0.0, 0.0]
+    base: [0.0, 0.0, 0.0]
+    jaw: 0.5
+  - duration: 3.0
+    arm: [0.0, -0.3, 0.8, 0.0, 0.0, 0.0]
+    base: [0.3, 0.0, 0.0]
+    jaw: 0.5
+  - duration: 1.5
+    arm: [0.0, -0.8, 1.2, 0.5, 0.0, 0.0]
+    base: [0.0, 0.0, 0.0]
+    jaw: 0.5
+  - duration: 1.0
+    arm: [0.0, -0.8, 1.2, 0.5, 0.0, 0.0]
+    base: [0.0, 0.0, 0.0]
+    jaw: 0.0
+  - duration: 1.5
+    arm: [0.0, -0.3, 0.8, 0.0, 0.0, 0.0]
+    base: [0.3, 0.0, 0.0]
+    jaw: 0.0

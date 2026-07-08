@@ -1,8 +1,10 @@
 import numpy as np
 from typing import Optional, Tuple
 from components import Controller
+from factories.registry import register_controller
 
 
+@register_controller("PID")
 class PIDController(Controller):
     """Proportional-Integral-Derivative controller with anti-windup.
 
@@ -95,3 +97,13 @@ class PIDController(Controller):
         self._integral = np.zeros_like(self.ki)
         self._prev_error = np.zeros_like(self.kd)
         self.has_run = False
+
+    @classmethod
+    def from_config(cls, config):
+        n = len(config.get("kp", [1]))
+        return cls(
+            kp=np.array(config.get("kp", [1.0] * n)),
+            ki=np.array(config.get("ki", [0.0] * n)),
+            kd=np.array(config.get("kd", [0.0] * n)),
+            dt=config["dt"],
+        )

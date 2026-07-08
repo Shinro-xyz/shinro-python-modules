@@ -18,7 +18,7 @@ class TrajectoryFactory:
         with open(config_path) as f:
             self.config = yaml.safe_load(f)
 
-    def create(self) -> np.ndarray:
+    def create(self) -> np.ndarray | dict:
         ttype = self.config["type"]
         dt = self.config.get("dt", 0.02)
 
@@ -52,12 +52,23 @@ class TrajectoryFactory:
 
         elif ttype == "phase_list":
             phases = self.config["phases"]
-            schedule = []
+            arm_sched = []
+            base_sched = []
+            jaw_sched = []
             for phase in phases:
-                position = np.array(phase["position"])
                 n_steps = int(np.round(phase["duration"] / dt))
-                schedule.extend([position.copy()] * n_steps)
-            return np.array(schedule)
+                arm = np.array(phase["arm"])
+                base = np.array(phase["base"])
+                jaw = float(phase["jaw"])
+                for _ in range(n_steps):
+                    arm_sched.append(arm.copy())
+                    base_sched.append(base.copy())
+                    jaw_sched.append(jaw)
+            return {
+                "arm": np.array(arm_sched),
+                "base": np.array(base_sched),
+                "jaw": np.array(jaw_sched),
+            }
 
         else:
             raise ValueError(f"Unknown trajectory type: {ttype}")

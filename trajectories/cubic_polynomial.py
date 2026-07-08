@@ -1,7 +1,9 @@
 import numpy as np
 from components import TrajectoryGenerator
+from factories.registry import register_trajectory
 
 
+@register_trajectory("cubic_segments")
 class CubicPolynomial(TrajectoryGenerator):
     """3rd-order polynomial trajectory generator with position and velocity continuity.
 
@@ -79,5 +81,22 @@ class CubicPolynomial(TrajectoryGenerator):
         acc = 2 * self.a2 + 6 * self.a3 * t
 
         return pos, vel, acc
+
+    @classmethod
+    def from_config(cls, config):
+        dt = config["dt"]
+        schedule = []
+        for seg in config["segments"]:
+            n_steps = int(np.round(seg["duration"] / dt))
+            p0 = np.array(seg["start"])
+            pf = np.array(seg["end"])
+            T = seg["duration"]
+            a0 = p0
+            a2 = 3.0 * (pf - p0) / (T * T)
+            a3 = -2.0 * (pf - p0) / (T * T * T)
+            for k in range(n_steps):
+                t = k * dt
+                schedule.append(a0 + a2 * t * t + a3 * t * t * t)
+        return np.array(schedule)
 
     

@@ -1,8 +1,10 @@
 import numpy as np
 from typing import Optional
 from components import StateEstimator
+from factories.registry import register_estimator
 
 
+@register_estimator("KalmanFilter")
 class KalmanFilter(StateEstimator):
     """Discrete-time linear Kalman filter for optimal state estimation.
 
@@ -90,10 +92,18 @@ class KalmanFilter(StateEstimator):
         return self.x_hat
 
     def reset(self, x0: Optional[np.ndarray] = None):
-        """Reset the filter to an initial state.
-
-        Args:
-            x0: New initial state estimate (n_x, 1). Defaults to zeros.
-        """
         self.x_hat = np.zeros((self.A.shape[0], 1)) if x0 is None else x0.copy()
         self.P = np.eye(self.A.shape[0]) * 0.1
+
+    @classmethod
+    def from_config(cls, config):
+        n = len(config["process_noise"])
+        return cls(
+            A=np.eye(n),
+            B=config["dt"] * np.eye(n),
+            Q=np.diag(config["process_noise"]),
+            R=np.diag(config["measurement_noise"]),
+            C=np.eye(n),
+            D=np.zeros((n, n)),
+            x0=np.zeros((n, 1)),
+        )

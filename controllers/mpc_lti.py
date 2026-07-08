@@ -4,6 +4,7 @@ from scipy.sparse import block_diag
 import osqp
 from scipy import sparse
 from components import Controller
+from factories.registry import register_controller
 
 
 class MPC_LTI(Controller):
@@ -143,6 +144,7 @@ class MPC_LTI(Controller):
         return ctrl
 
 
+@register_controller("MPC_DeltaU")
 class MPC_LTI_DeltaU(MPC_LTI):
     """MPC with Δu (control rate) regularization via state augmentation.
 
@@ -172,6 +174,24 @@ class MPC_LTI_DeltaU(MPC_LTI):
         """
         self.S_delta = delta_u_penalty
         super().__init__(**kwargs)
+
+    @classmethod
+    def from_config(cls, config):
+        n = len(config["state_cost"])
+        ctrl = cls(
+            delta_u_penalty=np.diag(config["delta_u_penalty"]),
+            horizon=config["horizon"],
+            control_cost_matrix=np.diag(config["control_cost"]),
+            state_cost_matrix=np.diag(config["state_cost"]),
+            A_dynamics=np.eye(n),
+            B_dynamics=config["dt"] * np.eye(n),
+            terminal_cost=np.diag(config["state_cost"]),
+        )
+        if "constraints" in config:
+            F = np.vstack([np.eye(n), -np.eye(n)])
+            ctrl.constraints(F, config["constraints"]["upper"], config["constraints"]["lower"])
+        return ctrl
+
 
     def _augment_dynamics(self):
         """Augment state to [x; u_prev], control becomes Δu.
@@ -224,4 +244,23 @@ class MPC_LTI_DeltaU(MPC_LTI):
             u_prev = np.zeros(self.m)
         x0_aug = np.concatenate([x0, u_prev])
         return super().compute(x0_aug)
+
+
+@register_controller("MPC_LTI")
+class MPC_LTI_Base(MPC_LTI):
+    @classmethod
+    def from_config(cls, config):
+        n = len(config["state_cost"])
+        ctrl = cls(
+            horizon=config["horizon"],
+            control_cost_matrix=np.diag(config["control_cost"]),
+            state_cost_matrix=np.diag(config["state_cost"]),
+            A_dynamics=np.eye(n),
+            B_dynamics=config["dt"] * np.eye(n),
+            terminal_cost=np.diag(config["state_cost"]),
+        )
+        if "constraints" in config:
+            F = np.vstack([np.eye(n), -np.eye(n)])
+            ctrl.constraints(F, config["constraints"]["upper"], config["constraints"]["lower"])
+        return ctrl
 
