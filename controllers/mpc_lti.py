@@ -1,5 +1,4 @@
 from typing import Optional
-from scipy.sparse import block_diag
 import osqp
 from scipy import sparse
 from components import Controller
@@ -76,7 +75,7 @@ class MPC_LTI(Controller):
             lower_bounds: Lower bound vector (n_c,).
         """
         self.A_constraints = sparse.csc_matrix(
-            block_diag([constraint_matrix] * self.N)
+            sparse.block_diag([sparse.coo_array(constraint_matrix)] * self.N)
         )
         self.lcons = self.bk.tile(lower_bounds, self.N)
         self.ucons = self.bk.tile(upper_bounds, self.N)
