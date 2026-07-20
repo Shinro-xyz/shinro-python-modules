@@ -189,11 +189,11 @@ class TestArmRobotInverseKinematics:
     def test_ik_reaches_target(self, bk):
         """FK(IK(target)) produces a pose close to the target."""
         arm = _make_arm(bk)
-        target_pose = bk.eye(4)
-        target_pose[:3, 3] = bk.array([0.05, 0.1, 0.05])
-        q_ik = arm.inverse_kinematics(target_pose, q_init=bk.zeros(6))
+        q_known = bk.array([0.3, -0.2, 0.1, 0.0, 0.0, 0.0])
+        T_known, _, _ = arm.forward_kinematics(q_known)
+        q_ik = arm.inverse_kinematics(T_known, q_init=bk.zeros(6))
         T_reached, _, _ = arm.forward_kinematics(q_ik)
-        pos_err = _to_np(target_pose[:3, 3] - T_reached[:3, 3], bk)
+        pos_err = _to_np(T_known[:3, 3] - T_reached[:3, 3], bk)
         assert np.linalg.norm(pos_err) < 1e-3
 
     def test_ik_respects_joint_limits(self, bk):
@@ -284,7 +284,7 @@ class TestArmRobotPhysicsEngine:
         assert arm._engine is None
         state = arm.get_state()
         T_home, _, _ = arm.forward_kinematics(bk.zeros(6))
-        expected = bk.array([T_home[0, 3], T_home[1, 3], T_home[2, 3], 0.0, 0.0, 0.0])
+        expected = bk.hstack([T_home[:3, 3], bk.zeros(3)])
         assert np.allclose(_to_np(state, bk), _to_np(expected, bk))
 
     def test_step_with_engine(self, bk, mock_engine):

@@ -61,7 +61,8 @@ class ArmRobot(Plant):
         self._joint_names = joint_names if joint_names is not None else [f"joint_{i}" for i in range(num_dof)]
 
     def _get_ee_pos(self):
-        return self.bk.array(self._engine.get_body_xpos(self._ee_body_name))
+        pos = self._engine.get_body_xpos(self._ee_body_name)
+        return self.bk.array(pos)
 
     def _get_ee_jacobian(self):
         return self.bk.array(self._engine.compute_jacobian_for_joints(self._ee_body_name, self._joint_names))
@@ -85,10 +86,11 @@ class ArmRobot(Plant):
                 self._ee_body_name = self._find_ee_body_name(engine)
             self._engine.forward()
             ee = self._get_ee_pos()
-            self.state = self.bk.array([ee[0], ee[1], ee[2], 0.0, 0.0, 0.0])
+            self.state = self.bk.hstack([ee, self.bk.zeros(3)])
         else:
             T_home, _, _ = self.forward_kinematics(self.bk.zeros(self.num_dof))
-            self.state = self.bk.array([T_home[0, 3], T_home[1, 3], T_home[2, 3], 0.0, 0.0, 0.0])
+            pos = T_home[:3, 3]
+            self.state = self.bk.hstack([pos, self.bk.zeros(3)])
 
     def _find_ee_body_name(self, engine: PhysicsEngine) -> str:
         """Auto-detect the end-effector body name from the engine.
@@ -109,17 +111,9 @@ class ArmRobot(Plant):
         return engine.body_names[-1]
 
     def get_state(self):
-        """Get the current end-effector pose.
-
-        When a physics engine is attached, reads the EE position from the
-        engine. Otherwise returns the internally tracked state.
-
-        Returns:
-            State vector (6,) — [x, y, z, 0, 0, 0] (orientation always 0).
-        """
         if self._engine is not None:
             ee = self._get_ee_pos()
-            return self.bk.array([ee[0], ee[1], ee[2], 0.0, 0.0, 0.0])
+            return self.bk.hstack([ee, self.bk.zeros(3)])
         return self.bk.copy(self.state)
 
     def get_model(self):
@@ -179,7 +173,7 @@ class ArmRobot(Plant):
                 self._engine.set_joint_ctrl(name, val)
             self._last_joints = self.bk.array([self._engine.get_joint_qpos(n) for n in self._joint_names])
             ee = self._get_ee_pos()
-            self.state = self.bk.array([ee[0], ee[1], ee[2], 0.0, 0.0, 0.0])
+            self.state = self.bk.hstack([ee, self.bk.zeros(3)])
             return self._last_joints
 
         self.state = self.state + self.dt * u
