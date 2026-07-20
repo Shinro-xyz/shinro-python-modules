@@ -47,11 +47,11 @@ class ArrayBackend(ABC):
         ...
 
     @abstractmethod
-    def norm(self, x) -> Any:
+    def norm(self, x, axis=None) -> Any:
         ...
 
     @abstractmethod
-    def cross(self, a, b) -> Any:
+    def cross(self, a, b, axis=-1) -> Any:
         ...
 
     @abstractmethod
@@ -123,7 +123,7 @@ class ArrayBackend(ABC):
         ...
 
     @abstractmethod
-    def sum(self, x) -> Any:
+    def sum(self, x, axis=None) -> Any:
         ...
 
     @abstractmethod
@@ -208,11 +208,11 @@ class NumpyBackend(ArrayBackend):
     def solve(self, A, b):
         return np.linalg.solve(A, b)
 
-    def norm(self, x):
-        return np.linalg.norm(x)
+    def norm(self, x, axis=None):
+        return np.linalg.norm(x, axis=axis)
 
-    def cross(self, a, b):
-        return np.cross(a, b)
+    def cross(self, a, b, axis=-1):
+        return np.cross(a, b, axis=axis)
 
     def sin(self, x):
         return np.sin(x)
@@ -265,8 +265,8 @@ class NumpyBackend(ArrayBackend):
     def abs(self, x):
         return np.abs(x)
 
-    def sum(self, x):
-        return np.sum(x)
+    def sum(self, x, axis=None):
+        return np.sum(x, axis=axis)
 
     def reshape(self, x, *shape):
         if len(shape) == 1 and isinstance(shape[0], (tuple, list)):
@@ -356,11 +356,11 @@ class TorchBackend(ArrayBackend):
             b = self.torch.stack(b)
         return self.torch.linalg.solve(A, b)
 
-    def norm(self, x):
-        return self.torch.linalg.norm(x)
+    def norm(self, x, axis=None):
+        return self.torch.linalg.norm(x, dim=axis)
 
-    def cross(self, a, b):
-        return self.torch.cross(a, b)
+    def cross(self, a, b, axis=-1):
+        return self.torch.cross(a, b, dim=axis)
 
     def sin(self, x):
         return self.torch.sin(x)
@@ -415,8 +415,8 @@ class TorchBackend(ArrayBackend):
     def abs(self, x):
         return self.torch.abs(x)
 
-    def sum(self, x):
-        return self.torch.sum(x)
+    def sum(self, x, axis=None):
+        return self.torch.sum(x, dim=axis)
 
     def reshape(self, x, *shape):
         if len(shape) == 1 and isinstance(shape[0], (tuple, list)):

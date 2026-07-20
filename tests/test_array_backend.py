@@ -301,3 +301,101 @@ class TestTorchBackend:
 
     def allclose(self, a, b):
         return self.torch.allclose(a, b, atol=1e-8)
+
+    def allclose(self, a, b):
+        return self.torch.allclose(a, b, atol=1e-8)
+
+
+class TestTorchBackendBatched:
+    """Verify TorchBackend linalg methods work with batched (3D+) inputs.
+
+    PyTorch's ``torch.linalg.*`` natively supports batching on the last 2
+    dimensions. These tests verify that the backend wrapper passes through
+    batched tensors correctly.
+    """
+
+    def setup_method(self):
+        torch = pytest.importorskip("torch")
+        from utils.array_backend import TorchBackend
+        self.bk = TorchBackend(device="cpu")
+        self.torch = torch
+
+    def test_inv_batched(self):
+        """Batched matrix inverse: (batch, 2, 2) -> (batch, 2, 2)."""
+        A = self.bk.array([[[4, 7], [2, 6]], [[1, 0], [0, 1]]])
+        Ainv = self.bk.inv(A)
+        assert Ainv.shape == (2, 2, 2)
+        I = self.torch.eye(2, dtype=self.torch.float64).unsqueeze(0)
+        assert self.bk.allclose(A[0] @ Ainv[0], I[0])
+        assert self.bk.allclose(A[1] @ Ainv[1], I[0])
+
+    def test_solve_batched(self):
+        """Batched linear solve: (batch, 2, 2) @ x = (batch, 2)."""
+        A = self.bk.array([[[3, 1], [1, 2]], [[1, 0], [0, 1]]])
+        b = self.bk.array([[9, 8], [5, 3]])
+        x = self.bk.solve(A, b)
+        assert x.shape == (2, 2)
+        assert self.bk.allclose(A[0] @ x[0], b[0])
+        assert self.bk.allclose(A[1] @ x[1], b[1])
+
+    def test_cholesky_batched(self):
+        """Batched Cholesky: (batch, 2, 2) -> (batch, 2, 2)."""
+        A = self.bk.array([[[4, 2], [2, 3]], [[5, 1], [1, 4]]])
+        L = self.bk.cholesky(A)
+        assert L.shape == (2, 2, 2)
+        assert self.bk.allclose(L[0] @ L[0].T, A[0])
+        assert self.bk.allclose(L[1] @ L[1].T, A[1])
+
+    def test_svd_batched(self):
+        """Batched SVD: (batch, 2, 2) -> U(batch, 2, 2), s(batch, 2), Vh(batch, 2, 2)."""
+        A = self.bk.array([[[1, 0], [0, 2]], [[2, 0], [0, 1]]])
+        U, s, Vh = self.bk.svd(A)
+        assert U.shape == (2, 2, 2)
+        assert s.shape == (2, 2)
+        assert Vh.shape == (2, 2, 2)
+
+    def test_eigvals_batched(self):
+        """Batched eigenvalues: (batch, 2, 2) -> (batch, 2)."""
+        A = self.bk.array([[[1, 0], [0, 2]], [[3, 0], [0, 4]]])
+        eigs = self.bk.eigvals(A)
+        assert eigs.shape == (2, 2)
+
+    def test_matrix_rank_batched(self):
+        """Batched matrix rank: (batch, 2, 2) -> (batch,)."""
+        A = self.bk.array([[[1, 2], [2, 4]], [[1, 0], [0, 1]]])
+        ranks = self.bk.matrix_rank(A)
+        assert ranks.shape == (2,)
+        assert self.bk.to_numpy(ranks[0]) == 1
+        assert self.bk.to_numpy(ranks[1]) == 2
+
+    def test_cond_batched(self):
+        """Batched condition number: (batch, 2, 2) -> (batch,)."""
+        A = self.bk.array([[[1, 0], [0, 1]], [[2, 0], [0, 1]]])
+        conds = self.bk.cond(A)
+        assert conds.shape == (2,)
+        assert self.bk.allclose(conds[0], self.torch.tensor(1.0, dtype=self.torch.float64))
+
+    def test_norm_with_axis(self):
+        """norm with axis computes per-row norms on batched input."""
+        x = self.bk.array([[3, 4], [1, 0]])
+        n = self.bk.norm(x, axis=1)
+        assert n.shape == (2,)
+        assert self.bk.allclose(n[0], self.torch.tensor(5.0, dtype=self.torch.float64))
+        assert self.bk.allclose(n[1], self.torch.tensor(1.0, dtype=self.torch.float64))
+
+    def test_sum_with_axis(self):
+        """sum with axis reduces along the specified dimension."""
+        x = self.bk.array([[1, 2, 3], [4, 5, 6]])
+        s = self.bk.sum(x, axis=1)
+        assert s.shape == (2,)
+        assert self.bk.allclose(s[0], self.torch.tensor(6.0, dtype=self.torch.float64))
+        assert self.bk.allclose(s[1], self.torch.tensor(15.0, dtype=self.torch.float64))
+
+    def test_cross_with_axis(self):
+        """cross with axis computes per-row cross products on batched input."""
+        a = self.bk.array([[1, 0, 0], [0, 1, 0]])
+        b = self.bk.array([[0, 1, 0], [1, 0, 0]])
+        c = self.bk.cross(a, b, axis=1)
+        assert c.shape == (2, 3)
+        assert self.bk.allclose(c[0], self.torch.tensor([0, 0, 1], dtype=self.torch.float64))
+        assert self.bk.allclose(c[1], self.torch.tensor([0, 0, -1], dtype=self.torch.float64))
