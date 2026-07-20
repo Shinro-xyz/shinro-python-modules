@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from typing import Any
 import numpy as np
 
 
@@ -14,299 +15,160 @@ class ArrayBackend(ABC):
     """
 
     @abstractmethod
-    def array(self, data):
-        """Create an array from a Python list or nested lists.
-
-        Args:
-            data: Python list, tuple, or nested structure of scalars.
-
-        Returns:
-            A new array of the backend's native type.
-        """
+    def array(self, data) -> Any:
+        ...
 
     @abstractmethod
-    def zeros(self, *shape):
-        """Create an array filled with zeros.
-
-        Args:
-            *shape: Either ``zeros(3, 4)`` or ``zeros((3, 4))``.
-
-        Returns:
-            Zero-filled array of the given shape.
-        """
+    def zeros(self, *shape) -> Any:
+        ...
 
     @abstractmethod
-    def zeros_like(self, x):
-        """Create a zero-filled array with the same shape and type as x.
-
-        Args:
-            x: Reference array.
-
-        Returns:
-            Zero-filled array matching x's shape.
-        """
+    def zeros_like(self, x) -> Any:
+        ...
 
     @abstractmethod
-    def eye(self, n):
-        """Create an n x n identity matrix.
-
-        Args:
-            n: Number of rows and columns.
-
-        Returns:
-            Identity matrix of shape (n, n).
-        """
+    def eye(self, n) -> Any:
+        ...
 
     @abstractmethod
-    def diag(self, x):
-        """Create a diagonal matrix from a 1D array, or extract the diagonal.
-
-        Args:
-            x: 1D array (creates diagonal matrix) or 2D array (extracts diagonal).
-
-        Returns:
-            Diagonal matrix or diagonal vector.
-        """
+    def diag(self, x) -> Any:
+        ...
 
     @abstractmethod
-    def inv(self, x):
-        """Compute the matrix inverse.
-
-        Args:
-            x: Square matrix of shape (n, n).
-
-        Returns:
-            Inverse matrix of shape (n, n).
-        """
+    def inv(self, x) -> Any:
+        ...
 
     @abstractmethod
-    def pinv(self, x):
-        """Compute the Moore-Penrose pseudoinverse.
-
-        Args:
-            x: Matrix of shape (m, n).
-
-        Returns:
-            Pseudoinverse of shape (n, m).
-        """
+    def pinv(self, x) -> Any:
+        ...
 
     @abstractmethod
-    def solve(self, A, b):
-        """Solve the linear system Ax = b.
-
-        Args:
-            A: Coefficient matrix of shape (n, n).
-            b: Right-hand side of shape (n,) or (n, k).
-
-        Returns:
-            Solution x of shape (n,) or (n, k).
-        """
+    def solve(self, A, b) -> Any:
+        ...
 
     @abstractmethod
-    def norm(self, x):
-        """Compute the 2-norm of a vector.
-
-        Args:
-            x: Vector of shape (n,).
-
-        Returns:
-            Scalar norm.
-        """
+    def norm(self, x) -> Any:
+        ...
 
     @abstractmethod
-    def cross(self, a, b):
-        """Compute the cross product of two 3D vectors.
-
-        Args:
-            a: First vector of shape (3,).
-            b: Second vector of shape (3,).
-
-        Returns:
-            Cross product vector of shape (3,).
-        """
+    def cross(self, a, b) -> Any:
+        ...
 
     @abstractmethod
-    def sin(self, x):
-        """Compute the element-wise sine.
-
-        Args:
-            x: Input array.
-
-        Returns:
-            Array of sin(x).
-        """
+    def sin(self, x) -> Any:
+        ...
 
     @abstractmethod
-    def cos(self, x):
-        """Compute the element-wise cosine.
-
-        Args:
-            x: Input array.
-
-        Returns:
-            Array of cos(x).
-        """
+    def cos(self, x) -> Any:
+        ...
 
     @abstractmethod
-    def arccos(self, x):
-        """Compute the element-wise arccosine.
-
-        Args:
-            x: Input array with values in [-1, 1].
-
-        Returns:
-            Array of arccos(x) in [0, pi].
-        """
+    def arccos(self, x) -> Any:
+        ...
 
     @abstractmethod
-    def trace(self, x):
-        """Compute the trace of a matrix.
-
-        Args:
-            x: Square matrix of shape (n, n).
-
-        Returns:
-            Scalar trace (sum of diagonal elements).
-        """
+    def trace(self, x) -> Any:
+        ...
 
     @abstractmethod
-    def clip(self, x, lo, hi):
-        """Clip values to a range.
-
-        Args:
-            x: Input array.
-            lo: Lower bound (scalar or array).
-            hi: Upper bound (scalar or array).
-
-        Returns:
-            Clipped array.
-        """
+    def clip(self, x, lo, hi) -> Any:
+        ...
 
     @abstractmethod
-    def where(self, cond, a, b):
-        """Select elements from a or b based on a condition.
-
-        Args:
-            cond: Boolean array.
-            a: Values where cond is True.
-            b: Values where cond is False.
-
-        Returns:
-            Array with elements chosen from a or b.
-        """
+    def where(self, cond, a, b) -> Any:
+        ...
 
     @abstractmethod
-    def any(self, x):
-        """Check if any element is True.
-
-        Args:
-            x: Boolean array.
-
-        Returns:
-            True if any element is non-zero / True.
-        """
+    def any(self, x) -> Any:
+        ...
 
     @abstractmethod
-    def copy(self, x):
-        """Create a deep copy of an array.
-
-        Args:
-            x: Input array.
-
-        Returns:
-            New array with the same data.
-        """
+    def copy(self, x) -> Any:
+        ...
 
     @abstractmethod
-    def kron(self, a, b):
-        """Compute the Kronecker product of two matrices.
-
-        Args:
-            a: Matrix of shape (m, n).
-            b: Matrix of shape (p, q).
-
-        Returns:
-            Kronecker product of shape (m*p, n*q).
-        """
+    def kron(self, a, b) -> Any:
+        ...
 
     @abstractmethod
-    def matrix_power(self, A, n):
-        """Raise a square matrix to an integer power.
-
-        Args:
-            A: Square matrix of shape (m, m).
-            n: Non-negative integer exponent.
-
-        Returns:
-            Matrix A^n of shape (m, m).
-        """
+    def eigvals(self, x) -> Any:
+        ...
 
     @abstractmethod
-    def vstack(self, arrays):
-        """Stack arrays vertically (row-wise).
-
-        Args:
-            arrays: Sequence of arrays with the same number of columns.
-
-        Returns:
-            Vertically stacked array.
-        """
+    def matrix_rank(self, x) -> Any:
+        ...
 
     @abstractmethod
-    def hstack(self, arrays):
-        """Stack arrays horizontally (column-wise).
-
-        Args:
-            arrays: Sequence of arrays with the same number of rows.
-
-        Returns:
-            Horizontally stacked array.
-        """
+    def cond(self, x) -> Any:
+        ...
 
     @abstractmethod
-    def block(self, blocks):
-        """Assemble a block matrix from nested lists of blocks.
-
-        Args:
-            blocks: Nested list of arrays forming the blocks.
-
-        Returns:
-            Block matrix.
-        """
+    def svd(self, x) -> Any:
+        ...
 
     @abstractmethod
-    def tile(self, x, reps):
-        """Tile an array by repeating along each axis.
-
-        Args:
-            x: Input array.
-            reps: Tuple of repetitions along each axis.
-
-        Returns:
-            Tiled array.
-        """
+    def real(self, x) -> Any:
+        ...
 
     @abstractmethod
-    def to_numpy(self, x):
-        """Convert an array to a numpy array (no-op if already numpy).
-
-        Args:
-            x: Array in the backend's native type.
-
-        Returns:
-            Numpy array with the same data.
-        """
+    def sort(self, x) -> Any:
+        ...
 
     @abstractmethod
-    def from_numpy(self, x):
-        """Convert a numpy array to the backend's native type.
+    def sqrt(self, x) -> Any:
+        ...
 
-        Args:
-            x: Numpy array.
+    @abstractmethod
+    def abs(self, x) -> Any:
+        ...
 
-        Returns:
-            Array in the backend's native type with the same data.
-        """
+    @abstractmethod
+    def sum(self, x) -> Any:
+        ...
+
+    @abstractmethod
+    def reshape(self, x, *shape) -> Any:
+        ...
+
+    @abstractmethod
+    def ravel(self, x) -> Any:
+        ...
+
+    @abstractmethod
+    def linspace(self, start, stop, num) -> Any:
+        ...
+
+    @abstractmethod
+    def cholesky(self, x) -> Any:
+        ...
+
+    @abstractmethod
+    def matrix_power(self, A, n) -> Any:
+        ...
+
+    @abstractmethod
+    def vstack(self, arrays) -> Any:
+        ...
+
+    @abstractmethod
+    def hstack(self, arrays) -> Any:
+        ...
+
+    @abstractmethod
+    def block(self, blocks) -> Any:
+        ...
+
+    @abstractmethod
+    def tile(self, x, reps) -> Any:
+        ...
+
+    @abstractmethod
+    def to_numpy(self, x) -> Any:
+        ...
+
+    @abstractmethod
+    def from_numpy(self, x) -> Any:
+        ...
 
 
 class NumpyBackend(ArrayBackend):
@@ -374,6 +236,47 @@ class NumpyBackend(ArrayBackend):
 
     def kron(self, a, b):
         return np.kron(a, b)
+
+    def eigvals(self, x):
+        return np.linalg.eigvals(x)
+
+    def matrix_rank(self, x):
+        return np.linalg.matrix_rank(x)
+
+    def cond(self, x):
+        return np.linalg.cond(x)
+
+    def svd(self, x):
+        return np.linalg.svd(x)
+
+    def real(self, x):
+        return np.real(x)
+
+    def sort(self, x):
+        return np.sort(x)
+
+    def sqrt(self, x):
+        return np.sqrt(x)
+
+    def abs(self, x):
+        return np.abs(x)
+
+    def sum(self, x):
+        return np.sum(x)
+
+    def reshape(self, x, *shape):
+        if len(shape) == 1 and isinstance(shape[0], (tuple, list)):
+            shape = tuple(shape[0])
+        return x.reshape(shape)
+
+    def ravel(self, x):
+        return x.ravel()
+
+    def linspace(self, start, stop, num):
+        return np.linspace(start, stop, num)
+
+    def cholesky(self, x):
+        return np.linalg.cholesky(x)
 
     def matrix_power(self, A, n):
         return np.linalg.matrix_power(A, n)
@@ -472,6 +375,47 @@ class TorchBackend(ArrayBackend):
 
     def kron(self, a, b):
         return self.torch.kron(a, b)
+
+    def eigvals(self, x):
+        return self.torch.linalg.eigvals(x)
+
+    def matrix_rank(self, x):
+        return self.torch.linalg.matrix_rank(x)
+
+    def cond(self, x):
+        return self.torch.linalg.cond(x)
+
+    def svd(self, x):
+        return self.torch.linalg.svd(x)
+
+    def real(self, x):
+        return self.torch.real(x)
+
+    def sort(self, x):
+        return self.torch.sort(x).values
+
+    def sqrt(self, x):
+        return self.torch.sqrt(x)
+
+    def abs(self, x):
+        return self.torch.abs(x)
+
+    def sum(self, x):
+        return self.torch.sum(x)
+
+    def reshape(self, x, *shape):
+        if len(shape) == 1 and isinstance(shape[0], (tuple, list)):
+            shape = tuple(shape[0])
+        return x.reshape(shape)
+
+    def ravel(self, x):
+        return x.ravel()
+
+    def linspace(self, start, stop, num):
+        return self.torch.linspace(start, stop, num, device=self.device, dtype=self.torch.float64)
+
+    def cholesky(self, x):
+        return self.torch.linalg.cholesky(x)
 
     def matrix_power(self, A, n):
         return self.torch.linalg.matrix_power(A, n)
