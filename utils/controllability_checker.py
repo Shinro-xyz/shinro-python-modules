@@ -24,5 +24,6 @@ def controllabilty(A:np.ndarray, B:np.ndarray):
 
     return C, is_controllable, rank
 
-def observability(A: np.ndarray, C:np.ndarray):
-    
+def observability(A:np.ndarray, C: np.ndarray):
+    A=np.ndarray(A) #state matrix, dim: nxn
+    C=np.ndarray(C) #output matrix, dim: nxm
