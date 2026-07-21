@@ -18,6 +18,11 @@ from shinro_mcp_server import (
     estimator_reset,
     list_estimator_types,
     list_estimators,
+    create_trajectory,
+    trajectory_generate,
+    trajectory_position_at,
+    list_trajectory_types,
+    list_trajectories,
     _store,
 )
 
@@ -712,3 +717,193 @@ class TestEstimatorListTools:
         data = json.loads(list_estimators())
         assert data["estimators"]["a"] == "KalmanFilter"
         assert data["estimators"]["b"] == "LuenbergerObserver"
+
+
+class TestCreateTrajectory:
+    """Verify trajectory creation via config files and inline."""
+
+    def test_create_trajectory_from_config_creates_and_stores_instance(self):
+        """Trajectory created from a TOML config file is stored."""
+        result = create_trajectory(
+            name="t1", config_path="configs/trajectories/arm_extension.toml"
+        )
+        assert "Created config-based trajectory 't1'" in result
+        assert "t1" in _store
+
+    def test_create_cubic_inline_creates_and_stores_instance(self):
+        """CubicPolynomial created inline is stored."""
+        result = create_trajectory(
+            name="cubic", type="cubic_segments", params={"dt": 0.02}
+        )
+        assert "Created cubic_segments trajectory 'cubic'" in result
+        assert "cubic" in _store
+
+    def test_create_quintic_inline_creates_and_stores_instance(self):
+        """QuinticPolynomial created inline is stored."""
+        result = create_trajectory(
+            name="quint", type="quintic_segments", params={"dt": 0.02}
+        )
+        assert "Created quintic_segments trajectory 'quint'" in result
+        assert "quint" in _store
+
+    def test_create_trajectory_unknown_type_returns_error(self):
+        """An unregistered trajectory type returns an error message."""
+        result = create_trajectory(name="bad", type="NonExistent", params={})
+        assert "Unknown trajectory type" in result
+        assert "bad" not in _store
+
+    def test_create_trajectory_no_params_returns_usage_instruction(self):
+        """Calling create_trajectory without config_path or type+params returns guidance."""
+        result = create_trajectory(name="bad")
+        assert "Provide either" in result
+        assert "bad" not in _store
+
+    def test_create_trajectory_config_path_nonexistent_raises_filenotfound(self):
+        """A nonexistent config file path raises FileNotFoundError."""
+        with pytest.raises(FileNotFoundError):
+            create_trajectory(name="bad", config_path="nonexistent.toml")
+
+
+class TestTrajectoryGenerate:
+    """Verify trajectory generation for cubic and quintic generators."""
+
+    def test_generate_cubic_returns_success(self):
+        """CubicPolynomial generate returns a success status."""
+        create_trajectory(name="cubic", type="cubic_segments", params={"dt": 0.02})
+        result = trajectory_generate(
+            name="cubic",
+            start_position=[0.0, 0.0, 0.0],
+            end_position=[0.0, 0.24, 0.15],
+            duration=3.0,
+            start_vel=[0.0, 0.0, 0.0],
+            end_vel=[0.0, 0.0, 0.0],
+        )
+        data = json.loads(result)
+        assert data["status"] == "generated"
+        assert data["duration"] == 3.0
+
+    def test_generate_quintic_returns_success(self):
+        """QuinticPolynomial generate returns a success status."""
+        create_trajectory(name="quint", type="quintic_segments", params={"dt": 0.02})
+        result = trajectory_generate(
+            name="quint",
+            start_position=[0.0, 0.0, 0.0],
+            end_position=[0.0, 0.15, 0.10],
+            duration=2.0,
+        )
+        data = json.loads(result)
+        assert data["status"] == "generated"
+
+    def test_generate_unknown_name_returns_error(self):
+        """Generating with a name that was never created returns an error."""
+        result = trajectory_generate(
+            name="nonexistent",
+            start_position=[0.0], end_position=[1.0], duration=1.0,
+        )
+        assert "No trajectory named" in result
+
+    def test_generate_config_based_trajectory_returns_error(self):
+        """Config-based trajectories (waypoints, phase_list) don't support generate()."""
+        create_trajectory(name="wp", config_path="configs/trajectories/base_straight.toml")
+        result = trajectory_generate(
+            name="wp",
+            start_position=[0.0], end_position=[1.0], duration=1.0,
+        )
+        assert "does not support" in result
+
+
+class TestTrajectoryPositionAt:
+    """Verify position_at evaluation for generated trajectories."""
+
+    def test_position_at_returns_position_velocity_acceleration(self):
+        """position_at returns position, velocity, and acceleration vectors."""
+        create_trajectory(name="cubic", type="cubic_segments", params={"dt": 0.02})
+        trajectory_generate(
+            name="cubic",
+            start_position=[0.0, 0.0, 0.0],
+            end_position=[0.0, 0.24, 0.15],
+            duration=3.0,
+            start_vel=[0.0, 0.0, 0.0],
+            end_vel=[0.0, 0.0, 0.0],
+        )
+        data = json.loads(trajectory_position_at(name="cubic", t=1.5))
+        assert "position" in data
+        assert "velocity" in data
+        assert "acceleration" in data
+        assert len(data["position"]) == 3
+
+    def test_position_at_start_matches_start_position(self):
+        """position_at(0) equals the start position."""
+        create_trajectory(name="cubic", type="cubic_segments", params={"dt": 0.02})
+        trajectory_generate(
+            name="cubic",
+            start_position=[1.0, 2.0, 3.0],
+            end_position=[4.0, 5.0, 6.0],
+            duration=3.0,
+            start_vel=[0.0, 0.0, 0.0],
+            end_vel=[0.0, 0.0, 0.0],
+        )
+        data = json.loads(trajectory_position_at(name="cubic", t=0.0))
+        assert data["position"] == [1.0, 2.0, 3.0]
+
+    def test_position_at_end_matches_end_position(self):
+        """position_at(duration) equals the end position."""
+        create_trajectory(name="cubic", type="cubic_segments", params={"dt": 0.02})
+        trajectory_generate(
+            name="cubic",
+            start_position=[1.0, 2.0, 3.0],
+            end_position=[4.0, 5.0, 6.0],
+            duration=3.0,
+            start_vel=[0.0, 0.0, 0.0],
+            end_vel=[0.0, 0.0, 0.0],
+        )
+        data = json.loads(trajectory_position_at(name="cubic", t=3.0))
+        assert data["position"] == pytest.approx([4.0, 5.0, 6.0])
+
+    def test_position_at_unknown_name_returns_error(self):
+        """position_at with a name that was never created returns an error."""
+        result = trajectory_position_at(name="nonexistent", t=0.0)
+        assert "No trajectory named" in result
+
+    def test_position_at_before_generate_returns_error(self):
+        """position_at before calling generate returns an error (no crash)."""
+        create_trajectory(name="cubic", type="cubic_segments", params={"dt": 0.02})
+        result = trajectory_position_at(name="cubic", t=0.0)
+        assert "Error" in result
+
+    def test_position_at_time_clamped_to_duration(self):
+        """position_at with t > duration is clamped to duration."""
+        create_trajectory(name="cubic", type="cubic_segments", params={"dt": 0.02})
+        trajectory_generate(
+            name="cubic",
+            start_position=[0.0], end_position=[1.0], duration=2.0,
+            start_vel=[0.0], end_vel=[0.0],
+        )
+        data = json.loads(trajectory_position_at(name="cubic", t=100.0))
+        assert data["position"][0] == pytest.approx(1.0)
+
+
+class TestTrajectoryListTools:
+    """Verify trajectory listing tools return correct metadata."""
+
+    def test_list_trajectory_types_includes_all_registered_types(self):
+        """list_trajectory_types returns all registered trajectory types."""
+        data = json.loads(list_trajectory_types())
+        assert "trajectory_types" in data
+        assert "cubic_segments" in data["trajectory_types"]
+        assert "quintic_segments" in data["trajectory_types"]
+        assert "waypoints" in data["trajectory_types"]
+        assert "phase_list" in data["trajectory_types"]
+
+    def test_list_trajectories_returns_empty_dict_when_none_created(self):
+        """list_trajectories returns an empty dict when no trajectories exist."""
+        data = json.loads(list_trajectories())
+        assert data["trajectories"] == {}
+
+    def test_list_trajectories_returns_all_created_instances(self):
+        """list_trajectories returns name-to-type mapping for all stored instances."""
+        create_trajectory(name="a", type="cubic_segments", params={"dt": 0.02})
+        create_trajectory(name="b", config_path="configs/trajectories/arm_extension.toml")
+        data = json.loads(list_trajectories())
+        assert data["trajectories"]["a"] == "cubic_segments"
+        assert data["trajectories"]["b"] == "ndarray"
