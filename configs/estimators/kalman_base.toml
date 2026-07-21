@@ -1,0 +1,5 @@
+type = "KalmanFilter"
+name = "base_estimator"
+dt = 0.02
+process_noise = [0.01, 0.01, 0.01]
+measurement_noise = [0.1, 0.1, 0.1]

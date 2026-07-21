@@ -1,0 +1,10 @@
+type = "MPC_LTI"
+name = "base_controller"
+dt = 0.02
+horizon = 10
+state_cost = [100.0, 100.0, 50.0]
+control_cost = [0.1, 0.1, 0.1]
+
+[constraints]
+upper = [0.5, 0.5, 1.0]
+lower = [-0.5, -0.5, -1.0]

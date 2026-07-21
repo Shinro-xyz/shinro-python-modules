@@ -230,7 +230,10 @@ class MPC_LTI_DeltaU(MPC_LTI):
             backend=bk,
         )
         if "constraints" in config:
-            F = bk.vstack([bk.eye(n), -bk.eye(n)])
+            if "matrix" in config["constraints"]:
+                F = bk.array(config["constraints"]["matrix"])
+            else:
+                F = bk.vstack([bk.eye(n), -bk.eye(n)])
             ctrl.constraints(F, config["constraints"]["upper"], config["constraints"]["lower"])
         return ctrl
 
@@ -329,6 +332,9 @@ class MPC_LTI_Base(MPC_LTI):
             backend=bk,
         )
         if "constraints" in config:
-            F = bk.vstack([bk.eye(n), -bk.eye(n)])
+            if "matrix" in config["constraints"]:
+                F = bk.array(config["constraints"]["matrix"])
+            else:
+                F = bk.vstack([bk.eye(n), -bk.eye(n)])
             ctrl.constraints(F, config["constraints"]["upper"], config["constraints"]["lower"])
         return ctrl

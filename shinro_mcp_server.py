@@ -21,6 +21,21 @@ def _from_list(data: list[float]) -> np.ndarray:
     return np.array(data, dtype=np.float64)
 
 
+def _set_mpc_default_constraints(ctrl: Any) -> None:
+    """Set unconstrained bounds on an MPC controller if none were set."""
+    if not hasattr(ctrl, "A_constraints"):
+        import scipy.sparse as sp
+        n_c = ctrl.m
+        F = np.eye(n_c)
+        lo = np.full((n_c,), -1e10)
+        hi = np.full((n_c,), 1e10)
+        ctrl.A_constraints = sp.csc_matrix(
+            sp.block_diag([sp.coo_array(F)] * ctrl.N)
+        )
+        ctrl.lcons = np.tile(lo, ctrl.N)
+        ctrl.ucons = np.tile(hi, ctrl.N)
+
+
 @server.tool()
 def create_controller(
     name: str,
@@ -39,14 +54,20 @@ def create_controller(
     if config_path:
         factory = ControllerFactory(config_path)
         ctrl = factory.create(backend=NumpyBackend())
-    elif type and params:
-        cls = _CONTROLLER_REGISTRY.get(type)
-        if cls is None:
+    elif type:
+        if type not in _CONTROLLER_REGISTRY:
             available = list(_CONTROLLER_REGISTRY.keys())
             return f"Unknown controller type '{type}'. Available: {available}"
+        if not params:
+            return f"Provide 'params' for controller type '{type}'"
+        cls = _CONTROLLER_REGISTRY[type]
         ctrl = cls.from_config(params, backend=NumpyBackend())
     else:
         return "Provide either 'config_path' or both 'type' and 'params'"
+
+    registry_name = getattr(ctrl, "_registry_name", "")
+    if registry_name in ("MPC_LTI", "MPC_DeltaU"):
+        _set_mpc_default_constraints(ctrl)
 
     _store[name] = ctrl
     return f"Created {type or 'config-based'} controller '{name}'"
