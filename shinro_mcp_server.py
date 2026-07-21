@@ -1,4 +1,4 @@
-"""MCP server for shinro-python-modules — controller, estimator, and trajectory tools."""
+"""MCP server for shinro-python-modules — controller, estimator, trajectory, and system analysis tools."""
 
 import json
 from mcp.server.fastmcp import FastMCP
@@ -10,6 +10,7 @@ from factories.controller_factory import ControllerFactory
 from factories.estimator_factory import EstimatorFactory
 from factories.trajectory_factory import TrajectoryFactory
 from utils.array_backend import NumpyBackend
+from utils.controllability_checker import LTISystemsAnalyzer
 
 server = FastMCP("shinro")
 _store: dict[str, Any] = {}
@@ -391,6 +392,119 @@ def list_trajectories() -> str:
         registry_name = getattr(traj, "_registry_name", type(traj).__name__)
         info[name] = registry_name
     return json.dumps({"trajectories": info})
+
+
+# ── System analysis tools ────────────────────────────────────────────────────
+
+
+@server.tool()
+def analyze_system(
+    A: list[list[float]],
+    B: list[list[float]] | None = None,
+    C: list[list[float]] | None = None,
+    D: list[list[float]] | None = None,
+    dt: float | None = None,
+) -> str:
+    """Analyze a linear time-invariant state-space system.
+
+    Returns controllability/observability status, Gramian eigenvalues,
+    Hankel singular values, and rank/condition numbers.
+
+    Args:
+        A: State matrix (n x n).
+        B: Input matrix (n x m). Defaults to zeros.
+        C: Output matrix (p x n). Defaults to zeros.
+        D: Feedthrough matrix (p x m). Defaults to zeros.
+        dt: Sampling time for discrete-time analysis. Defaults to None (continuous).
+    """
+    A_arr = np.array(A, dtype=np.float64)
+    B_arr = np.array(B, dtype=np.float64) if B is not None else None
+    C_arr = np.array(C, dtype=np.float64) if C is not None else None
+    D_arr = np.array(D, dtype=np.float64) if D is not None else None
+
+    try:
+        analyzer = LTISystemsAnalyzer(A=A_arr, B=B_arr, C=C_arr, D=D_arr, dt=dt)
+        result = {
+            "n": A_arr.shape[0],
+            "controllable": bool(analyzer.is_controllable()),
+            "observable": bool(analyzer.is_observable()),
+            "rank_report": {
+                "controllability": {
+                    "rank": int(analyzer.rank_report()["controllability"][0]),
+                    "condition": float(analyzer.rank_report()["controllability"][1]),
+                },
+                "observability": {
+                    "rank": int(analyzer.rank_report()["observability"][0]),
+                    "condition": float(analyzer.rank_report()["observability"][1]),
+                },
+            },
+        }
+        try:
+            hsv = analyzer.hankel_singular_values()
+            result["hankel_singular_values"] = hsv.flatten().tolist()
+        except Exception:
+            result["hankel_singular_values"] = None
+
+        try:
+            wc = analyzer.controllability_gramian()
+            result["controllability_gramian_eigs"] = (
+                np.sort(np.real(np.linalg.eigvals(wc)))[::-1].tolist()
+            )
+        except Exception:
+            result["controllability_gramian_eigs"] = None
+
+        try:
+            wo = analyzer.observability_gramian()
+            result["observability_gramian_eigs"] = (
+                np.sort(np.real(np.linalg.eigvals(wo)))[::-1].tolist()
+            )
+        except Exception:
+            result["observability_gramian_eigs"] = None
+
+        return json.dumps(result)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+@server.tool()
+def balanced_truncation(
+    A: list[list[float]],
+    B: list[list[float]],
+    C: list[list[float]],
+    r: int,
+    D: list[list[float]] | None = None,
+) -> str:
+    """Perform balanced truncation to obtain an order-r reduced model.
+
+    Requires A to be Hurwitz (all eigenvalues with negative real part).
+
+    Args:
+        A: State matrix (n x n).
+        B: Input matrix (n x m).
+        C: Output matrix (p x n).
+        r: Desired reduced order (0 < r <= n).
+        D: Feedthrough matrix (p x m). Defaults to zeros.
+    """
+    A_arr = np.array(A, dtype=np.float64)
+    B_arr = np.array(B, dtype=np.float64)
+    C_arr = np.array(C, dtype=np.float64)
+    D_arr = np.array(D, dtype=np.float64) if D is not None else None
+
+    try:
+        analyzer = LTISystemsAnalyzer(A=A_arr, B=B_arr, C=C_arr, D=D_arr)
+        Ar, Br, Cr, Dr = analyzer.balanced_truncate(r)
+        sigma = analyzer.hankel_singular_values()
+        error_bound = 2.0 * float(np.sum(sigma[r:]))
+        return json.dumps({
+            "Ar": Ar.tolist(),
+            "Br": Br.tolist(),
+            "Cr": Cr.tolist(),
+            "Dr": Dr.tolist(),
+            "reduced_order": r,
+            "error_bound": error_bound,
+        })
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 if __name__ == "__main__":

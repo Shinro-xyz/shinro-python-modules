@@ -71,15 +71,15 @@ def server():
 class TestServerProtocol:
     """Verify the server starts and speaks correct JSON-RPC."""
 
-    def test_tools_list_returns_all_15_tools(self, server):
-        """tools/list returns 15 tools with expected names."""
+    def test_tools_list_returns_all_17_tools(self, server):
+        """tools/list returns 17 tools with expected names."""
         resp = server("tools/list")
         assert resp["jsonrpc"] == "2.0"
         assert "id" in resp
         assert "result" in resp
         tools = resp["result"]["tools"]
         tool_names = [t["name"] for t in tools]
-        assert len(tools) == 15
+        assert len(tools) == 17
         assert "create_controller" in tool_names
         assert "controller_compute" in tool_names
         assert "controller_reset" in tool_names
@@ -95,6 +95,8 @@ class TestServerProtocol:
         assert "trajectory_position_at" in tool_names
         assert "list_trajectory_types" in tool_names
         assert "list_trajectories" in tool_names
+        assert "analyze_system" in tool_names
+        assert "balanced_truncation" in tool_names
 
     def test_tools_list_tool_has_input_schema(self, server):
         """Each tool in tools/list has an inputSchema with properties."""
@@ -525,3 +527,52 @@ class TestErrorHandlingFunctional:
         })
         text = resp["result"]["content"][0]["text"]
         assert "No trajectory named" in text
+
+
+class TestSystemAnalysisFunctional:
+    """End-to-end system analysis flow through the MCP server."""
+
+    def test_analyze_system_returns_controllability_and_observability(self, server):
+        """analyze_system returns controllability and observability status."""
+        resp = server("tools/call", {
+            "name": "analyze_system",
+            "arguments": {
+                "A": [[0, 1], [0, 0]],
+                "B": [[0], [1]],
+                "C": [[1, 0]],
+            },
+        })
+        data = json.loads(resp["result"]["content"][0]["text"])
+        assert data["controllable"] is True
+        assert data["observable"] is True
+        assert data["n"] == 2
+
+    def test_analyze_system_with_gramians(self, server):
+        """analyze_system returns Gramian eigenvalues for stable systems."""
+        resp = server("tools/call", {
+            "name": "analyze_system",
+            "arguments": {
+                "A": [[-1, 0], [0, -2]],
+                "B": [[1], [1]],
+                "C": [[1, 1]],
+            },
+        })
+        data = json.loads(resp["result"]["content"][0]["text"])
+        assert data["controllability_gramian_eigs"] is not None
+        assert data["observability_gramian_eigs"] is not None
+        assert data["hankel_singular_values"] is not None
+
+    def test_balanced_truncation_reduces_order(self, server):
+        """balanced_truncation reduces a 2nd-order system to 1st-order."""
+        resp = server("tools/call", {
+            "name": "balanced_truncation",
+            "arguments": {
+                "A": [[-1, 0], [0, -2]],
+                "B": [[1], [1]],
+                "C": [[1, 1]],
+                "r": 1,
+            },
+        })
+        data = json.loads(resp["result"]["content"][0]["text"])
+        assert data["reduced_order"] == 1
+        assert data["error_bound"] > 0

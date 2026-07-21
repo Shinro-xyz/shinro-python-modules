@@ -19,7 +19,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
       - run: pip install -r requirements-dev.txt
-      - run: pip install numpy scipy osqp
+      - run: pip install -r requirements.txt
       - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
-      - run: pytest tests/ -v
+      - run: pytest tests/ -v --tb=short
       - run: pyright utils/ components.py controllers/ estimators/ trajectories/ plants/

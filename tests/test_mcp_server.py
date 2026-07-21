@@ -23,6 +23,8 @@ from shinro_mcp_server import (
     trajectory_position_at,
     list_trajectory_types,
     list_trajectories,
+    analyze_system,
+    balanced_truncation,
     _store,
 )
 
@@ -907,3 +909,127 @@ class TestTrajectoryListTools:
         data = json.loads(list_trajectories())
         assert data["trajectories"]["a"] == "cubic_segments"
         assert data["trajectories"]["b"] == "ndarray"
+
+
+class TestSystemAnalysis:
+    """Verify system analysis tools: controllability, observability, Gramians, LQR."""
+
+    def test_analyze_double_integrator_is_controllable_and_observable(self):
+        """Double integrator is both controllable and observable."""
+        A = [[0, 1], [0, 0]]
+        B = [[0], [1]]
+        C = [[1, 0]]
+        data = json.loads(analyze_system(A=A, B=B, C=C))
+        assert data["controllable"] is True
+        assert data["observable"] is True
+        assert data["n"] == 2
+
+    def test_analyze_uncontrollable_system(self):
+        """A system with B=0 is not controllable."""
+        A = [[0, 1], [0, 0]]
+        B = [[0], [0]]
+        C = [[1, 0]]
+        data = json.loads(analyze_system(A=A, B=B, C=C))
+        assert data["controllable"] is False
+
+    def test_analyze_unobservable_system(self):
+        """A system with C=0 is not observable."""
+        A = [[0, 1], [0, 0]]
+        B = [[0], [1]]
+        C = [[0, 0]]
+        data = json.loads(analyze_system(A=A, B=B, C=C))
+        assert data["observable"] is False
+
+    def test_analyze_returns_rank_report(self):
+        """analyze_system returns rank and condition for controllability/observability."""
+        A = [[0, 1], [0, 0]]
+        B = [[0], [1]]
+        C = [[1, 0]]
+        data = json.loads(analyze_system(A=A, B=B, C=C))
+        assert "rank_report" in data
+        assert "controllability" in data["rank_report"]
+        assert "observability" in data["rank_report"]
+        assert data["rank_report"]["controllability"]["rank"] == 2
+        assert data["rank_report"]["observability"]["rank"] == 2
+
+    def test_analyze_stable_system_returns_gramian_eigs(self):
+        """Stable system returns controllability and observability Gramian eigenvalues."""
+        A = [[-1, 0], [0, -2]]
+        B = [[1], [1]]
+        C = [[1, 1]]
+        data = json.loads(analyze_system(A=A, B=B, C=C))
+        assert data["controllability_gramian_eigs"] is not None
+        assert data["observability_gramian_eigs"] is not None
+        assert len(data["controllability_gramian_eigs"]) == 2
+
+    def test_analyze_stable_system_returns_hankel_singular_values(self):
+        """Stable system returns Hankel singular values."""
+        A = [[-1, 0], [0, -2]]
+        B = [[1], [1]]
+        C = [[1, 1]]
+        data = json.loads(analyze_system(A=A, B=B, C=C))
+        assert data["hankel_singular_values"] is not None
+        assert len(data["hankel_singular_values"]) == 2
+        assert data["hankel_singular_values"][0] >= data["hankel_singular_values"][1]
+
+    def test_analyze_unstable_system_gramian_is_none(self):
+        """Unstable system returns None for infinite-horizon Gramians."""
+        A = [[1, 0], [0, 1]]
+        B = [[1], [1]]
+        C = [[1, 1]]
+        data = json.loads(analyze_system(A=A, B=B, C=C))
+        assert data["controllability_gramian_eigs"] is None
+        assert data["observability_gramian_eigs"] is None
+
+    def test_analyze_with_dt_returns_discrete_gramians(self):
+        """Discrete-time system analysis works with dt parameter."""
+        A = [[0.9, 0], [0, 0.8]]
+        B = [[0.1], [0.2]]
+        C = [[1, 0], [0, 1]]
+        data = json.loads(analyze_system(A=A, B=B, C=C, dt=0.1))
+        assert data["controllable"] is True
+        assert data["observable"] is True
+
+    def test_analyze_invalid_dimensions_returns_error(self):
+        """Non-square A matrix returns an error."""
+        A = [[1, 0, 0], [0, 1, 0]]
+        B = [[0], [1]]
+        data = json.loads(analyze_system(A=A, B=B))
+        assert "error" in data
+
+    def test_balanced_truncation_reduces_order(self):
+        """Balanced truncation reduces a 2nd-order system to 1st-order."""
+        A = [[-1, 0], [0, -2]]
+        B = [[1], [1]]
+        C = [[1, 1]]
+        data = json.loads(balanced_truncation(A=A, B=B, C=C, r=1))
+        assert data["reduced_order"] == 1
+        assert len(data["Ar"]) == 1
+        assert len(data["Br"]) == 1
+        assert len(data["Cr"][0]) == 1
+        assert data["error_bound"] > 0
+
+    def test_balanced_truncation_full_order_preserves_system(self):
+        """Truncation at r=n preserves the original system (up to similarity)."""
+        A = [[-1, 0], [0, -2]]
+        B = [[1], [1]]
+        C = [[1, 1]]
+        data = json.loads(balanced_truncation(A=A, B=B, C=C, r=2))
+        assert data["reduced_order"] == 2
+        assert len(data["Ar"]) == 2
+
+    def test_balanced_truncation_invalid_r_returns_error(self):
+        """Truncation with r <= 0 returns an error."""
+        A = [[-1, 0], [0, -2]]
+        B = [[1], [1]]
+        C = [[1, 1]]
+        data = json.loads(balanced_truncation(A=A, B=B, C=C, r=0))
+        assert "error" in data
+
+    def test_balanced_truncation_unstable_returns_error(self):
+        """Truncation on an unstable system returns an error."""
+        A = [[1, 0], [0, 1]]
+        B = [[1], [1]]
+        C = [[1, 1]]
+        data = json.loads(balanced_truncation(A=A, B=B, C=C, r=1))
+        assert "error" in data
