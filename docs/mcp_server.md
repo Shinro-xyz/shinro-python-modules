@@ -12,6 +12,59 @@ The server listens on `stdio` and registers all tools below. Connect via an MCP 
 
 ---
 
+## Client Configuration
+
+The project ships with `.mcp.json` at the root — the standard file for distributing MCP config with a project. Most clients (Claude Code, OpenCode, Cline) auto-discover it.
+
+### Claude Code / OpenCode / Cline
+
+No setup needed — `.mcp.json` is picked up automatically. Claude Code prompts for approval on first use.
+
+### Claude Desktop
+
+Add to `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "shinro": {
+      "command": "python",
+      "args": ["/absolute/path/to/shinro-python-modules/shinro_mcp_server.py"]
+    }
+  }
+}
+```
+
+### OpenCode (explicit config)
+
+Add to `opencode.json`:
+
+```json
+{
+  "mcp": {
+    "shinro": {
+      "type": "local",
+      "command": ["python", "shinro_mcp_server.py"]
+    }
+  }
+}
+```
+
+### Any stdio MCP client
+
+```json
+{
+  "mcpServers": {
+    "shinro": {
+      "command": "python",
+      "args": ["/path/to/shinro_mcp_server.py"]
+    }
+  }
+}
+```
+
+---
+
 ## Tool Reference
 
 ### Controllers

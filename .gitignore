@@ -2,6 +2,7 @@
 __pycache__/
 *.py[codz]
 *$py.class
+run_ci_local.txt
 
 # C extensions
 *.so
