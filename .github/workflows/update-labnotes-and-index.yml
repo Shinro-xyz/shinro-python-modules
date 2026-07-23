@@ -1,0 +1,53 @@
+name: Update lab notes and codebase index
+on:
+  push:
+    branches: [main]
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Generate daily lab note from commits
+        run: |
+          mkdir -p lab-notes/daily
+          today=$(date +%Y-%m-%d)
+          file="lab-notes/daily/${today}.md"
+          if [ -f "$file" ]; then
+            echo "### $(date -u '+%Y-%m-%d %H:%M UTC') — update" >> "$file"
+          else
+            echo "# Lab Notes — ${today}" > "$file"
+            echo "" >> "$file"
+          fi
+          echo "" >> "$file"
+          last_entry=$(git log --since="$(date -d '1 day ago' +%Y-%m-%d)" --format="%H" -- lab-notes/daily/ | head -1)
+          since_ref="${last_entry:-HEAD~10}"
+          git log "${since_ref}..HEAD" --oneline --no-merges >> "$file" 2>/dev/null || true
+          echo "" >> "$file"
+
+      - name: Reindex codebase
+        run: |
+          if [ -f ~/.hermes/scripts/codebase_indexer.py ]; then
+            python3 ~/.hermes/scripts/codebase_indexer.py .
+          else
+            echo "codebase_indexer.py not found — skipping reindex"
+          fi
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add lab-notes/daily/ .codebase/codebase_index.db
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: update lab notes and codebase index [skip ci]"
+            git push
+          fi
