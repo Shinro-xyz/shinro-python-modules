@@ -9,41 +9,51 @@ from factories.registry import _CONTROLLER_REGISTRY, _ESTIMATOR_REGISTRY, _TRAJE
 from factories.controller_factory import ControllerFactory
 from factories.estimator_factory import EstimatorFactory
 from factories.trajectory_factory import TrajectoryFactory
-from utils.array_backend import NumpyBackend
+from utils.array_backend import NumpyBackend, TorchBackend
 from utils.controllability_checker import LTISystemsAnalyzer
 
 server = FastMCP("shinro")
 _store: dict[str, Any] = {}
 
 
-def _to_list(arr: np.ndarray) -> list[float]:
+def _resolve_backend(backend: str | None = None):
+    if backend is None or backend == "numpy":
+        return NumpyBackend()
+    elif backend == "torch":
+        return TorchBackend()
+    raise ValueError(f"Unknown backend '{backend}'. Use 'numpy' or 'torch'.")
+
+
+def _to_list(arr) -> list[float]:
     return arr.flatten().tolist()
 
 
-def _from_list(data: list[float]) -> np.ndarray:
+def _from_list(data: list[float]):
     return np.array(data, dtype=np.float64)
 
 
-def _to_col(data: list[float]) -> np.ndarray:
+def _to_col(data: list[float]):
     return np.array(data, dtype=np.float64).reshape(-1, 1)
 
 
-def _from_col(arr: np.ndarray) -> list[float]:
+def _from_col(arr):
     return arr.flatten().tolist()
 
 
 def _set_mpc_default_constraints(ctrl: Any) -> None:
     if not hasattr(ctrl, "A_constraints"):
         import scipy.sparse as sp
+        bk = ctrl.bk
         n_c = ctrl.m
-        F = np.eye(n_c)
-        lo = np.full((n_c,), -1e10)
-        hi = np.full((n_c,), 1e10)
+        F = bk.eye(n_c)
+        lo = bk.zeros(n_c) - 1e10
+        hi = bk.zeros(n_c) + 1e10
+        F_np = bk.to_numpy(F)
         ctrl.A_constraints = sp.csc_matrix(
-            sp.block_diag([sp.coo_array(F)] * ctrl.N)
+            sp.block_diag([sp.coo_array(F_np)] * ctrl.N)
         )
-        ctrl.lcons = np.tile(lo, ctrl.N)
-        ctrl.ucons = np.tile(hi, ctrl.N)
+        ctrl.lcons = bk.tile(lo, ctrl.N)
+        ctrl.ucons = bk.tile(hi, ctrl.N)
 
 
 def _make_analyzer(
@@ -69,6 +79,7 @@ def create_controller(
     config_path: str | None = None,
     type: str | None = None,
     params: dict | None = None,
+    backend: str | None = None,
 ) -> str:
     """Create a controller from a TOML config file or inline parameters.
 
@@ -77,10 +88,12 @@ def create_controller(
         config_path: Path to a TOML config file (e.g. configs/controllers/lqr_base.toml).
         type: Controller type when using inline params (PID, LQR, MPC_DeltaU, MPC_LTI).
         params: Inline parameters (same keys as TOML config, e.g. dt, kp, ki, kd).
+        backend: Array backend ('numpy' or 'torch'). Defaults to 'numpy'.
     """
+    bk = _resolve_backend(backend)
     if config_path:
         factory = ControllerFactory(config_path)
-        ctrl = factory.create(backend=NumpyBackend())
+        ctrl = factory.create(backend=bk)
     elif type:
         if type not in _CONTROLLER_REGISTRY:
             available = list(_CONTROLLER_REGISTRY.keys())
@@ -88,7 +101,7 @@ def create_controller(
         if not params:
             return f"Provide 'params' for controller type '{type}'"
         cls = _CONTROLLER_REGISTRY[type]
-        ctrl = cls.from_config(params, backend=NumpyBackend())
+        ctrl = cls.from_config(params, backend=bk)
     else:
         return "Provide either 'config_path' or both 'type' and 'params'"
 
@@ -119,13 +132,14 @@ def controller_compute(
         return f"No controller named '{name}'. Create one first."
 
     ctrl = _store[name]
-    state_arr = _from_list(state)
-    ref_arr = _from_list(reference) if reference is not None else np.zeros_like(state_arr)
+    bk = ctrl.bk
+    state_arr = bk.array(state)
+    ref_arr = bk.array(reference) if reference is not None else bk.zeros_like(state_arr)
     registry_name = getattr(ctrl, "_registry_name", None)
 
     try:
         if registry_name == "MPC_DeltaU":
-            u_prev_arr = _from_list(u_prev) if u_prev is not None else np.zeros(ctrl.m)
+            u_prev_arr = bk.array(u_prev) if u_prev is not None else bk.zeros(ctrl.m)
             action = ctrl.compute(state_arr, u_prev=u_prev_arr)
         elif registry_name == "MPC_LTI":
             action = ctrl.compute(state_arr)
@@ -175,7 +189,7 @@ def set_mpc_constraints(
     if registry_name not in ("MPC_LTI", "MPC_DeltaU"):
         return f"Controller '{name}' is not an MPC type."
 
-    bk = NumpyBackend()
+    bk = ctrl.bk
     m = ctrl.m
     if matrix is not None:
         F = bk.array(matrix)
@@ -266,6 +280,7 @@ def create_estimator(
     config_path: str | None = None,
     type: str | None = None,
     params: dict | None = None,
+    backend: str | None = None,
 ) -> str:
     """Create a state estimator from a TOML config file or inline parameters.
 
@@ -274,10 +289,12 @@ def create_estimator(
         config_path: Path to a TOML config file (e.g. configs/estimators/luenberger_base.toml).
         type: Estimator type when using inline params (KalmanFilter, LuenbergerObserver).
         params: Inline parameters (same keys as TOML config, e.g. dt, process_noise, measurement_noise).
+        backend: Array backend ('numpy' or 'torch'). Defaults to 'numpy'.
     """
+    bk = _resolve_backend(backend)
     if config_path:
         factory = EstimatorFactory(config_path)
-        est = factory.create(backend=NumpyBackend())
+        est = factory.create(backend=bk)
     elif type:
         if type not in _ESTIMATOR_REGISTRY:
             available = list(_ESTIMATOR_REGISTRY.keys())
@@ -285,7 +302,7 @@ def create_estimator(
         if not params:
             return f"Provide 'params' for estimator type '{type}'"
         cls = _ESTIMATOR_REGISTRY[type]
-        est = cls.from_config(params, backend=NumpyBackend())
+        est = cls.from_config(params, backend=bk)
     else:
         return "Provide either 'config_path' or both 'type' and 'params'"
 
@@ -313,15 +330,16 @@ def estimator_estimate(
         return f"No estimator named '{name}'. Create one first."
 
     est = _store[name]
-    meas_col = _to_col(measurement)
-    ctrl_col = _to_col(control_input)
+    bk = est.bk
+    meas_col = bk.array(measurement).reshape(-1, 1)
+    ctrl_col = bk.array(control_input).reshape(-1, 1)
 
     try:
         x_hat = est.estimate(meas_col, ctrl_col)
     except Exception as e:
         return f"Error in estimate: {e}"
 
-    return json.dumps({"state_estimate": _from_col(x_hat)})
+    return json.dumps({"state_estimate": _to_list(x_hat)})
 
 
 @server.tool()
@@ -362,6 +380,7 @@ def create_trajectory(
     config_path: str | None = None,
     type: str | None = None,
     params: dict | None = None,
+    backend: str | None = None,
 ) -> str:
     """Create a trajectory generator from a TOML config file or inline parameters.
 
@@ -374,10 +393,12 @@ def create_trajectory(
         config_path: Path to a TOML config file (e.g. configs/trajectories/arm_extension.toml).
         type: Trajectory type when using inline params (cubic_segments, quintic_segments, waypoints, phase_list).
         params: Inline parameters (same keys as TOML config).
+        backend: Array backend ('numpy' or 'torch'). Defaults to 'numpy'.
     """
+    bk = _resolve_backend(backend)
     if config_path:
         factory = TrajectoryFactory(config_path)
-        traj = factory.create(backend=NumpyBackend())
+        traj = factory.create(backend=bk)
     elif type:
         if type not in _TRAJECTORY_REGISTRY:
             available = list(_TRAJECTORY_REGISTRY.keys())
@@ -386,13 +407,13 @@ def create_trajectory(
             return f"Provide 'params' for trajectory type '{type}'"
         if type == "cubic_segments":
             from trajectories.cubic_polynomial import CubicPolynomial
-            traj = CubicPolynomial(backend=NumpyBackend())
+            traj = CubicPolynomial(backend=bk)
         elif type == "quintic_segments":
             from trajectories.quintic_polynomial import QuinticPolynomial
-            traj = QuinticPolynomial(backend=NumpyBackend())
+            traj = QuinticPolynomial(backend=bk)
         else:
             cls = _TRAJECTORY_REGISTRY[type]
-            traj = cls.from_config(params, backend=NumpyBackend())
+            traj = cls.from_config(params, backend=bk)
     else:
         return "Provide either 'config_path' or both 'type' and 'params'"
 
