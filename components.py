@@ -183,6 +183,10 @@ class Plant(ABC):
         """
         Get the mathematical model of the plant.
 
+        For linear plants, returns (A, B) state-space matrices.
+        For nonlinear plants, accepts optional ``x0`` and ``u0`` keyword
+        arguments to linearize the dynamics around an operating point.
+
         Returns:
             The plant model (e.g., a dynamics function, matrices, or
             a callable used by the controller for prediction).
@@ -212,6 +216,22 @@ class Plant(ABC):
             engine: A PhysicsEngine instance, or None to detach.
         """
         pass
+
+    def dynamics(self, state: Any, control: Any) -> Any:
+        """Continuous-time dynamics :math:`\\dot{x} = f(x, u)`.
+
+        Override in nonlinear plants to expose the dynamics function for
+        linearization. Returns None by default (linear plants need not
+        override this).
+
+        Args:
+            state: Current state vector (n_x,).
+            control: Control input vector (n_u,).
+
+        Returns:
+            Time derivative of the state (n_x,), or None if not implemented.
+        """
+        return None
 
 class StateEstimator(ABC):
     """

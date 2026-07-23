@@ -36,3 +36,13 @@ class TestABCs:
         assert PhysicsEngine.backend.fget(None) is not None
         bk = PhysicsEngine.backend.fget(None)
         assert isinstance(bk, NumpyBackend)
+
+    def test_plant_dynamics_default_none(self):
+        """Plant.dynamics() returns None by default."""
+        class MinimalPlant(Plant):
+            def get_state(self): return None
+            def get_model(self): return None
+            def step(self, u): return None
+            def physics_engine(self, engine): pass
+        p = MinimalPlant()
+        assert p.dynamics(None, None) is None

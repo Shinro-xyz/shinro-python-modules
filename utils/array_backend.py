@@ -192,6 +192,20 @@ class ArrayBackend(ABC):
     def from_numpy(self, x) -> Any:
         ...
 
+    @abstractmethod
+    def jacobian(self, f, x, eps=1e-6) -> Any:
+        """Compute the Jacobian of f at x using finite differences or autograd.
+
+        Args:
+            f: Callable ``f(x) -> y`` where x is shape (n,) and y is shape (m,).
+            x: Point at which to evaluate the Jacobian, shape (n,).
+            eps: Step size for finite differences (ignored by autograd backends).
+
+        Returns:
+            Jacobian matrix of shape (m, n).
+        """
+        ...
+
 
 class NumpyBackend(ArrayBackend):
     """ArrayBackend implementation using numpy.
@@ -325,6 +339,29 @@ class NumpyBackend(ArrayBackend):
 
     def allclose(self, a, b):
         return np.allclose(a, b, atol=1e-8)
+
+    def jacobian(self, f, x, eps=1e-6):
+        """Central finite-difference Jacobian.
+
+        Args:
+            f: Callable ``f(x) -> y`` where x is shape (n,) and y is shape (m,).
+            x: Point at which to evaluate, shape (n,).
+            eps: Step size for finite differences.
+
+        Returns:
+            Jacobian matrix of shape (m, n).
+        """
+        x = np.asarray(x, dtype=np.float64)
+        fx = np.atleast_1d(np.asarray(f(x), dtype=np.float64))
+        m = fx.shape[0]
+        n = x.shape[0]
+        J = np.zeros((m, n), dtype=np.float64)
+        for i in range(n):
+            h = np.zeros(n, dtype=np.float64)
+            h[i] = eps
+            J[:, i] = (np.atleast_1d(np.asarray(f(x + h), dtype=np.float64))
+                       - np.atleast_1d(np.asarray(f(x - h), dtype=np.float64))) / (2.0 * eps)
+        return J
 
 
 class TorchBackend(ArrayBackend):
@@ -482,3 +519,23 @@ class TorchBackend(ArrayBackend):
 
     def allclose(self, a, b):
         return bool(self.torch.allclose(a, b, atol=1e-8))
+
+    def jacobian(self, f, x, eps=1e-6):
+        """Jacobian via torch.autograd.functional.jacobian.
+
+        Args:
+            f: Callable ``f(x) -> y`` where x is shape (n,) and y is shape (m,).
+            x: Point at which to evaluate, shape (n,).
+            eps: Ignored (used for API compatibility with NumpyBackend).
+
+        Returns:
+            Jacobian matrix of shape (m, n).
+        """
+        if not isinstance(x, self.torch.Tensor):
+            x = self.torch.tensor(x, dtype=self.torch.float64)
+        x_t = x.detach().clone().requires_grad_(True)
+        y = f(x_t)
+        if y.ndim == 0:
+            y = y.unsqueeze(0)
+        J = self.torch.autograd.functional.jacobian(f, x_t)
+        return J.reshape(y.shape[0], x_t.shape[0])
