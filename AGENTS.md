@@ -48,7 +48,7 @@ python3 ~/.hermes/scripts/codebase_indexer.py .
 | Category | Linear | Nonlinear (planned) |
 |----------|--------|---------------------|
 | **Controllers** | LQR, PID, MPC (LTI), LeRobot diffusion | NMPC, iLQR, MPPI, computed torque, sliding mode, adaptive |
-| **Plants** | HolonomicMobileRobot, ArmRobot (double integrator) | Rigid-body arm, unicycle, cartpole, double pendulum |
+| **Plants** | HolonomicMobileRobot, ArmRobot (double integrator), InvertedPendulum, CartPole | Quadrotor, unicycle, double pendulum |
 | **Estimators** | Kalman filter, Luenberger observer | EKF, UKF, particle filter |
 | **Trajectories** | Cubic, Quintic, waypoint/phase schedules | B-spline, Lissajous, minimum-snap |
 | **Physics Engines** | MuJoCo | Isaac Lab, PyBullet, Drake, null (no sim) |
@@ -64,6 +64,9 @@ python3 ~/.hermes/scripts/codebase_indexer.py .
 | `controllers/lerobot_adapter.py` | Learned policy adapter (diffusion, ACT, pi0) |
 | `plants/holonomicmobilerobot.py` | 3-DOF base with omni-wheel kinematics |
 | `plants/armrobot.py` | 6-DOF arm: FK, Jacobian, IK, Cartesian step |
+| `plants/inverted_pendulum.py` | 2D inverted pendulum with analytical dynamics |
+| `plants/cartpole.py` | 4D cart-pole with coupled dynamics |
+| `plants/quadrotor.py` | 12D quadrotor placeholder |
 | `estimators/kalman_filter.py` | Discrete Kalman filter — predict-update cycle |
 | `estimators/luenberger_observer.py` | Observer dynamics — x̂ = Ax̂ + Bu + L(y − Cx̂) |
 | `trajectories/cubic_polynomial.py` | 3rd-order, position + velocity continuity |
@@ -116,10 +119,13 @@ Key design: the arm's `step()` takes a Cartesian velocity twist `[dx, dy, dz, dr
 
 Experiment logs live in `lab-notes/daily/` in the repo. Query them with `--vault` flag.
 
+Each session's lab note MUST contain a semantic summary of the changes made — what was built, why, key design decisions, and test results. This is not a git log; it's a narrative record of intent and outcomes.
+
 ## Workflow
 
 1. **Understand** — Query the index for relevant files + lab notes
 2. **Plan** — Describe the change and which files to modify
 3. **Implement** — Use OpenCode or direct editing
 4. **Verify** — Run tests or check the output
-5. **Re-index** — `python3 ~/.hermes/scripts/codebase_indexer.py .`
+5. **Document** — Write a semantic summary in `lab-notes/daily/<date>.md` covering what changed, why, and key results
+6. **Re-index** — `python3 ~/.hermes/scripts/codebase_indexer.py .`
