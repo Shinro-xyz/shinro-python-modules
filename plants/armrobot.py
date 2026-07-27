@@ -1,6 +1,6 @@
 from typing import Optional, List
 from components import Plant, PhysicsEngine
-from factories.registry import register_plant
+from factories.registry import register_plant, register_plant_detector
 from utils.array_backend import ArrayBackend, NumpyBackend
 import numpy as np
 
@@ -417,3 +417,11 @@ class ArmRobot(Plant):
         )
         plant.physics_engine(engine)
         return plant
+
+
+@register_plant_detector("ArmRobot")
+def detect_armrobot(xml_root):
+    """Detect ArmRobot: position actuators on a body chain (2+ joints)."""
+    actuators = xml_root.findall('.//actuator/*')
+    position_actuators = [a for a in actuators if a.tag == 'position']
+    return len(position_actuators) >= 2

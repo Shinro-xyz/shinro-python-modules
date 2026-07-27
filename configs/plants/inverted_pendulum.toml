@@ -1,0 +1,18 @@
+[mass]
+value = 0.1
+
+[length]
+value = 0.5
+
+[damping]
+value = 0.0
+
+[gravity]
+value = 9.81
+
+[dt]
+value = 0.01
+
+[state_bounds]
+min = [-3.14, -10.0]
+max = [3.14, 10.0]

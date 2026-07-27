@@ -7,8 +7,14 @@ optionally attach a MuJoCo physics engine for mesh-accurate simulation.
 Available plants:
     ArmRobot               — 6-DOF serial-link arm with FK, Jacobian, IK
     HolonomicMobileRobot   — N-wheel holonomic base with omni-wheel kinematics
+    InvertedPendulum       — 2D inverted pendulum with analytical dynamics
+    CartPole               — 4D cart-pole with coupled dynamics
+    Quadrotor              — 12D quadrotor (placeholder)
 """
 from .armrobot import ArmRobot
 from .holonomicmobilerobot import HolonomicMobileRobot
+from .inverted_pendulum import InvertedPendulum
+from .cartpole import CartPole
+from .quadrotor import Quadrotor
 
-__all__ = ["ArmRobot", "HolonomicMobileRobot"]
+__all__ = ["ArmRobot", "HolonomicMobileRobot", "InvertedPendulum", "CartPole", "Quadrotor"]

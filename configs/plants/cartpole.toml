@@ -1,0 +1,20 @@
+[cart_mass]
+value = 0.5
+
+[pole_mass]
+value = 0.1
+
+[pole_length]
+value = 0.5
+
+[damping]
+value = 0.0
+
+[gravity]
+value = 9.81
+
+[dt]
+value = 0.01
+
+[track_limits]
+values = [-2.0, 2.0]

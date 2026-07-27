@@ -1,0 +1,14 @@
+<mujoco model="pendulum">
+  <compiler angle="radian"/>
+  <option gravity="0 0 -9.81"/>
+  <worldbody>
+    <body name="pole" pos="0 0 0">
+      <joint name="hinge" type="hinge" axis="0 1 0" damping="0.01" range="-3.14 3.14"/>
+      <geom type="capsule" fromto="0 0 0 0 0 0.5" size="0.02" mass="0.1"/>
+      <geom type="sphere" pos="0 0 0.5" size="0.05" mass="0.05"/>
+    </body>
+  </worldbody>
+  <actuator>
+    <motor name="torque" joint="hinge" gear="1" ctrlrange="-5 5"/>
+  </actuator>
+</mujoco>
