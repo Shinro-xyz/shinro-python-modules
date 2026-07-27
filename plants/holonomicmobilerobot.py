@@ -1,6 +1,6 @@
 from typing import Optional
 from components import Plant
-from factories.registry import register_plant
+from factories.registry import register_plant, register_plant_detector
 from utils.array_backend import ArrayBackend, NumpyBackend
 import numpy as np
 
@@ -184,3 +184,11 @@ class HolonomicMobileRobot(Plant):
         if engine is not None:
             plant.physics_engine(engine)
         return plant
+
+
+@register_plant_detector("HolonomicMobileRobot")
+def detect_holonomic(xml_root):
+    """Detect HolonomicMobileRobot: 2+ motor actuators (wheels)."""
+    actuators = xml_root.findall('.//actuator/*')
+    motors = [a for a in actuators if a.tag == 'motor']
+    return len(motors) >= 2
