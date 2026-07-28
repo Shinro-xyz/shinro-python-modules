@@ -18,12 +18,14 @@ class SlidingModeController(Controller):
         phi :float=0.0,
         k2: float=0.0,
         smoother: str="sat",
+        alpha:float=0.0
     ):
         self.c=np.asarray(c, dtype=float).flatten()
         self.k1=float(k1)
         self.k2=float(k2)
         self.phi=float(phi)
-
+        self.alpha=float(alpha)
+        
         SMOOTHERS= self._dict_boundaries()
 
         if smoother not in SMOOTHERS:
@@ -82,9 +84,35 @@ class SlidingModeController(Controller):
         s=self.c@x
 
         # calulating the sdot
-        s_f=self.c@f_x
-        s_g=self.c@g_x
-        
-        
-        
-    
+        cf=self.c@f_x
+        cg=self.c@g_x
+
+        #boundary layer (if not specified then use the chattering via the signflips)
+        if self.phi>0:
+            smooth_s=self._smoother(s)[0]
+        else:
+            smooth_s=np.sign(s)
+
+        s_dot_desired= -self.k1*np.abs(s)**self.alpha*smooth_s
+
+         # Step 4: Solve  c^T f + c^T g u = s_dot_desired  for u
+                #   cg @ u = s_dot_desired - cf
+                #   If m == 1 (scalar input):  u = (s_dot_desired - cf) / cg
+                #   If m > 1:  pseudo-inverse
+        if cg.ndim == 0 or cg.size == 1:
+            # Scalar input
+            cg_val = float(cg)
+            if abs(cg_val) < 1e-12:
+                raise RuntimeError("c^T g(x) is near-zero — loss of controllability")
+            u = np.array([(s_dot_desired - cf) / cg_val])
+        else:
+            # Multi-input: least-squares solution
+            cg_mat = cg.reshape(1, -1)  # shape (1, m)
+            rhs = np.array([s_dot_desired - cf])  # shape (1,)
+            u, _, _, _ = np.linalg.lstsq(cg_mat, rhs, rcond=None)
+            u = u.flatten()
+
+        return u
+
+    def reset(self):
+        pass
