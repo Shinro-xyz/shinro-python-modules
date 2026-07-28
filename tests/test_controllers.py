@@ -49,6 +49,45 @@ class TestLQR:
         residual = A.T @ P @ A - P - A.T @ P @ B @ np.linalg.solve(R + B.T @ P @ B, B.T @ P @ A) + Q
         assert np.linalg.norm(residual) < 1e-10
 
+    def test_lqr_gain_formula(self, bk):
+        """K = (R + B^T P B)^{-1} B^T P A matches the computed gain."""
+        A = bk.eye(2)
+        B = bk.eye(2)
+        Q = bk.eye(2)
+        R = 0.5 * bk.eye(2)
+        from controllers.lqr import LQR
+        lqr = LQR(Q, R, A, B, backend=bk)
+        from scipy.linalg import solve_discrete_are
+        P_np = solve_discrete_are(_to_np(A, bk), _to_np(B, bk), _to_np(Q, bk), _to_np(R, bk))
+        P = bk.from_numpy(P_np)
+        K_expected = bk.inv(R + B.T @ P @ B) @ (B.T @ P @ A)
+        assert np.allclose(_to_np(lqr.K, bk), _to_np(K_expected, bk), atol=1e-10)
+
+    def test_lqr_closed_loop_eigenvalues(self, bk):
+        """Closed-loop A - B K has all eigenvalues strictly inside the unit circle."""
+        A = bk.array([[0.9, 0.1], [0.0, 0.8]])
+        B = bk.array([[0.0], [0.1]])
+        Q = bk.eye(2)
+        R = bk.array([[0.1]])
+        from controllers.lqr import LQR
+        lqr = LQR(Q, R, A, B, backend=bk)
+        A_cl = A - B @ lqr.K
+        eigs = np.linalg.eigvals(_to_np(A_cl, bk))
+        assert np.all(np.abs(eigs) < 1 - 1e-6)
+
+    def test_lqr_optimal_control_law(self, bk):
+        """compute(x) returns u = -K @ x exactly (regulation to zero)."""
+        A = bk.eye(2)
+        B = bk.eye(2)
+        Q = bk.eye(2)
+        R = bk.eye(2)
+        from controllers.lqr import LQR
+        lqr = LQR(Q, R, A, B, backend=bk)
+        x = bk.array([1.5, -0.7])
+        u = lqr.compute(x)
+        u_expected = -lqr.K @ x
+        assert np.allclose(_to_np(u, bk), _to_np(u_expected, bk), atol=1e-12)
+
     def test_lqr_compute_shape(self, bk):
         """compute() returns a control vector of dimension n_u."""
         A = bk.eye(2)
@@ -114,6 +153,52 @@ class TestPID:
         u = pid.compute(bk.array([1.0]), bk.array([0.0]))
         p_term = 1.0 * (0.0 - 1.0)
         assert np.allclose(_to_np(u, bk)[0], p_term)
+
+    def test_pid_derivative_on_second_call(self, bk):
+        """Derivative term on the second call is kd * (e_k - e_{k-1}) / dt."""
+        from controllers.pid import PIDController
+        pid = PIDController(
+            kp=bk.array([0.0]),
+            ki=bk.array([0.0]),
+            kd=bk.array([2.0]),
+            dt=0.1,
+            backend=bk,
+        )
+        pid.compute(bk.array([1.0]), bk.array([0.0]))
+        u = pid.compute(bk.array([0.5]), bk.array([0.0]))
+        d_term = 2.0 * ((0.0 - 0.5) - (0.0 - 1.0)) / 0.1
+        assert np.allclose(_to_np(u, bk)[0], d_term)
+
+    def test_pid_integral_accumulates(self, bk):
+        """The integral term accumulates error over successive calls."""
+        from controllers.pid import PIDController
+        pid = PIDController(
+            kp=bk.array([0.0]),
+            ki=bk.array([1.0]),
+            kd=bk.array([0.0]),
+            dt=0.1,
+            backend=bk,
+        )
+        u1 = pid.compute(bk.array([1.0]), bk.array([0.0]))
+        u2 = pid.compute(bk.array([1.0]), bk.array([0.0]))
+        i1 = (0.0 - 1.0) * 0.1
+        i2 = i1 + (0.0 - 1.0) * 0.1
+        assert np.allclose(_to_np(u1, bk)[0], i1)
+        assert np.allclose(_to_np(u2, bk)[0], i2)
+
+    def test_pid_output_limits_clamp(self, bk):
+        """Output limits clamp the control effort to [min, max]."""
+        from controllers.pid import PIDController
+        pid = PIDController(
+            kp=bk.array([10.0]),
+            ki=bk.array([0.0]),
+            kd=bk.array([0.0]),
+            dt=0.01,
+            output_limits=(bk.array([-0.5]), bk.array([0.5])),
+            backend=bk,
+        )
+        u = pid.compute(bk.array([1.0]), bk.array([0.0]))
+        assert np.allclose(_to_np(u, bk)[0], -0.5)
 
     def test_pi_eliminates_steady_state_error(self, bk):
         """PI control drives a first-order plant to the target with zero steady-state error."""
@@ -315,6 +400,19 @@ class TestSMC:
         ctrl = SlidingModeController(c=[1.0, 2.0], k1=1.0, backend=bk)
         assert ctrl.n == 2
 
+    def test_smc_hurwitz_polynomial_correct(self, bk):
+        """c=[1,2] gives polynomial 2λ+1=0 with root at -0.5 (Hurwitz)."""
+        from controllers.smc import SlidingModeController
+        ctrl = SlidingModeController(c=[1.0, 2.0], k1=1.0, backend=bk)
+        assert ctrl._is_hurwitz()
+
+    def test_smc_hurwitz_polynomial_rejects_positive_root(self, bk):
+        """c=[-1,1] gives polynomial λ-1=0 with root at +1 (not Hurwitz)."""
+        from controllers.smc import SlidingModeController
+        ctrl = SlidingModeController(c=[1.0, 2.0], k1=1.0, backend=bk)
+        ctrl.c = ctrl.bk.array([-1.0, 1.0])
+        assert not ctrl._is_hurwitz()
+
     def test_smc_compute_shape_scalar(self, bk):
         """compute() returns a 1-element array for a scalar-input system."""
         from controllers.smc import SlidingModeController
@@ -334,6 +432,103 @@ class TestSMC:
         g_x = bk.array([[1.0, 0.0], [0.0, 1.0]])
         u = ctrl.compute(x, f_x, g_x)
         assert _to_np(u, bk).shape == (2,)
+
+    def test_smc_equivalent_control_analytical(self, bk):
+        """For x_dot = f + g u with f=0, g=[0,1]^T, the equivalent control is u = -(c^T g)^{-1} c^T f = 0."""
+        from controllers.smc import SlidingModeController
+        ctrl = SlidingModeController(c=[1.0, 2.0], k1=0.0, phi=0.1, backend=bk)
+        x = bk.array([1.0, -0.5])
+        f_x = bk.array([0.0, 0.0])
+        g_x = bk.array([0.0, 1.0])
+        u = ctrl.compute(x, f_x, g_x)
+        u_np = _to_np(u, bk)
+        s = float(_to_np(ctrl.c @ x, bk))
+        expected = -ctrl.k1 * abs(s) ** ctrl.alpha * np.clip(s / ctrl.phi, -1, 1)
+        assert np.allclose(u_np[0], expected, atol=1e-10)
+
+    def test_smc_equivalent_control_nonzero_f(self, bk):
+        """For x_dot = f + g u with f=[0,1]^T, g=[0,1]^T, the control cancels f."""
+        from controllers.smc import SlidingModeController
+        ctrl = SlidingModeController(c=[1.0, 2.0], k1=0.0, phi=0.1, backend=bk)
+        x = bk.array([1.0, -0.5])
+        f_x = bk.array([0.0, 1.0])
+        g_x = bk.array([0.0, 1.0])
+        u = ctrl.compute(x, f_x, g_x)
+        u_np = _to_np(u, bk)
+        s = float(_to_np(ctrl.c @ x, bk))
+        cf = float(_to_np(ctrl.c @ f_x, bk))
+        cg = float(_to_np(ctrl.c @ g_x, bk))
+        smooth_s = np.clip(s / ctrl.phi, -1, 1)
+        expected = (-ctrl.k1 * abs(s) ** ctrl.alpha * smooth_s - cf) / cg
+        assert np.allclose(u_np[0], expected, atol=1e-10)
+
+    def test_smc_sliding_surface_derivative_matches_desired(self, bk):
+        """The actual s_dot = c^T f + c^T g u matches the desired reaching law."""
+        from controllers.smc import SlidingModeController
+        ctrl = SlidingModeController(c=[1.0, 2.0], k1=1.5, phi=0.1, backend=bk)
+        x = bk.array([1.0, -0.5])
+        f_x = bk.array([0.0, 0.0])
+        g_x = bk.array([0.0, 1.0])
+        u = ctrl.compute(x, f_x, g_x)
+        s = float(_to_np(ctrl.c @ x, bk))
+        cf = float(_to_np(ctrl.c @ f_x, bk))
+        cg = float(_to_np(ctrl.c @ g_x, bk))
+        u_val = float(_to_np(u, bk)[0])
+        s_dot_actual = cf + cg * u_val
+        smooth_s = np.clip(s / ctrl.phi, -1, 1)
+        s_dot_desired = -ctrl.k1 * abs(s) ** ctrl.alpha * smooth_s
+        assert np.allclose(s_dot_actual, s_dot_desired, atol=1e-10)
+
+    def test_smc_reaching_law_includes_k2_term(self, bk):
+        """The reaching law includes the -k2*s term when k2 > 0."""
+        from controllers.smc import SlidingModeController
+        ctrl = SlidingModeController(c=[1.0, 2.0], k1=1.0, k2=3.0, phi=0.1, backend=bk)
+        x = bk.array([1.0, -0.5])
+        f_x = bk.array([0.0, 0.0])
+        g_x = bk.array([0.0, 1.0])
+        u = ctrl.compute(x, f_x, g_x)
+        s = float(_to_np(ctrl.c @ x, bk))
+        cf = float(_to_np(ctrl.c @ f_x, bk))
+        cg = float(_to_np(ctrl.c @ g_x, bk))
+        u_val = float(_to_np(u, bk)[0])
+        s_dot_actual = cf + cg * u_val
+        smooth_s = np.clip(s / ctrl.phi, -1, 1)
+        s_dot_desired = -ctrl.k1 * abs(s) ** ctrl.alpha * smooth_s - ctrl.k2 * s
+        assert np.allclose(s_dot_actual, s_dot_desired, atol=1e-10)
+
+    def test_smc_alpha_zero_gives_sign_law(self, bk):
+        """With alpha=0, the reaching law is s_dot = -k1 * smooth(s) (|s|^0 = 1)."""
+        from controllers.smc import SlidingModeController
+        ctrl = SlidingModeController(c=[1.0, 2.0], k1=2.0, alpha=0.0, phi=0.1, backend=bk)
+        x = bk.array([1.0, -0.5])
+        f_x = bk.array([0.0, 0.0])
+        g_x = bk.array([0.0, 1.0])
+        u = ctrl.compute(x, f_x, g_x)
+        s = float(_to_np(ctrl.c @ x, bk))
+        cf = float(_to_np(ctrl.c @ f_x, bk))
+        cg = float(_to_np(ctrl.c @ g_x, bk))
+        u_val = float(_to_np(u, bk)[0])
+        s_dot_actual = cf + cg * u_val
+        smooth_s = np.clip(s / ctrl.phi, -1, 1)
+        s_dot_desired = -ctrl.k1 * smooth_s
+        assert np.allclose(s_dot_actual, s_dot_desired, atol=1e-10)
+
+    def test_smc_alpha_half_gives_sqrt_law(self, bk):
+        """With alpha=0.5, the reaching law is s_dot = -k1 * |s|^0.5 * smooth(s)."""
+        from controllers.smc import SlidingModeController
+        ctrl = SlidingModeController(c=[1.0, 2.0], k1=2.0, alpha=0.5, phi=0.1, backend=bk)
+        x = bk.array([1.0, -0.5])
+        f_x = bk.array([0.0, 0.0])
+        g_x = bk.array([0.0, 1.0])
+        u = ctrl.compute(x, f_x, g_x)
+        s = float(_to_np(ctrl.c @ x, bk))
+        cf = float(_to_np(ctrl.c @ f_x, bk))
+        cg = float(_to_np(ctrl.c @ g_x, bk))
+        u_val = float(_to_np(u, bk)[0])
+        s_dot_actual = cf + cg * u_val
+        smooth_s = np.clip(s / ctrl.phi, -1, 1)
+        s_dot_desired = -ctrl.k1 * abs(s) ** 0.5 * smooth_s
+        assert np.allclose(s_dot_actual, s_dot_desired, atol=1e-10)
 
     def test_smc_sliding_surface_converges(self, bk):
         """The sliding surface s = c^T x converges toward zero under the control law."""
@@ -398,10 +593,10 @@ class TestSMC:
     def test_smc_loss_of_controllability(self, bk):
         """A near-zero c^T g(x) raises RuntimeError."""
         from controllers.smc import SlidingModeController
-        ctrl = SlidingModeController(c=[1.0, 0.0], k1=1.0, backend=bk)
-        x = bk.array([1.0, 0.0])
-        f_x = bk.array([0.0, 0.0])
-        g_x = bk.array([0.0, 0.0])
+        ctrl = SlidingModeController(c=[1.0, 2.0, 0.0], k1=1.0, backend=bk)
+        x = bk.array([1.0, 0.0, 0.0])
+        f_x = bk.array([0.0, 0.0, 0.0])
+        g_x = bk.array([0.0, 0.0, 1.0])
         with pytest.raises(RuntimeError, match="loss of controllability"):
             ctrl.compute(x, f_x, g_x)
 

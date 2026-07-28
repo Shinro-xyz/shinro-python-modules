@@ -24,6 +24,58 @@ class TestCubicPolynomial:
         assert np.allclose(_to_np(pos0, bk), _to_np(p0, bk))
         assert np.allclose(_to_np(posT, bk), _to_np(pf, bk))
 
+    def test_cubic_coefficient_formula(self, bk):
+        """Cubic coefficients match the closed-form solution a0=p0, a1=v0, a2=3Δp/T² - (2v0+vf)/T, a3=-2Δp/T³ + (v0+vf)/T²."""
+        from trajectories.cubic_polynomial import CubicPolynomial
+        traj = CubicPolynomial(backend=bk)
+        p0 = bk.array([1.0])
+        pf = bk.array([4.0])
+        v0 = bk.array([0.5])
+        vf = bk.array([-0.3])
+        T = 2.0
+        traj.generate(p0, pf, T, v0, vf)
+        dp = _to_np(pf - p0, bk)[0]
+        a0_expected = 1.0
+        a1_expected = 0.5
+        a2_expected = (3 * dp - T * (2 * 0.5 + (-0.3))) / (T ** 2)
+        a3_expected = (-2 * dp + T * (0.5 + (-0.3))) / (T ** 3)
+        assert np.allclose(_to_np(traj.a0, bk)[0], a0_expected)
+        assert np.allclose(_to_np(traj.a1, bk)[0], a1_expected)
+        assert np.allclose(_to_np(traj.a2, bk)[0], a2_expected)
+        assert np.allclose(_to_np(traj.a3, bk)[0], a3_expected)
+
+    def test_cubic_velocity_at_endpoints(self, bk):
+        """Velocity at t=0 and t=T matches the specified boundary conditions."""
+        from trajectories.cubic_polynomial import CubicPolynomial
+        traj = CubicPolynomial(backend=bk)
+        p0 = bk.array([0.0])
+        pf = bk.array([1.0])
+        v0 = bk.array([0.5])
+        vf = bk.array([-0.3])
+        T = 2.0
+        traj.generate(p0, pf, T, v0, vf)
+        _, vel0, _ = traj.position_at(0.0)
+        _, velT, _ = traj.position_at(T)
+        assert np.allclose(_to_np(vel0, bk)[0], 0.5)
+        assert np.allclose(_to_np(velT, bk)[0], -0.3)
+
+    def test_cubic_derivative_of_position_is_velocity(self, bk):
+        """The velocity returned is the analytic derivative of the position polynomial."""
+        from trajectories.cubic_polynomial import CubicPolynomial
+        traj = CubicPolynomial(backend=bk)
+        p0 = bk.array([0.0])
+        pf = bk.array([2.0])
+        v0 = bk.array([0.5])
+        vf = bk.array([0.0])
+        T = 2.0
+        traj.generate(p0, pf, T, v0, vf)
+        eps = 1e-6
+        pos_plus, _, _ = traj.position_at(1.0 + eps)
+        pos_minus, _, _ = traj.position_at(1.0 - eps)
+        _, vel, _ = traj.position_at(1.0)
+        numerical_deriv = (_to_np(pos_plus, bk)[0] - _to_np(pos_minus, bk)[0]) / (2 * eps)
+        assert np.allclose(_to_np(vel, bk)[0], numerical_deriv, atol=1e-4)
+
     def test_velocity_continuity(self, bk):
         """Velocity at t=0 matches v0 and at t=T matches vf."""
         from trajectories.cubic_polynomial import CubicPolynomial
@@ -98,6 +150,72 @@ class TestQuinticPolynomial:
         posT, _, _ = traj.position_at(T)
         assert np.allclose(_to_np(pos0, bk), _to_np(p0, bk))
         assert np.allclose(_to_np(posT, bk), _to_np(pf, bk))
+
+    def test_quintic_solves_6x6_system(self, bk):
+        """Quintic coefficients satisfy the 6 boundary conditions exactly."""
+        from trajectories.quintic_polynomial import QuinticPolynomial
+        traj = QuinticPolynomial(backend=bk)
+        p0 = bk.array([1.0])
+        pf = bk.array([4.0])
+        v0 = bk.array([0.5])
+        vf = bk.array([-0.3])
+        a0 = bk.array([0.2])
+        af = bk.array([-0.1])
+        T = 2.0
+        traj.generate(p0, pf, T, v0, vf, a0, af)
+        pos0, vel0, acc0 = traj.position_at(0.0)
+        posT, velT, accT = traj.position_at(T)
+        assert np.allclose(_to_np(pos0, bk)[0], 1.0)
+        assert np.allclose(_to_np(posT, bk)[0], 4.0)
+        assert np.allclose(_to_np(vel0, bk)[0], 0.5)
+        assert np.allclose(_to_np(velT, bk)[0], -0.3)
+        assert np.allclose(_to_np(acc0, bk)[0], 0.2)
+        assert np.allclose(_to_np(accT, bk)[0], -0.1)
+
+    def test_quintic_minimum_jerk_rest_to_rest(self, bk):
+        """Rest-to-rest quintic matches the minimum-jerk formula p(s) = p0 + (pf-p0)(10s^3 - 15s^4 + 6s^5)."""
+        from trajectories.quintic_polynomial import QuinticPolynomial
+        traj = QuinticPolynomial(backend=bk)
+        p0 = bk.array([0.0])
+        pf = bk.array([1.0])
+        T = 1.0
+        traj.generate(p0, pf, T)
+        s = 0.5
+        t = s * T
+        pos, _, _ = traj.position_at(t)
+        pos_val = _to_np(pos, bk)[0]
+        pos_expected = 0.0 + (1.0 - 0.0) * (10 * s**3 - 15 * s**4 + 6 * s**5)
+        assert np.allclose(pos_val, pos_expected)
+
+    def test_quintic_derivative_of_position_is_velocity(self, bk):
+        """The velocity returned is the analytic derivative of the position polynomial."""
+        from trajectories.quintic_polynomial import QuinticPolynomial
+        traj = QuinticPolynomial(backend=bk)
+        p0 = bk.array([0.0])
+        pf = bk.array([2.0])
+        T = 2.0
+        traj.generate(p0, pf, T)
+        eps = 1e-6
+        pos_plus, _, _ = traj.position_at(1.0 + eps)
+        pos_minus, _, _ = traj.position_at(1.0 - eps)
+        _, vel, _ = traj.position_at(1.0)
+        numerical_deriv = (_to_np(pos_plus, bk)[0] - _to_np(pos_minus, bk)[0]) / (2 * eps)
+        assert np.allclose(_to_np(vel, bk)[0], numerical_deriv, atol=1e-4)
+
+    def test_quintic_derivative_of_velocity_is_acceleration(self, bk):
+        """The acceleration returned is the analytic derivative of the velocity polynomial."""
+        from trajectories.quintic_polynomial import QuinticPolynomial
+        traj = QuinticPolynomial(backend=bk)
+        p0 = bk.array([0.0])
+        pf = bk.array([2.0])
+        T = 2.0
+        traj.generate(p0, pf, T)
+        eps = 1e-6
+        _, vel_plus, _ = traj.position_at(1.0 + eps)
+        _, vel_minus, _ = traj.position_at(1.0 - eps)
+        _, _, acc = traj.position_at(1.0)
+        numerical_deriv = (_to_np(vel_plus, bk)[0] - _to_np(vel_minus, bk)[0]) / (2 * eps)
+        assert np.allclose(_to_np(acc, bk)[0], numerical_deriv, atol=1e-4)
 
     def test_velocity_continuity(self, bk):
         """Velocity at t=0 matches v0 and at t=T matches vf."""

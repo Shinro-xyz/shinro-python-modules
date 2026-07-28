@@ -62,10 +62,7 @@ class SlidingModeController(Controller):
 
     def _is_hurwitz(self):
         c_np = self.bk.to_numpy(self.c)
-        poly = np.zeros(self.n + 1)
-        poly[0] = 1.0
-        for i, ci in enumerate(c_np):
-            poly[-(i + 1)] = ci
+        poly = c_np[::-1]
         roots = np.roots(poly)
         return all(np.real(r) < 0 for r in roots)
 
@@ -83,7 +80,7 @@ class SlidingModeController(Controller):
         else:
             smooth_s = self.bk.sign(s)
 
-        s_dot_desired = -self.k1 * self.bk.abs(s) ** self.alpha * smooth_s
+        s_dot_desired = -self.k1 * self.bk.abs(s) ** self.alpha * smooth_s - self.k2 * s
 
         cg_flat = self.bk.ravel(cg)
         cg_size = self.bk.to_numpy(cg_flat).size
