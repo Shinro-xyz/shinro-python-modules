@@ -141,6 +141,14 @@ class ArrayBackend(ABC):
         ...
 
     @abstractmethod
+    def sign(self, x) -> Any:
+        ...
+
+    @abstractmethod
+    def tanh(self, x) -> Any:
+        ...
+
+    @abstractmethod
     def sum(self, x, axis=None) -> Any:
         ...
 
@@ -298,6 +306,12 @@ class NumpyBackend(ArrayBackend):
 
     def abs(self, x):
         return np.abs(x)
+
+    def sign(self, x):
+        return np.sign(x)
+
+    def tanh(self, x):
+        return np.tanh(x)
 
     def sum(self, x, axis=None):
         return np.sum(x, axis=axis)
@@ -473,6 +487,12 @@ class TorchBackend(ArrayBackend):
 
     def abs(self, x):
         return self.torch.abs(x)
+
+    def sign(self, x):
+        return self.torch.sign(x)
+
+    def tanh(self, x):
+        return self.torch.tanh(x)
 
     def sum(self, x, axis=None):
         return self.torch.sum(x, dim=axis)

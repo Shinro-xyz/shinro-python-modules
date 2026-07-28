@@ -14,5 +14,6 @@ from .lqr import LQR
 from .pid import PIDController
 from .mpc_lti import MPC_LTI_DeltaU
 from .lerobot_adapter import LeRobotDiffusionAdapter
+from .smc import SlidingModeController
 
-__all__ = ["LQR", "PIDController", "MPC_LTI_DeltaU", "LeRobotDiffusionAdapter"]
+__all__ = ["LQR", "PIDController", "MPC_LTI_DeltaU", "LeRobotDiffusionAdapter", "SlidingModeController"]
