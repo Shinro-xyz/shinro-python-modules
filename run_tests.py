@@ -8,8 +8,8 @@ Usage:
     python3 run_tests.py --func    # Functional tests only
 """
 
-import sys
 import subprocess
+import sys
 
 BASE = ["python3", "-m", "pytest", "tests/", "-v", "--tb=short"]
 

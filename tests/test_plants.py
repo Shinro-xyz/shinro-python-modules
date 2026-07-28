@@ -1,6 +1,4 @@
-import pytest
 import numpy as np
-from utils.array_backend import NumpyBackend
 
 
 def _to_np(x, bk):
@@ -269,13 +267,15 @@ class TestConfigGenerator:
 
     def test_detect_pendulum(self, tmp_path):
         import xml.etree.ElementTree as ET
-        from scripts.generate_robot_config import detect_plant_types, generate_config
+
+        from scripts.generate_robot_config import detect_plant_types
         root = ET.fromstring(self.PENDULUM_XML)
         types = detect_plant_types(root)
         assert "InvertedPendulum" in types
 
     def test_detect_cartpole(self, tmp_path):
         import xml.etree.ElementTree as ET
+
         from scripts.generate_robot_config import detect_plant_types
         root = ET.fromstring(self.CARTPOLE_XML)
         types = detect_plant_types(root)
@@ -283,6 +283,7 @@ class TestConfigGenerator:
 
     def test_detect_lekiwi(self, tmp_path):
         import xml.etree.ElementTree as ET
+
         from scripts.generate_robot_config import detect_plant_types
         root = ET.fromstring(self.LEKIWI_XML)
         types = detect_plant_types(root)
@@ -291,6 +292,7 @@ class TestConfigGenerator:
 
     def test_unknown_xml_fallback(self, tmp_path):
         import xml.etree.ElementTree as ET
+
         from scripts.generate_robot_config import detect_plant_types
         root = ET.fromstring(self.UNKNOWN_XML)
         types = detect_plant_types(root)
@@ -298,6 +300,7 @@ class TestConfigGenerator:
 
     def test_cli_type_override(self, tmp_path):
         import xml.etree.ElementTree as ET
+
         from scripts.generate_robot_config import detect_plant_types
         root = ET.fromstring(self.UNKNOWN_XML)
         types = detect_plant_types(root, cli_type="InvertedPendulum")

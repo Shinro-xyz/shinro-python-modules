@@ -26,18 +26,18 @@ else:
     import matplotlib
     matplotlib.use('TkAgg')
 
-import numpy as np
+import time
+from pathlib import Path
+
+import matplotlib.pyplot as plt
 import mujoco
 import mujoco.viewer
-from pathlib import Path
-import time
-import matplotlib.pyplot as plt
+import numpy as np
 
 HERE = Path(__file__).parent
 OUTPUT_PATH = str(HERE / "lekiwi_arm_demo.gif")
 
 from lekiwi_sim import RobotSim
-from physics_engine.mujoco import MuJoCoEngine
 
 WAYPOINT_OFFSETS = [
     (1.0,   np.array([0.0,   0.0,   0.0])),

@@ -1,4 +1,4 @@
-from typing import Optional, Tuple
+
 from components import Controller
 from factories.registry import register_controller
 from utils.array_backend import ArrayBackend, NumpyBackend
@@ -38,8 +38,8 @@ class PIDController(Controller):
         ki,
         kd,
         dt: float,
-        output_limits: Optional[Tuple] = None,
-        backend: Optional[ArrayBackend] = None,
+        output_limits: tuple | None = None,
+        backend: ArrayBackend | None = None,
     ):
         self.bk = backend or NumpyBackend()
         self.kp = kp
@@ -98,7 +98,7 @@ class PIDController(Controller):
         self.has_run = False
 
     @classmethod
-    def from_config(cls, config, backend: Optional[ArrayBackend] = None):
+    def from_config(cls, config, backend: ArrayBackend | None = None):
         """Create a PID controller from a TOML config dict.
 
         Config fields:

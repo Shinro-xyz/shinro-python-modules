@@ -6,22 +6,25 @@ Usage:  python demos/demo_pick_and_place.py
 Output: lekiwi_demo.gif
 """
 import os
+
 os.environ['MUJOCO_GL'] = 'egl'
 
-import numpy as np
-import mujoco
-import imageio.v3 as iio
 from pathlib import Path
 
-from simulation import RobotSim
-from lekiwi_sim import MJCF_PATH, HERE as LEKIWI_HOME
+import imageio.v3 as iio
+import mujoco
+
 from factories import TrajectoryFactory
+from lekiwi_sim import HERE as LEKIWI_HOME
+from lekiwi_sim import MJCF_PATH
+from simulation import RobotSim
 
 HERE = Path(__file__).parent.parent
 OUTPUT_PATH = str(HERE / "lekiwi_demo.gif")
 
 # ── XML injection ────────────────────────────────────────────────────────
 import xml.etree.ElementTree as ET
+
 
 def inject_free_joint(xml_string):
     root = ET.fromstring(xml_string)

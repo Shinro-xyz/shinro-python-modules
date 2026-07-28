@@ -1,5 +1,6 @@
-import pytest
 import numpy as np
+import pytest
+
 from utils.array_backend import NumpyBackend
 
 
@@ -31,9 +32,9 @@ class TestNumpyBackend:
 
     def test_eye(self):
         """Create an identity matrix."""
-        I = self.bk.eye(3)
-        assert I.shape == (3, 3)
-        assert np.allclose(I, np.eye(3))
+        eye = self.bk.eye(3)
+        assert eye.shape == (3, 3)
+        assert np.allclose(eye, np.eye(3))
 
     def test_diag(self):
         """Create a diagonal matrix from a 1D array."""
@@ -268,9 +269,9 @@ class TestTorchBackend:
 
     def test_eye(self):
         """Create an identity torch tensor."""
-        I = self.bk.eye(3)
-        assert I.shape == (3, 3)
-        assert self.bk.allclose(I, self.torch.eye(3, dtype=self.torch.float64))
+        eye = self.bk.eye(3)
+        assert eye.shape == (3, 3)
+        assert self.bk.allclose(eye, self.torch.eye(3, dtype=self.torch.float64))
 
     def test_inv(self):
         """Compute the matrix inverse: A @ A^{-1} = I."""
@@ -302,9 +303,6 @@ class TestTorchBackend:
     def allclose(self, a, b):
         return self.torch.allclose(a, b, atol=1e-8)
 
-    def allclose(self, a, b):
-        return self.torch.allclose(a, b, atol=1e-8)
-
 
 class TestTorchBackendBatched:
     """Verify TorchBackend linalg methods work with batched (3D+) inputs.
@@ -325,9 +323,9 @@ class TestTorchBackendBatched:
         A = self.bk.array([[[4, 7], [2, 6]], [[1, 0], [0, 1]]])
         Ainv = self.bk.inv(A)
         assert Ainv.shape == (2, 2, 2)
-        I = self.torch.eye(2, dtype=self.torch.float64).unsqueeze(0)
-        assert self.bk.allclose(A[0] @ Ainv[0], I[0])
-        assert self.bk.allclose(A[1] @ Ainv[1], I[0])
+        eye = self.torch.eye(2, dtype=self.torch.float64).unsqueeze(0)
+        assert self.bk.allclose(A[0] @ Ainv[0], eye[0])
+        assert self.bk.allclose(A[1] @ Ainv[1], eye[0])
 
     def test_solve_batched(self):
         """Batched linear solve: (batch, 2, 2) @ x = (batch, 2)."""

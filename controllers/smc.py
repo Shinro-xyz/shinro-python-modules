@@ -1,9 +1,9 @@
-from typing import Optional
+
+import numpy as np
 
 from components import Controller
 from factories.registry import register_controller
 from utils.array_backend import ArrayBackend, NumpyBackend
-import numpy as np
 
 
 @register_controller("SMC")
@@ -16,7 +16,7 @@ class SlidingModeController(Controller):
         k2: float = 0.0,
         smoother: str = "sat",
         alpha: float = 0.0,
-        backend: Optional[ArrayBackend] = None,
+        backend: ArrayBackend | None = None,
     ):
         self.bk = backend or NumpyBackend()
         self.c = self.bk.array(c).flatten()
@@ -63,9 +63,9 @@ class SlidingModeController(Controller):
     def _is_hurwitz(self):
         c_np = self.bk.to_numpy(self.c)
         poly = np.zeros(self.n + 1)
-        poly[-1] = 1.0
+        poly[0] = 1.0
         for i, ci in enumerate(c_np):
-            poly[-(i + 2)] = ci
+            poly[-(i + 1)] = ci
         roots = np.roots(poly)
         return all(np.real(r) < 0 for r in roots)
 
@@ -86,7 +86,8 @@ class SlidingModeController(Controller):
         s_dot_desired = -self.k1 * self.bk.abs(s) ** self.alpha * smooth_s
 
         cg_flat = self.bk.ravel(cg)
-        if cg_flat.size == 1:
+        cg_size = self.bk.to_numpy(cg_flat).size
+        if cg_size == 1:
             cg_val = float(self.bk.to_numpy(cg_flat)[0])
             if abs(cg_val) < 1e-12:
                 raise RuntimeError("c^T g(x) is near-zero — loss of controllability")
@@ -103,7 +104,7 @@ class SlidingModeController(Controller):
         pass
 
     @classmethod
-    def from_config(cls, config, backend: Optional[ArrayBackend] = None):
+    def from_config(cls, config, backend: ArrayBackend | None = None):
         bk = backend or NumpyBackend()
         return cls(
             c=bk.array(config["c"]),

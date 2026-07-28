@@ -1,8 +1,8 @@
-from typing import Optional
-from components import Plant, PhysicsEngine
+
+
+from components import PhysicsEngine, Plant
 from factories.registry import register_plant, register_plant_detector
 from utils.array_backend import ArrayBackend, NumpyBackend
-import numpy as np
 
 
 @register_plant("CartPole")
@@ -65,8 +65,8 @@ class CartPole(Plant):
         damping: float = 0.0,
         gravity: float = 9.81,
         dt: float = 0.01,
-        track_limits: Optional[tuple] = None,
-        backend: Optional[ArrayBackend] = None,
+        track_limits: tuple | None = None,
+        backend: ArrayBackend | None = None,
     ):
         self.bk = backend or NumpyBackend()
         self.M = cart_mass
@@ -79,7 +79,7 @@ class CartPole(Plant):
         self.state = self.bk.zeros(4)
         self._engine = None
 
-    def physics_engine(self, engine: Optional[PhysicsEngine]):
+    def physics_engine(self, engine: PhysicsEngine | None):
         """Attach or detach a physics engine.
 
         When attached, the backend is inherited from the engine and the
@@ -121,14 +121,14 @@ class CartPole(Plant):
         Returns:
             Tuple of (A, B) where A is (4, 4) and B is (4, 1).
         """
-        M, m, l, g, b = self.M, self.m, self.l, self.g, self.b
+        M, m, length, g, b = self.M, self.m, self.l, self.g, self.b
         A = self.bk.array([
             [0.0, 1.0, 0.0, 0.0],
             [0.0, 0.0, -m * g / M, 0.0],
             [0.0, 0.0, 0.0, 1.0],
-            [0.0, 0.0, (M + m) * g / (M * l), -b / (M * l**2)],
+            [0.0, 0.0, (M + m) * g / (M * length), -b / (M * length**2)],
         ])
-        B = self.bk.array([[0.0], [1.0 / M], [0.0], [-1.0 / (M * l)]])
+        B = self.bk.array([[0.0], [1.0 / M], [0.0], [-1.0 / (M * length)]])
         return A, B
 
     def _compute_accels(self, x, theta, x_dot, theta_dot, F):
@@ -147,12 +147,12 @@ class CartPole(Plant):
         Returns:
             Tuple of (x_ddot, theta_ddot).
         """
-        M, m, l, g, b = self.M, self.m, self.l, self.g, self.b
+        M, m, length, g, _b = self.M, self.m, self.l, self.g, self.b
         sin_theta = self.bk.sin(theta)
         cos_theta = self.bk.cos(theta)
-        denom = l - m * l * cos_theta**2 / (M + m)
-        theta_ddot = (g * sin_theta - cos_theta * (F + m * l * theta_dot**2 * sin_theta) / (M + m)) / denom
-        x_ddot = (F + m * l * (theta_dot**2 * sin_theta - theta_ddot * cos_theta)) / (M + m)
+        denom = length - m * length * cos_theta**2 / (M + m)
+        theta_ddot = (g * sin_theta - cos_theta * (F + m * length * theta_dot**2 * sin_theta) / (M + m)) / denom
+        x_ddot = (F + m * length * (theta_dot**2 * sin_theta - theta_ddot * cos_theta)) / (M + m)
         return x_ddot, theta_ddot
 
     def dynamics(self, state, control):
@@ -205,7 +205,7 @@ class CartPole(Plant):
         return self.state
 
     @classmethod
-    def from_config(cls, config, backend: Optional[ArrayBackend] = None):
+    def from_config(cls, config, backend: ArrayBackend | None = None):
         """Create a CartPole from a TOML config dict.
 
         Config fields:

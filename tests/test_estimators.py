@@ -1,6 +1,4 @@
-import pytest
 import numpy as np
-from utils.array_backend import NumpyBackend
 
 
 def _to_np(x, bk):
@@ -14,7 +12,7 @@ class TestKalmanFilter:
     def test_estimate_shape(self, bk):
         """estimate() returns a state vector of shape (n_x, 1)."""
         from estimators.kalman_filter import KalmanFilter
-        n, m, p = 2, 1, 2
+        n, _m, p = 2, 1, 2
         A = bk.eye(n)
         B = bk.array([[1.0], [0.0]])
         Q = 0.1 * bk.eye(n)
@@ -39,7 +37,7 @@ class TestKalmanFilter:
         y = bk.array([[1.0], [0.0]])
         u = bk.array([[0.0], [0.0]])
         for _ in range(10):
-            x = kf.estimate(y, u)
+            kf.estimate(y, u)
         P = kf.P
         eigs = np.linalg.eigvals(_to_np(P, bk))
         assert np.all(eigs > -1e-10)
@@ -54,9 +52,9 @@ class TestKalmanFilter:
         R = 0.1 * bk.eye(p)
         C = bk.eye(n)
         kf = KalmanFilter(A, B, Q, R, C=C, backend=bk)
-        y = bk.array([[1.0], [0.0]])
+        bk.array([[1.0], [0.0]])
         u = bk.array([[0.0], [0.0]])
-        x_pred = A @ kf.x_hat + B @ u
+        A @ kf.x_hat + B @ u
         P_pred = A @ kf.P @ A.T + Q
         S = C @ P_pred @ C.T + R
         eigs = np.linalg.eigvals(_to_np(S, bk))
@@ -103,7 +101,7 @@ class TestLuenbergerObserver:
     def test_estimate_shape(self, bk):
         """estimate() returns a state vector of shape (n_x, 1)."""
         from estimators.luenberger_observer import LuenbergerObserver
-        n, m, p = 2, 1, 2
+        n, _m, _p = 2, 1, 2
         A = bk.eye(n)
         B = bk.array([[1.0], [0.0]])
         L = bk.array([[0.5, 0.0], [0.0, 0.5]])
@@ -122,7 +120,7 @@ class TestLuenbergerObserver:
         L = 0.5 * bk.eye(n)
         C = bk.eye(n)
         B = bk.eye(n)
-        obs = LuenbergerObserver(A, B, L, C=C, backend=bk)
+        LuenbergerObserver(A, B, L, C=C, backend=bk)
         A_cl = A - L @ C
         eigs = np.linalg.eigvals(_to_np(A_cl, bk))
         assert np.all(np.abs(eigs) < 1)

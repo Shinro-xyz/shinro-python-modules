@@ -1,6 +1,5 @@
-import pytest
 import numpy as np
-from utils.array_backend import NumpyBackend
+import pytest
 
 
 def _to_np(x, bk):
@@ -44,7 +43,7 @@ class TestLQR:
         Q = bk.eye(1)
         R = bk.eye(1)
         from controllers.lqr import LQR
-        lqr = LQR(Q, R, A, B, backend=bk)
+        LQR(Q, R, A, B, backend=bk)
         from scipy.linalg import solve_discrete_are
         P = solve_discrete_are(_to_np(A, bk), _to_np(B, bk), _to_np(Q, bk), _to_np(R, bk))
         residual = A.T @ P @ A - P - A.T @ P @ B @ np.linalg.solve(R + B.T @ P @ B, B.T @ P @ A) + Q
@@ -293,3 +292,149 @@ class TestMPC:
         mpc = MPC_LTI_Base.from_config(config, backend=bk)
         assert mpc.H is not None
         assert mpc.F is not None
+
+
+class TestSMC:
+    """Verify sliding mode controller: surface convergence, smoother variants, and error handling."""
+
+    def test_smc_construction_hurwitz_rejection(self, bk):
+        """Non-Hurwitz surface coefficients raise ValueError."""
+        from controllers.smc import SlidingModeController
+        with pytest.raises(ValueError, match="Hurwitz"):
+            SlidingModeController(c=[-1.0, 1.0], k1=1.0, backend=bk)
+
+    def test_smc_construction_unknown_smoother(self, bk):
+        """Unknown smoother name raises ValueError."""
+        from controllers.smc import SlidingModeController
+        with pytest.raises(ValueError, match="Unknown smoother"):
+            SlidingModeController(c=[1.0, 2.0], k1=1.0, smoother="foo", backend=bk)
+
+    def test_smc_n_property(self, bk):
+        """n returns the length of the surface coefficient vector."""
+        from controllers.smc import SlidingModeController
+        ctrl = SlidingModeController(c=[1.0, 2.0], k1=1.0, backend=bk)
+        assert ctrl.n == 2
+
+    def test_smc_compute_shape_scalar(self, bk):
+        """compute() returns a 1-element array for a scalar-input system."""
+        from controllers.smc import SlidingModeController
+        ctrl = SlidingModeController(c=[1.0, 2.0], k1=1.0, phi=0.1, backend=bk)
+        x = bk.array([1.0, -0.5])
+        f_x = bk.array([0.0, 0.0])
+        g_x = bk.array([0.0, 1.0])
+        u = ctrl.compute(x, f_x, g_x)
+        assert _to_np(u, bk).shape == (1,)
+
+    def test_smc_compute_shape_multi_input(self, bk):
+        """compute() returns an m-element array for an m-input system."""
+        from controllers.smc import SlidingModeController
+        ctrl = SlidingModeController(c=[1.0, 1.0], k1=1.0, phi=0.1, backend=bk)
+        x = bk.array([1.0, -0.5])
+        f_x = bk.array([0.0, 0.0])
+        g_x = bk.array([[1.0, 0.0], [0.0, 1.0]])
+        u = ctrl.compute(x, f_x, g_x)
+        assert _to_np(u, bk).shape == (2,)
+
+    def test_smc_sliding_surface_converges(self, bk):
+        """The sliding surface s = c^T x converges toward zero under the control law."""
+        from controllers.smc import SlidingModeController
+        ctrl = SlidingModeController(c=[1.0, 2.0], k1=2.0, phi=0.05, backend=bk)
+        dt = 0.01
+        x = bk.array([1.0, 0.0])
+        for _ in range(2000):
+            f_x = bk.array([x[1], bk.array(0.0)])
+            g_x = bk.array([0.0, 1.0])
+            u = ctrl.compute(x, f_x, g_x)
+            x_dot = bk.array([x[1], u[0]])
+            x = x + dt * x_dot
+        s = float(_to_np(ctrl.c @ x, bk))
+        assert abs(s) < 0.1
+
+    def test_smc_sign_smoother_no_phi(self, bk):
+        """With phi=0, the controller uses sign() and still drives s toward zero."""
+        from controllers.smc import SlidingModeController
+        ctrl = SlidingModeController(c=[1.0, 2.0], k1=2.0, phi=0.0, backend=bk)
+        dt = 0.001
+        x = bk.array([1.0, 0.0])
+        for _ in range(3000):
+            f_x = bk.array([x[1], bk.array(0.0)])
+            g_x = bk.array([0.0, 1.0])
+            u = ctrl.compute(x, f_x, g_x)
+            x_dot = bk.array([x[1], u[0]])
+            x = x + dt * x_dot
+        s = float(_to_np(ctrl.c @ x, bk))
+        assert abs(s) < 0.2
+
+    def test_smc_tanh_smoother(self, bk):
+        """The tanh smoother produces a valid control action."""
+        from controllers.smc import SlidingModeController
+        ctrl = SlidingModeController(c=[1.0, 2.0], k1=1.0, phi=0.1, smoother="tanh", backend=bk)
+        x = bk.array([1.0, -0.5])
+        f_x = bk.array([0.0, 0.0])
+        g_x = bk.array([0.0, 1.0])
+        u = ctrl.compute(x, f_x, g_x)
+        assert _to_np(u, bk).shape == (1,)
+
+    def test_smc_sigmoid_smoother(self, bk):
+        """The sigmoid smoother produces a valid control action."""
+        from controllers.smc import SlidingModeController
+        ctrl = SlidingModeController(c=[1.0, 2.0], k1=1.0, phi=0.1, smoother="sigmoid", backend=bk)
+        x = bk.array([1.0, -0.5])
+        f_x = bk.array([0.0, 0.0])
+        g_x = bk.array([0.0, 1.0])
+        u = ctrl.compute(x, f_x, g_x)
+        assert _to_np(u, bk).shape == (1,)
+
+    def test_smc_alpha_affects_convergence(self, bk):
+        """Non-zero alpha changes the reaching law."""
+        from controllers.smc import SlidingModeController
+        ctrl = SlidingModeController(c=[1.0, 2.0], k1=1.0, phi=0.1, alpha=0.5, backend=bk)
+        x = bk.array([1.0, -0.5])
+        f_x = bk.array([0.0, 0.0])
+        g_x = bk.array([0.0, 1.0])
+        u = ctrl.compute(x, f_x, g_x)
+        assert _to_np(u, bk).shape == (1,)
+
+    def test_smc_loss_of_controllability(self, bk):
+        """A near-zero c^T g(x) raises RuntimeError."""
+        from controllers.smc import SlidingModeController
+        ctrl = SlidingModeController(c=[1.0, 0.0], k1=1.0, backend=bk)
+        x = bk.array([1.0, 0.0])
+        f_x = bk.array([0.0, 0.0])
+        g_x = bk.array([0.0, 0.0])
+        with pytest.raises(RuntimeError, match="loss of controllability"):
+            ctrl.compute(x, f_x, g_x)
+
+    def test_smc_reset(self, bk):
+        """reset() is a no-op (does not raise)."""
+        from controllers.smc import SlidingModeController
+        ctrl = SlidingModeController(c=[1.0, 2.0], k1=1.0, backend=bk)
+        ctrl.reset()
+
+    def test_smc_from_config(self, bk):
+        """from_config creates a valid SMC controller."""
+        config = {"c": [1.0, 2.0], "k1": 1.0, "phi": 0.1}
+        from controllers.smc import SlidingModeController
+        ctrl = SlidingModeController.from_config(config, backend=bk)
+        assert ctrl.n == 2
+        assert ctrl.k1 == 1.0
+        assert ctrl.phi == 0.1
+
+    def test_smc_from_config_full(self, bk):
+        """from_config accepts all optional parameters."""
+        config = {
+            "c": [6.0, 11.0, 6.0],
+            "k1": 2.0,
+            "phi": 0.05,
+            "k2": 0.5,
+            "smoother": "tanh",
+            "alpha": 0.3,
+        }
+        from controllers.smc import SlidingModeController
+        ctrl = SlidingModeController.from_config(config, backend=bk)
+        assert ctrl.n == 3
+        assert ctrl.k1 == 2.0
+        assert ctrl.phi == 0.05
+        assert ctrl.k2 == 0.5
+        assert ctrl.alpha == 0.3
+        assert ctrl._smoother_name == "tanh"

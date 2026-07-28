@@ -16,6 +16,7 @@ test-functional:
 test-all:
 	python3 -m pytest tests/ -v --tb=short
 
-# Run type checker
+# Run linter and type checker
 lint:
+	ruff check .
 	pyright utils/ components.py controllers/ estimators/ trajectories/ plants/

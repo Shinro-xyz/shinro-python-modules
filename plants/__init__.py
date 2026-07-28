@@ -12,9 +12,9 @@ Available plants:
     Quadrotor              — 12D quadrotor (placeholder)
 """
 from .armrobot import ArmRobot
+from .cartpole import CartPole
 from .holonomicmobilerobot import HolonomicMobileRobot
 from .inverted_pendulum import InvertedPendulum
-from .cartpole import CartPole
 from .quadrotor import Quadrotor
 
 __all__ = ["ArmRobot", "HolonomicMobileRobot", "InvertedPendulum", "CartPole", "Quadrotor"]

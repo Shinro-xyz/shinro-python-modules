@@ -1,8 +1,9 @@
 """Shared helpers for demo scripts."""
 
-import numpy as np
-import mujoco
 from pathlib import Path
+
+import mujoco
+import numpy as np
 
 
 def load_model_assets(mesh_dir: Path) -> dict:
@@ -58,6 +59,7 @@ def setup_dark_plot(fig, axes):
 def make_composite_frame(mujoco_frame, fig):
     """Composite a MuJoCo render next to a matplotlib plot."""
     from io import BytesIO
+
     from PIL import Image
     buf = BytesIO()
     fig.savefig(buf, format='png', dpi=100, facecolor=fig.get_facecolor(), edgecolor='none')

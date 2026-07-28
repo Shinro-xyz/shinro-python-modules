@@ -1,4 +1,5 @@
 import tomllib
+
 from factories.registry import _TRAJECTORY_REGISTRY
 from utils.array_backend import ArrayBackend
 

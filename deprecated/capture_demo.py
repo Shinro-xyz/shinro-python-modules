@@ -8,12 +8,14 @@ Output: lekiwi_demo.gif
 """
 
 import os
+
 os.environ['MUJOCO_GL'] = 'egl'
 
-import numpy as np
-import mujoco
 from pathlib import Path
+
 import imageio.v3 as iio
+import mujoco
+import numpy as np
 
 HERE = Path(__file__).parent
 OUTPUT_PATH = str(HERE / "lekiwi_demo.gif")

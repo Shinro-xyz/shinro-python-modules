@@ -1,7 +1,7 @@
-import pytest
+from unittest.mock import MagicMock
+
 import numpy as np
-from unittest.mock import MagicMock, patch
-from utils.array_backend import NumpyBackend
+import pytest
 
 
 def _to_np(x, bk):
@@ -268,7 +268,6 @@ class TestArmRobotPhysicsEngine:
 
     def test_physics_engine_attaches(self, bk, mock_engine):
         """Attaching a physics engine inherits its backend and reads EE position."""
-        from plants.armrobot import ArmRobot
         arm = _make_arm(bk)
         arm.physics_engine(mock_engine)
         assert arm._engine is mock_engine
@@ -277,7 +276,6 @@ class TestArmRobotPhysicsEngine:
 
     def test_physics_engine_detach(self, bk, mock_engine):
         """Detaching the engine resets state to the home FK position (from link offsets)."""
-        from plants.armrobot import ArmRobot
         arm = _make_arm(bk)
         arm.physics_engine(mock_engine)
         arm.physics_engine(None)
@@ -289,7 +287,6 @@ class TestArmRobotPhysicsEngine:
 
     def test_step_with_engine(self, bk, mock_engine):
         """step() with engine attached calls set_joint_ctrl and updates state."""
-        from plants.armrobot import ArmRobot
         arm = _make_arm(bk)
         arm.physics_engine(mock_engine)
         u = bk.array([0.1, 0.0, 0.0, 0.0, 0.0, 0.0])
@@ -299,7 +296,6 @@ class TestArmRobotPhysicsEngine:
 
     def test_engine_ik_converges(self, bk, mock_engine):
         """engine_ik() with a mock Jacobian converges to the target."""
-        from plants.armrobot import ArmRobot
         arm = _make_arm(bk)
         arm.physics_engine(mock_engine)
         target = bk.array([0.1, 0.0, 0.0])
@@ -308,14 +304,12 @@ class TestArmRobotPhysicsEngine:
 
     def test_find_ee_body_name(self, bk, mock_engine):
         """_find_ee_body_name returns the first matching candidate."""
-        from plants.armrobot import ArmRobot
         arm = _make_arm(bk)
         name = arm._find_ee_body_name(mock_engine)
         assert name == "Moving_Jaw_08d-v1"
 
     def test_find_ee_body_name_fallback(self, bk, mock_engine):
         """_find_ee_body_name falls back to last body name when no candidate matches."""
-        from plants.armrobot import ArmRobot
         mock_engine.get_body_id.return_value = -1
         arm = _make_arm(bk)
         name = arm._find_ee_body_name(mock_engine)

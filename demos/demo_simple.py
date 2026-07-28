@@ -13,12 +13,13 @@ RENDER_GIF = "--gif" in sys.argv
 if RENDER_GIF:
     os.environ['MUJOCO_GL'] = 'egl'
 
-import numpy as np
-import mujoco
 from pathlib import Path
 
-from simulation import RobotSim
+import mujoco
+import numpy as np
+
 from factories import ControllerFactory, EstimatorFactory, TrajectoryFactory
+from simulation import RobotSim
 
 HERE = Path(__file__).parent.parent
 

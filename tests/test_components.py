@@ -1,5 +1,6 @@
 import pytest
-from components import Controller, Plant, StateEstimator, TrajectoryGenerator, PhysicsEngine
+
+from components import Controller, PhysicsEngine, Plant, StateEstimator, TrajectoryGenerator
 from utils.array_backend import NumpyBackend
 
 

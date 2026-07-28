@@ -1,4 +1,5 @@
-from typing import Optional, Any
+from typing import Any
+
 from components import StateEstimator
 from factories.registry import register_estimator
 from utils.array_backend import ArrayBackend, NumpyBackend, parse_matrix
@@ -37,10 +38,10 @@ class KalmanFilter(StateEstimator):
         B,
         Q,
         R,
-        C: Optional[Any] = None,
-        D: Optional[Any] = None,
-        x0: Optional[Any] = None,
-        backend: Optional[ArrayBackend] = None,
+        C: Any | None = None,
+        D: Any | None = None,
+        x0: Any | None = None,
+        backend: ArrayBackend | None = None,
     ):
         self.bk = backend or NumpyBackend()
         self.A = A
@@ -89,7 +90,7 @@ class KalmanFilter(StateEstimator):
 
         return self.x_hat
 
-    def reset(self, x0: Optional[Any] = None):
+    def reset(self, x0: Any | None = None):
         """Reset the filter to its initial state.
 
         Args:
@@ -99,7 +100,7 @@ class KalmanFilter(StateEstimator):
         self.P = self.bk.eye(self.A.shape[0]) * 0.1
 
     @classmethod
-    def from_config(cls, config, backend: Optional[ArrayBackend] = None):
+    def from_config(cls, config, backend: ArrayBackend | None = None):
         """Create a Kalman filter from a TOML config dict.
 
         Config fields:
