@@ -82,6 +82,9 @@ class SlidingModeController(Controller):
         s=self.c@x
 
         # calulating the sdot
-        s_f=
+        s_f=self.c@f_x
+        s_g=self.c@g_x
+        
+        
         
     
