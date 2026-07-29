@@ -1,3 +1,24 @@
+"""Sliding Mode Controller — robust nonlinear control with chattering suppression.
+
+Computes the control law:
+
+.. math::
+
+    u = (c^T g(x))^{-1} \\left( -c^T f(x) - k_1 |s|^\\alpha \\, \\text{smooth}(s) - k_2 s \\right)
+
+where :math:`s = c^T x` is the sliding surface. Supports multiple boundary-layer
+smoothers (sat, tanh, sigmoid) to suppress chattering.
+
+Usage:
+    # In configs/controllers/smc.toml:
+    #   type = "SMC"
+    #   c = [1.0, 2.0]
+    #   k1 = 10.0
+    #   phi = 0.1
+    #   k2 = 1.0
+    #   smoother = "tanh"
+    #   alpha = 0.5
+"""
 
 import numpy as np
 
@@ -8,6 +29,26 @@ from utils.array_backend import ArrayBackend, NumpyBackend
 
 @register_controller("SMC")
 class SlidingModeController(Controller):
+    """Sliding Mode Controller for nonlinear systems.
+
+    Implements the equivalent control approach with a switching term and
+    optional boundary-layer smoothing. The sliding surface coefficients
+    ``c`` must form a Hurwitz polynomial.
+
+    Args:
+        c: Sliding surface coefficients (n,). The polynomial
+            ``c[0] + c[1] p + ... + c[n-1] p^{n-1}`` must be Hurwitz.
+        k1: Discontinuous (switching) gain — drives the state to the surface.
+        phi: Boundary layer thickness for chattering suppression. If 0,
+            uses sign (pure switching).
+        k2: Linear (proportional) gain on the sliding variable.
+        smoother: Boundary-layer smoothing function. One of ``"sat"``,
+            ``"tanh"``, or ``"sigmoid"``.
+        alpha: Fractional power exponent for the switching term
+            :math:`|s|^\\alpha`. 0 gives sign-only; 1 gives linear.
+        backend: Array backend. Defaults to NumpyBackend.
+    """
+
     def __init__(
         self,
         c,
@@ -42,18 +83,23 @@ class SlidingModeController(Controller):
 
     @property
     def n(self) -> int:
+        """Number of sliding surface coefficients (state dimension)."""
         return len(self.c)
 
     def _sat(self, s):
+        """Saturation boundary layer — clips s/phi to [-1, 1]."""
         return self.bk.clip(s / self.phi, -1.0, 1.0)
 
     def _tanh(self, s):
+        """Hyperbolic tangent boundary layer."""
         return self.bk.tanh(s / self.phi)
 
     def _sigmoid(self, s):
+        """Sigmoid-like boundary layer: s / (|s| + phi)."""
         return s / (self.bk.abs(s) + self.phi)
 
     def _dict_boundaries(self):
+        """Map smoother name to its implementation."""
         return {
             "sat": self._sat,
             "tanh": self._tanh,
@@ -61,12 +107,31 @@ class SlidingModeController(Controller):
         }
 
     def _is_hurwitz(self):
+        """Check that the sliding surface polynomial has all roots with negative real parts."""
         c_np = self.bk.to_numpy(self.c)
         poly = c_np[::-1]
         roots = np.roots(poly)
         return all(np.real(r) < 0 for r in roots)
 
     def compute(self, x, f_x, g_x):
+        """Compute the sliding mode control action.
+
+        Evaluates :math:`u = (c^T g)^{-1} ( -c^T f - k_1 |s|^\\alpha \\, \\text{smooth}(s) - k_2 s )`.
+
+        For scalar input (``c^T g`` is scalar), uses direct division. For
+        vector input, solves the least-squares problem.
+
+        Args:
+            x: Current state vector (n,).
+            f_x: Drift dynamics :math:`f(x)` evaluated at x (n,).
+            g_x: Control matrix :math:`g(x)` evaluated at x (n, n_u).
+
+        Returns:
+            Control input vector (n_u,).
+
+        Raises:
+            RuntimeError: If :math:`c^T g(x)` is near-zero for scalar input.
+        """
         x = self.bk.array(x).flatten()
         f_x = self.bk.array(f_x).flatten()
         g_x = self.bk.array(g_x)
@@ -98,10 +163,28 @@ class SlidingModeController(Controller):
         return u
 
     def reset(self):
-        pass
+        """No internal state to reset for SMC."""
 
     @classmethod
     def from_config(cls, config, backend: ArrayBackend | None = None):
+        """Create an SMC controller from a TOML config dict.
+
+        Config fields:
+            c: List of sliding surface coefficients (n,).
+            k1: Discontinuous (switching) gain.
+            phi: Boundary layer thickness (default 0.0).
+            k2: Linear gain on sliding variable (default 0.0).
+            smoother: Smoothing function — ``"sat"``, ``"tanh"``, or
+                ``"sigmoid"`` (default ``"sat"``).
+            alpha: Fractional power exponent (default 0.0).
+
+        Args:
+            config: TOML config dict.
+            backend: Array backend. Defaults to NumpyBackend.
+
+        Returns:
+            SlidingModeController instance.
+        """
         bk = backend or NumpyBackend()
         return cls(
             c=bk.array(config["c"]),

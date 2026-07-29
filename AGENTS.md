@@ -143,4 +143,5 @@ When given a raw numpy implementation of any component (controller, estimator, t
 7. **Test** — Write tests matching the existing pattern: construction validation, compute shapes, mathematical accuracy (verify the governing equation analytically), convergence, error handling, from_config
 8. **Lint** — `ruff check .` and `pyright`
 9. **Full suite** — `make test`
-10. **Document** — Lab note + re-index
+10. **Docstrings** — Add module, class, method, and property docstrings matching the codebase convention (Sphinx-compatible ``:math:``, ``Args:``, ``Returns:``, ``Config fields:`` blocks)
+11. **Document** — Lab note + re-index
