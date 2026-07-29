@@ -201,25 +201,31 @@ class TestPID:
         assert np.allclose(_to_np(u, bk)[0], -0.5)
 
     def test_pi_eliminates_steady_state_error(self, bk):
-        """PI control drives a first-order plant to the target with zero steady-state error."""
+        """PI control drives a first-order lag plant to the target with zero steady-state error."""
         from controllers.pid import PIDController
+        # First-order lag: x_{k+1} = a*x + b*dt*u, tau=0.1s, dt=0.01s.
+        a = float(np.exp(-0.01 / 0.1))
+        b = 1.0
         pid = PIDController(
-            kp=bk.array([1.0]),
-            ki=bk.array([0.5]),
+            kp=bk.array([2.0]),
+            ki=bk.array([5.0]),
             kd=bk.array([0.0]),
             dt=0.01,
             backend=bk,
         )
         target = bk.array([1.0])
         x = bk.array([0.0])
-        for _ in range(3000):
+        for _ in range(5000):
             u = pid.compute(x, target)
-            x = x + 0.01 * u
+            x = a * x + b * 0.01 * u
         assert np.allclose(_to_np(x, bk)[0], 1.0, atol=1e-2)
 
     def test_p_only_steady_state_error(self, bk):
-        """P-only control has non-zero steady-state error for a first-order plant."""
+        """P-only control leaves a non-zero steady-state error for a first-order lag plant."""
         from controllers.pid import PIDController
+        # First-order lag: x_{k+1} = a*x + b*dt*u, tau=0.1s, dt=0.01s.
+        a = float(np.exp(-0.01 / 0.1))
+        b = 1.0
         Kp = 2.0
         pid = PIDController(
             kp=bk.array([Kp]),
@@ -230,10 +236,14 @@ class TestPID:
         )
         target = bk.array([1.0])
         x = bk.array([0.0])
-        for _ in range(1000):
+        for _ in range(2000):
             u = pid.compute(x, target)
-            x = x + 0.01 * u
-        assert np.allclose(_to_np(x, bk)[0], 1.0, atol=1e-2)
+            x = a * x + b * 0.01 * u
+        # Closed-form steady state: x* = (b*dt*Kp)/(1 - a + b*dt*Kp) * target.
+        x_ss = (b * 0.01 * Kp) / (1 - a + b * 0.01 * Kp)
+        x_np = _to_np(x, bk)[0]
+        assert np.isclose(x_np, x_ss, atol=1e-3)
+        assert not np.isclose(x_np, 1.0, atol=1e-2)
 
     def test_pid_anti_windup(self, bk):
         """When output is clamped, the integral term back-calculates on saturated channels."""
