@@ -52,5 +52,11 @@ class MPPI_Controller(Controller):
             v=np.clip(v,self.u_min,self.u_max)
 
         #parallel N rollouts
-        x_current=np.tile(x0,reps=)
-        
+        x_current=np.tile(x0,(self.N,1))
+        costs= np.zeros(self.N)
+
+        # stepping forward in time through K prediction horizon
+        for k in range(self.K):
+            u_k=v[:,k,:]
+            costs+=self.cost_fn(x_current,u_k)
+            control_costs=self.lam*
