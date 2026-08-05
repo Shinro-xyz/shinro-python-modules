@@ -6,6 +6,7 @@ Usage:
     python3 run_tests.py --all     # Full suite including slow tests
     python3 run_tests.py --quick   # Unit tests only
     python3 run_tests.py --func    # Functional tests only
+    python3 run_tests.py --int     # Integration suite (MuJoCo required, opt-in)
 """
 
 import subprocess
@@ -24,6 +25,11 @@ COMMANDS = {
         "python3", "-m", "pytest",
         "tests/test_mcp_server_functional.py",
         "-v", "--tb=short",
+    ],
+    "--int": [
+        "python3", "-m", "pytest",
+        "tests/integration/",
+        "-v", "--tb=short", "--override-ini=addopts=",
     ],
 }
 

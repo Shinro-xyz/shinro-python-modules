@@ -1,0 +1,21 @@
+# Pick-and-place: multi-plant phase_list schedule driven feedforward through
+# the composed RobotSim (base + arm + jaw). No feedback controller/estimator:
+# the schedule IS the control.
+[scenario]
+name = "pick_and_place"
+description = "phase_list schedule drives base + arm + gripper through a full pick-and-place sequence"
+duration = 11.0
+dt = 0.02
+
+[physics]
+free_joint = true
+
+[plant]
+name = "base"
+
+[trajectory]
+type = "phase_list"
+config = "configs/trajectories/pick_and_place.toml"
+
+[sim]
+config = "robot_config.toml"

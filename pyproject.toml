@@ -2,6 +2,10 @@
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 pythonpath = ["."]
+addopts = "-m 'not integration'"
+markers = [
+    "integration: full-loop physics-backed tests (slow, requires MuJoCo; run via `make test-integration`)",
+]
 
 [tool.ruff]
 target-version = "py312"

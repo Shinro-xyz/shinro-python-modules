@@ -1,0 +1,21 @@
+type = "waypoints"
+dt = 0.02
+
+# 6D end-effector pose schedule [x, y, z, roll, pitch, yaw] in absolute
+# MuJoCo world coordinates. The first waypoint is the deterministic home pose
+# of the end-effector after reset; the arm lifts +8cm, holds, and returns.
+[[waypoints]]
+position = [0.015, 0.150, 0.123, 0.0, 0.0, 0.0]
+duration = 1.0
+
+[[waypoints]]
+position = [0.015, 0.150, 0.203, 0.0, 0.0, 0.0]
+duration = 1.0
+
+[[waypoints]]
+position = [0.015, 0.150, 0.203, 0.0, 0.0, 0.0]
+duration = 3.0
+
+[[waypoints]]
+position = [0.015, 0.150, 0.123, 0.0, 0.0, 0.0]
+duration = 2.0

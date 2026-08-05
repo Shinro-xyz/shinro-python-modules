@@ -1,0 +1,38 @@
+# Adversarial base tracking: same closed-loop as base_tracking but with a NaN
+# measurement injected at step 50. The estimator must not propagate the fault —
+# run_scenario raises ValueError if the estimate goes non-finite.
+[scenario]
+name = "adversarial_nan_measurement"
+description = "NaN measurement injected into the base loop; estimator must not propagate it"
+duration = 16.0
+dt = 0.02
+tolerance = { steady_state = 0.05, estimator = 0.03 }
+input_limits = { min = [-0.5, -0.5, -1.0], max = [0.5, 0.5, 1.0] }
+
+[physics]
+free_joint = true
+
+[plant]
+name = "base"
+
+[controller]
+type = "LQR"
+config = "configs/controllers/lqr_base.toml"
+
+[estimator]
+type = "KalmanFilter"
+config = "configs/estimators/kalman_base.toml"
+
+[trajectory]
+type = "waypoints"
+config = "configs/trajectories/base_straight.toml"
+
+[sim]
+config = "robot_config.toml"
+
+[noise.measurement]
+std = [0.01, 0.01, 0.02]
+
+[adversarial]
+inject_at = 50
+value = "nan"

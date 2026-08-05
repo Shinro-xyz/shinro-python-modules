@@ -1,0 +1,8 @@
+type = "KalmanFilter"
+name = "arm_estimator"
+dt = 0.02
+# 6D Cartesian end-effector state [x, y, z, roll, pitch, yaw].
+# Process noise keeps the estimate light-footed while measurement noise
+# reflects simulated end-effector sensor error.
+process_noise = [0.005, 0.005, 0.005, 0.01, 0.01, 0.01]
+measurement_noise = [0.02, 0.02, 0.02, 0.05, 0.05, 0.05]
