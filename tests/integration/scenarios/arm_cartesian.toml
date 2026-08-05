@@ -1,0 +1,32 @@
+# Arm Cartesian: full closed-loop Trajectory -> PID -> Kalman -> ArmRobot -> MuJoCo.
+[scenario]
+name = "arm_cartesian"
+description = "PID + Kalman track a 6D Cartesian end-effector offset on the SO-ARM100"
+duration = 8.0
+dt = 0.02
+tolerance = { steady_state = 0.05, estimator = 0.03 }
+input_limits = { min = [-0.5, -0.5, -0.5, -0.5, -0.5, -0.5], max = [0.5, 0.5, 0.5, 0.5, 0.5, 0.5] }
+
+[physics]
+free_joint = true
+
+[plant]
+name = "arm"
+
+[controller]
+type = "PID"
+config = "configs/controllers/pid_arm.toml"
+
+[estimator]
+type = "KalmanFilter"
+config = "configs/estimators/kalman_arm.toml"
+
+[trajectory]
+type = "waypoints"
+config = "configs/trajectories/arm_lift.toml"
+
+[sim]
+config = "robot_config.toml"
+
+[noise.measurement]
+std = [0.005, 0.005, 0.005, 0.01, 0.01, 0.01]

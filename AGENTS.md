@@ -25,11 +25,6 @@ python3 ~/.hermes/scripts/codebase_indexer.py --vault --repo lerobot-mpc-lekiwi
 python3 -c "import sqlite3; c=sqlite3.connect('.codebase/codebase_index.db'); [print(r) for r in c.execute('SELECT path, purpose FROM files WHERE ext=\".py\" ORDER BY path')]"
 ```
 
-### Re-index after changes
-
-```bash
-python3 ~/.hermes/scripts/codebase_indexer.py .
-```
 
 ## Project Overview
 

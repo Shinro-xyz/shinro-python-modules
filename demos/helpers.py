@@ -1,4 +1,4 @@
-"""Shared helpers for demo scripts."""
+"""Shared helpers for demo scripts and integration tests."""
 
 from pathlib import Path
 
@@ -14,6 +14,56 @@ def load_model_assets(mesh_dir: Path) -> dict:
             if fname.suffix in ('.stl', '.obj'):
                 assets[fname.name] = fname.read_bytes()
     return assets
+
+
+def inject_free_joint(xml_string: str) -> str:
+    """Nest the arm base body under the wheel base and insert a free joint.
+
+    The stock LeKiwi MJCF has the arm as a sibling of the wheel base. This
+    rewrites the tree so the arm hangs off the (mobile) base plate and the
+    base gains a free joint, enabling base mobility in MuJoCo. The XML is
+    round-tripped through ``xml.etree.ElementTree``.
+
+    Args:
+        xml_string: Original MJCF as a string.
+
+    Returns:
+        Rewritten MJCF as a string.
+    """
+    import xml.etree.ElementTree as ET
+
+    root = ET.fromstring(xml_string)
+    worldbody = root.find('.//worldbody')
+    wheel_base = arm_base = None
+    for child in list(worldbody):
+        if child.tag == 'body':
+            name = child.get('name', '')
+            if 'base_plate_layer1' in name:
+                wheel_base = child
+            elif 'base_plate_layer2' in name:
+                arm_base = child
+    if wheel_base is not None and arm_base is not None:
+        wb_pos = [float(x) for x in wheel_base.get('pos', '0 0 0').split()]
+        ab_pos = [float(x) for x in arm_base.get('pos', '0 0 0').split()]
+        rel_pos = [ab_pos[i] - wb_pos[i] for i in range(3)]
+        arm_base.set('pos', f'{rel_pos[0]} {rel_pos[1]} {rel_pos[2]}')
+        worldbody.remove(arm_base)
+        fj = ET.Element('freejoint')
+        wheel_base.insert(0, fj)
+        wheel_base.append(arm_base)
+    return ET.tostring(root, encoding='unicode')
+
+
+def load_lekiwi_mjcf(mjcf_path: Path) -> str:
+    """Read the LeKiwi MJCF XML from disk.
+
+    Args:
+        mjcf_path: Path to the MJCF file.
+
+    Returns:
+        The XML document as a string.
+    """
+    return mjcf_path.read_text()
 
 
 def setup_gif_renderer(engine, width=640, height=400):

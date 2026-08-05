@@ -1,0 +1,10 @@
+# RobotSim plant entry for the HolonomicMobileRobot base.
+# Consumed by ScenarioFactory via the [plant] -> config key, merged into the
+# RobotSim [[plants]] list when the scenario drives the base.
+type = "HolonomicMobileRobot"
+name = "base"
+num_wheels = 3
+radius_robots = 0.12
+gamma = -1.57079632679
+radius_wheels = 0.09
+dt = 0.02
