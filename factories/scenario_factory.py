@@ -6,16 +6,20 @@ whole loop and validates that the dimensions of each component agree with the
 plant.
 """
 
+from __future__ import annotations
+
 import tomllib
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from components import Controller, Plant, StateEstimator, TrajectoryGenerator
 from factories.controller_factory import ControllerFactory
 from factories.estimator_factory import EstimatorFactory
 from factories.trajectory_factory import TrajectoryFactory
-from simulation.robotsim import RobotSim
 from utils.array_backend import ArrayBackend
+
+if TYPE_CHECKING:
+    from simulation.robotsim import RobotSim
 
 
 @dataclass
@@ -80,6 +84,8 @@ class ScenarioFactory:
         plant_cfg = self.config["plant"]
         sim_cfg = self.config.get("sim", {"config": "robot_config.toml"})
         physics_cfg = self.config.get("physics", {})
+
+        from simulation.robotsim import RobotSim
 
         xml_string, assets = self._physics_xml(physics_cfg)
         sim = RobotSim(sim_cfg["config"], xml_string=xml_string, assets=assets)  # type: ignore[arg-type]
