@@ -59,4 +59,20 @@ class MPPI_Controller(Controller):
         for k in range(self.K):
             u_k=v[:,k,:]
             costs+=self.cost_fn(x_current,u_k)
-            control_costs=self.lam*
+            inv_var_weighted_u=self.u[k]/(self.noise_sigma**2)
+            control_penalty=self.lam*np.sum(inv_var_weighted_u*epsilon[:,k,:],axis=1)
+            costs+=control_penalty
+
+            #advance dynamics forward
+            x_current=self.dynamics_fn(x_current,u_k,self.dt)
+
+        #terminal costs
+        costs+=self.cost_fn(x_current,np.zeros((self.N,self.D_u)))
+
+        # softmax weighing
+        beta= np.min(costs)
+        softmax_w=np.exp(-(costs-beta)/self.lam)
+        softmax_w/=np.sum(softmax_w)
+
+        #update u_k for all rollouts
+        
