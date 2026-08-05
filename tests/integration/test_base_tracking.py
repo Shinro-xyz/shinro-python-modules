@@ -4,12 +4,12 @@ import numpy as np
 import pytest
 
 from factories import ScenarioFactory
-from tests.integration.helpers.assertions import (
+from .helpers.assertions import (
     assert_estimator_recovery,
     assert_finite_state,
     assert_steady_state,
 )
-from tests.integration.helpers.scenario_runner import run_scenario
+from .helpers.scenario_runner import run_scenario
 
 pytestmark = [pytest.mark.integration]
 

@@ -7,7 +7,7 @@ declared thresholds.
 
 import numpy as np
 
-from tests.integration.helpers.scenario_runner import StepRecord
+from .scenario_runner import StepRecord
 
 
 def tracking_error(records: list[StepRecord]) -> np.ndarray:
