@@ -1,4 +1,5 @@
 import tomllib
+
 from factories.registry import _CONTROLLER_REGISTRY
 from utils.array_backend import ArrayBackend
 

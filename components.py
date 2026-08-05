@@ -1,6 +1,8 @@
 from abc import ABC, abstractmethod
-from typing import Any, Optional
+from typing import Any
+
 import numpy as np
+
 from utils.array_backend import ArrayBackend, NumpyBackend
 
 
@@ -69,7 +71,7 @@ class PhysicsEngine(ABC):
         pass
 
     @abstractmethod
-    def reset(self, qpos: Optional[np.ndarray] = None):
+    def reset(self, qpos: np.ndarray | None = None):
         """Reset simulation state."""
         pass
 
@@ -208,7 +210,7 @@ class Plant(ABC):
         pass
 
     @abstractmethod
-    def physics_engine(self, engine: Optional[PhysicsEngine], *args: Any, **kwargs: Any)-> Any:
+    def physics_engine(self, engine: PhysicsEngine | None, *args: Any, **kwargs: Any)-> Any:
         """
         Attach a physics engine to the plant.
 
@@ -303,7 +305,7 @@ class TrajectoryGenerator(ABC):
         Clears any cached or ongoing trajectory data.
         """
         pass
-        
+
     @abstractmethod
     def position_at(self,t:float, *args:Any, **kwargs: Any)->Any:
         pass

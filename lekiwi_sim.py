@@ -5,9 +5,10 @@ LeKiwi-specific convenience wrapper. Kept for backward compatibility.
 The generic RobotSim now lives in simulation/robotsim.py.
 """
 
-import numpy as np
-import mujoco
 from pathlib import Path
+
+import mujoco
+import numpy as np
 
 from physics_engine.mujoco import MuJoCoEngine
 from simulation.robotsim import RobotSim  # noqa: F401 — re-export
@@ -115,7 +116,7 @@ if __name__ == "__main__":
             engine.set_full_ctrl(ctrl)
             engine.step()
 
-        print(f"\nAfter 50 steps with arm movement:")
+        print("\nAfter 50 steps with arm movement:")
         print(f"  Arm joints: {engine.get_arm_qpos(LeKiwiSim.ARM_JOINT_NAMES)}")
         print(f"  Base pose:  {engine.get_base_pose()}")
         print("✅ MuJoCoEngine smoke test passed")

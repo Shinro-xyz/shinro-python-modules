@@ -1,5 +1,6 @@
-import pytest
 import numpy as np
+import pytest
+
 from utils.array_backend import NumpyBackend
 
 
@@ -10,7 +11,7 @@ def numpy_backend():
 
 @pytest.fixture
 def torch_backend():
-    torch = pytest.importorskip("torch")
+    pytest.importorskip("torch")
     from utils.array_backend import TorchBackend
     return TorchBackend(device="cpu")
 
@@ -19,7 +20,7 @@ def torch_backend():
 def bk(request):
     if request.param == "numpy":
         return NumpyBackend()
-    torch = pytest.importorskip("torch")
+    pytest.importorskip("torch")
     from utils.array_backend import TorchBackend
     return TorchBackend(device="cpu")
 

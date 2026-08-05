@@ -14,8 +14,8 @@ Usage:
 
 import sys
 import xml.etree.ElementTree as ET
-import numpy as np
 from pathlib import Path
+import numpy as np
 
 from factories.registry import _PLANT_DETECTOR_REGISTRY
 

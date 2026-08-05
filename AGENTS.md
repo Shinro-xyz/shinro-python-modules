@@ -129,3 +129,19 @@ Each session's lab note MUST contain a semantic summary of the changes made — 
 4. **Verify** — Run tests or check the output
 5. **Document** — Write a semantic summary in `lab-notes/daily/<date>.md` covering what changed, why, and key results
 6. **Re-index** — `python3 ~/.hermes/scripts/codebase_indexer.py .`
+
+## Porting Numpy Scripts to the Framework
+
+When given a raw numpy implementation of any component (controller, estimator, trajectory, plant, physics engine):
+
+1. **Understand** — Read the script, identify the math (state dimensions, equations, parameters, inputs/outputs)
+2. **Test** — Run the raw script to establish baseline behavior
+3. **Backend-agnostic** — Replace `np.xxx` with `self.bk.xxx()`, add missing methods to `ArrayBackend`/`NumpyBackend`/`TorchBackend` if needed
+4. **Register** — Add the appropriate `@register_*` decorator and `from_config` classmethod
+5. **Config** — Create a TOML config in `configs/<component_type>/`
+6. **Export** — Add to the corresponding `__init__.py`
+7. **Test** — Write tests matching the existing pattern: construction validation, compute shapes, mathematical accuracy (verify the governing equation analytically), convergence, error handling, from_config
+8. **Lint** — `ruff check .` and `pyright`
+9. **Full suite** — `make test`
+10. **Docstrings** — Add module, class, method, and property docstrings matching the codebase convention (Sphinx-compatible ``:math:``, ``Args:``, ``Returns:``, ``Config fields:`` blocks)
+11. **Document** — Lab note + re-index

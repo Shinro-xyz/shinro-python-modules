@@ -32,15 +32,17 @@ else:
     import matplotlib
     matplotlib.use('TkAgg')
 
-import numpy as np
-import mujoco
 import time
-import matplotlib.pyplot as plt
 from pathlib import Path
 
-from simulation import RobotSim
-from lekiwi_sim import MJCF_PATH, HERE as LEKIWI_HOME
+import matplotlib.pyplot as plt
+import mujoco
+import numpy as np
+
 from factories import ControllerFactory, EstimatorFactory, TrajectoryFactory
+from lekiwi_sim import HERE as LEKIWI_HOME
+from lekiwi_sim import MJCF_PATH
+from simulation import RobotSim
 
 HERE = Path(__file__).parent.parent
 OUTPUT_PATH = str(HERE / "lekiwi_demo.gif")
@@ -166,6 +168,7 @@ else:
 
 fig, axes = plt.subplots(3, 1, figsize=(8, 6), sharex=True)
 from demos.helpers import setup_dark_plot
+
 setup_dark_plot(fig, axes)
 
 ax_base_track = axes[0]

@@ -34,17 +34,19 @@ else:
     import matplotlib
     matplotlib.use('TkAgg')
 
-import numpy as np
+import time
+from pathlib import Path
+
+import matplotlib.pyplot as plt
 import mujoco
 import mujoco.viewer
-from pathlib import Path
-import time
-import matplotlib.pyplot as plt
+import numpy as np
 
 HERE = Path(__file__).parent
 OUTPUT_PATH = str(HERE / "lekiwi_demo.gif")
 
-from lekiwi_sim import RobotSim, MJCF_PATH, HERE as LEKIWI_HOME
+from lekiwi_sim import HERE as LEKIWI_HOME
+from lekiwi_sim import MJCF_PATH, RobotSim
 
 if TRAJECTORY == "triangle":
     BASE_WAYPOINTS = [

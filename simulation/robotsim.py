@@ -12,11 +12,11 @@ Usage:
     state = sim.get_state()
 """
 
-import numpy as np
-import mujoco
 import tomllib
-from pathlib import Path
 from typing import Any
+
+import mujoco
+import numpy as np
 
 from physics_engine.mujoco import MuJoCoEngine
 

@@ -218,3 +218,6 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 .codebase/codebase_index.db
+
+# local codebase index (built by git hook, not committed)
+.codebase/

@@ -1,0 +1,9 @@
+type = "SMC"
+name = "smc_controller"
+dt = 0.02
+c = [1.0, 2.0]
+k1 = 1.0
+phi = 0.1
+k2 = 0.0
+smoother = "sat"
+alpha = 0.0

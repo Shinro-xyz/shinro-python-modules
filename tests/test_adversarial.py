@@ -1,6 +1,7 @@
-import pytest
 import numpy as np
+import pytest
 from scipy.sparse import csr_matrix
+
 from utils.array_backend import NumpyBackend
 
 
@@ -126,8 +127,8 @@ class TestArrayBackendAdversarial:
 
     def test_eye_zero(self):
         """eye(0) produces an empty 0x0 matrix."""
-        I = self.bk.eye(0)
-        assert I.shape == (0, 0)
+        eye = self.bk.eye(0)
+        assert eye.shape == (0, 0)
 
     def test_eye_negative(self):
         """eye(-1) raises ValueError."""
@@ -779,7 +780,7 @@ class TestLuenbergerObserverAdversarial:
         B = bk.eye(n)
         L = 2.0 * bk.eye(n)
         C = bk.eye(n)
-        obs = LuenbergerObserver(A, B, L, C=C, backend=bk)
+        LuenbergerObserver(A, B, L, C=C, backend=bk)
         A_cl = A - L @ C
         eigs = np.linalg.eigvals(_to_np(A_cl, bk))
         assert np.any(np.abs(eigs) >= 1)

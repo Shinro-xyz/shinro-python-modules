@@ -13,7 +13,6 @@ Usage:
     # python -m demos.demo_base_tracking --controller lerobot_diffusion
 """
 
-from typing import Optional
 from components import Controller
 from factories.registry import register_controller
 

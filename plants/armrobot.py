@@ -4,6 +4,10 @@ from factories.registry import register_plant, register_plant_detector
 from utils.array_backend import ArrayBackend, NumpyBackend
 import numpy as np
 
+from components import PhysicsEngine, Plant
+from factories.registry import register_plant, register_plant_detector
+from utils.array_backend import ArrayBackend, NumpyBackend
+
 
 @register_plant("ArmRobot")
 class ArmRobot(Plant):
@@ -43,10 +47,10 @@ class ArmRobot(Plant):
         dt: float,
         joint_limits,
         joint_offsets,
-        rot_axes: List[str],
-        joint_names: Optional[List[str]] = None,
-        ee_body_name: Optional[str] = None,
-        backend: Optional[ArrayBackend] = None,
+        rot_axes: list[str],
+        joint_names: list[str] | None = None,
+        ee_body_name: str | None = None,
+        backend: ArrayBackend | None = None,
     ):
         self.bk = backend or NumpyBackend()
         self.num_dof = num_dof
@@ -71,7 +75,7 @@ class ArmRobot(Plant):
         assert self._ee_body_name is not None
         return self.bk.array(self._engine.compute_jacobian_for_joints(self._ee_body_name, self._joint_names))
 
-    def physics_engine(self, engine: Optional[PhysicsEngine]):
+    def physics_engine(self, engine: PhysicsEngine | None):
         """Attach a physics engine.
 
         When attached, the backend is inherited from the engine, the
@@ -381,7 +385,7 @@ class ArmRobot(Plant):
         return current_joints
 
     @classmethod
-    def from_config(cls, config, backend: Optional[ArrayBackend] = None):
+    def from_config(cls, config, backend: ArrayBackend | None = None):
         """Create an ArmRobot from a TOML config dict.
 
         Config fields:

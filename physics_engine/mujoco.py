@@ -1,7 +1,7 @@
-import numpy as np
-import mujoco
 from pathlib import Path
-from typing import Optional
+
+import mujoco
+import numpy as np
 
 from components import PhysicsEngine
 
@@ -116,7 +116,7 @@ class MuJoCoEngine(PhysicsEngine):
     def step(self):
         mujoco.mj_step(self.model, self.data)
 
-    def reset(self, qpos: Optional[np.ndarray] = None):
+    def reset(self, qpos: np.ndarray | None = None):
         if qpos is not None:
             self.data.qpos[:] = qpos
         else:

@@ -1,6 +1,8 @@
-from typing import Optional, Any
+from typing import Any
+
 import osqp
 from scipy import sparse
+
 from components import Controller
 from factories.registry import register_controller
 from utils.array_backend import ArrayBackend, NumpyBackend, parse_matrix
@@ -51,7 +53,7 @@ class MPC_LTI(Controller):
         A_dynamics,
         B_dynamics,
         terminal_cost,
-        backend: Optional[ArrayBackend] = None,
+        backend: ArrayBackend | None = None,
     ):
         if horizon > self.MAX_HORIZON:
             raise ValueError(
@@ -198,13 +200,13 @@ class MPC_LTI_DeltaU(MPC_LTI):
         **kwargs: Passed to MPC_LTI.__init__.
     """
 
-    def __init__(self, delta_u_penalty, backend: Optional[ArrayBackend] = None, **kwargs):
+    def __init__(self, delta_u_penalty, backend: ArrayBackend | None = None, **kwargs):
         self.bk = backend or NumpyBackend()
         self.S_delta = delta_u_penalty
         super().__init__(backend=self.bk, **kwargs)
 
     @classmethod
-    def from_config(cls, config, backend: Optional[ArrayBackend] = None):
+    def from_config(cls, config, backend: ArrayBackend | None = None):
         """Create an MPC_DeltaU controller from a TOML config dict.
 
         Config fields:
@@ -281,7 +283,7 @@ class MPC_LTI_DeltaU(MPC_LTI):
         self._augment_dynamics()
         super()._mpc_dynamics_matrices()
 
-    def compute(self, x0, u_prev: Optional[Any] = None):
+    def compute(self, x0, u_prev: Any | None = None):
         """Solve MPC with :math:`\\Delta u` regularization.
 
         Augments the state with the previous control input before solving.
@@ -308,7 +310,7 @@ class MPC_LTI_Base(MPC_LTI):
     """
 
     @classmethod
-    def from_config(cls, config, backend: Optional[ArrayBackend] = None):
+    def from_config(cls, config, backend: ArrayBackend | None = None):
         """Create an MPC_LTI controller from a TOML config dict.
 
         Config fields:

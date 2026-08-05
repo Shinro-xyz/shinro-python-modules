@@ -5,11 +5,11 @@ Real tests for the LeKiwi pick-and-place demo.
 Tests the actual robot behavior: driving, reaching, gripping, lifting, dropping.
 No testing of MuJoCo internals, no "arm droops under gravity" nonsense.
 """
-import numpy as np
 import sys
 
+import numpy as np
+
 from lekiwi_sim import LeKiwiSim
-from physics_engine.mujoco import MuJoCoEngine
 
 # ── Helpers ──
 PASS = 0

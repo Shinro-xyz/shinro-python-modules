@@ -1,6 +1,8 @@
-from typing import Optional, Any
-from components import Controller
+from typing import Any
+
 from scipy.linalg import solve_discrete_are
+
+from components import Controller
 from factories.registry import register_controller
 from utils.array_backend import ArrayBackend, NumpyBackend, parse_matrix
 
@@ -37,7 +39,7 @@ class LQR(Controller):
         control_cost_matrix,
         dynamics_state_matrix,
         dynamics_control_matrix,
-        backend: Optional[ArrayBackend] = None,
+        backend: ArrayBackend | None = None,
     ):
         self.bk = backend or NumpyBackend()
         self.A = dynamics_state_matrix
@@ -64,7 +66,7 @@ class LQR(Controller):
         P = self.bk.from_numpy(P_np)
         self.K = self.bk.inv(self.R + self.B.T @ P @ self.B) @ (self.B.T @ P @ self.A)
 
-    def compute(self, current_state, target_state: Optional[Any] = None):
+    def compute(self, current_state, target_state: Any | None = None):
         """Compute the optimal control input :math:`u = -K (x - x_t)`.
 
         Args:
@@ -83,7 +85,7 @@ class LQR(Controller):
         """No internal state to reset for LQR."""
 
     @classmethod
-    def from_config(cls, config, backend: Optional[ArrayBackend] = None):
+    def from_config(cls, config, backend: ArrayBackend | None = None):
         """Create an LQR controller from a TOML config dict.
 
         Config fields:

@@ -7,8 +7,9 @@ handles tool calls with correct JSON-RPC structure, and handles errors gracefull
 import json
 import subprocess
 import sys
-import pytest
 from pathlib import Path
+
+import pytest
 
 SERVER_PATH = Path(__file__).resolve().parent.parent / "shinro_mcp_server.py"
 

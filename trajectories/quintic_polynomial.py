@@ -1,8 +1,9 @@
-from typing import Optional
+
+import numpy as np
+
 from components import TrajectoryGenerator
 from factories.registry import register_trajectory
 from utils.array_backend import ArrayBackend, NumpyBackend
-import numpy as np
 
 
 @register_trajectory("quintic_segments")
@@ -32,7 +33,7 @@ class QuinticPolynomial(TrajectoryGenerator):
         backend: Array backend. Defaults to NumpyBackend.
     """
 
-    def __init__(self, backend: Optional[ArrayBackend] = None):
+    def __init__(self, backend: ArrayBackend | None = None):
         self.bk = backend or NumpyBackend()
 
     def generate(
@@ -124,7 +125,7 @@ class QuinticPolynomialConfigAdapter:
     """
 
     @classmethod
-    def from_config(cls, config, backend: Optional[ArrayBackend] = None):
+    def from_config(cls, config, backend: ArrayBackend | None = None):
         """Create a waypoint schedule from a TOML config dict.
 
         Config fields:
@@ -174,7 +175,7 @@ class WaypointSchedule:
     """
 
     @classmethod
-    def from_config(cls, config, backend: Optional[ArrayBackend] = None):
+    def from_config(cls, config, backend: ArrayBackend | None = None):
         """Create a waypoint schedule from a TOML config dict.
 
         Config fields:
@@ -208,7 +209,7 @@ class PhaseSchedule:
     """
 
     @classmethod
-    def from_config(cls, config, backend: Optional[ArrayBackend] = None):
+    def from_config(cls, config, backend: ArrayBackend | None = None):
         """Create a phase schedule from a TOML config dict.
 
         Config fields:

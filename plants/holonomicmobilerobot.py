@@ -4,6 +4,10 @@ from factories.registry import register_plant, register_plant_detector
 from utils.array_backend import ArrayBackend, NumpyBackend
 import numpy as np
 
+from components import Plant
+from factories.registry import register_plant, register_plant_detector
+from utils.array_backend import ArrayBackend, NumpyBackend
+
 
 @register_plant("HolonomicMobileRobot")
 class HolonomicMobileRobot(Plant):
@@ -47,7 +51,7 @@ class HolonomicMobileRobot(Plant):
         gamma: float,
         radius_wheels: float,
         dt: float,
-        backend: Optional[ArrayBackend] = None,
+        backend: ArrayBackend | None = None,
     ):
         self.bk = backend or NumpyBackend()
         self.n = num_wheels
@@ -153,7 +157,7 @@ class HolonomicMobileRobot(Plant):
         return A, B
 
     @classmethod
-    def from_config(cls, config, backend: Optional[ArrayBackend] = None):
+    def from_config(cls, config, backend: ArrayBackend | None = None):
         """Create a HolonomicMobileRobot from a TOML config dict.
 
         Config fields:

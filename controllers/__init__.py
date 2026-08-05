@@ -10,9 +10,10 @@ Available controllers:
     MPC_LTI         — Linear Time-Invariant MPC with OSQP QP solver
     MPC_LTI_DeltaU  — MPC with Δu (control rate) regularization
 """
-from .lqr import LQR
-from .pid import PIDController
-from .mpc_lti import MPC_LTI_DeltaU
 from .lerobot_adapter import LeRobotDiffusionAdapter
+from .lqr import LQR
+from .mpc_lti import MPC_LTI_DeltaU
+from .pid import PIDController
+from .smc import SlidingModeController
 
-__all__ = ["LQR", "PIDController", "MPC_LTI_DeltaU", "LeRobotDiffusionAdapter"]
+__all__ = ["LQR", "PIDController", "MPC_LTI_DeltaU", "LeRobotDiffusionAdapter", "SlidingModeController"]

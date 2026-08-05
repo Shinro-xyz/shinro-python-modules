@@ -5,35 +5,37 @@ Tests cover creation, computation, reset, listing, and edge cases
 """
 
 import json
-import pytest
+
 import numpy as np
+import pytest
+
 from shinro_mcp_server import (
-    create_controller,
-    controller_compute,
-    controller_reset,
-    list_controller_types,
-    list_controllers,
-    create_estimator,
-    estimator_estimate,
-    estimator_reset,
-    list_estimator_types,
-    list_estimators,
-    create_trajectory,
-    trajectory_generate,
-    trajectory_position_at,
-    list_trajectory_types,
-    list_trajectories,
+    _store,
     analyze_controllability,
     analyze_observability,
+    balanced_truncation,
+    controller_compute,
+    controller_reset,
+    create_controller,
+    create_estimator,
+    create_trajectory,
+    estimator_estimate,
+    estimator_reset,
+    get_mpc_constraints,
     gramian_continuous,
     gramian_discrete,
     gramian_finite,
-    system_summary,
-    balanced_truncation,
+    list_controller_types,
+    list_controllers,
+    list_estimator_types,
+    list_estimators,
+    list_trajectories,
+    list_trajectory_types,
     set_mpc_constraints,
-    get_mpc_constraints,
     set_pid_output_limits,
-    _store,
+    system_summary,
+    trajectory_generate,
+    trajectory_position_at,
 )
 
 
@@ -103,7 +105,8 @@ class TestCreateController:
 
     def test_create_config_path_missing_type_field_raises_key_error(self):
         """A config file without a 'type' field raises a KeyError from the factory."""
-        import tempfile, os
+        import os
+        import tempfile
         with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
             f.write("dt = 0.02\n")
             path = f.name
@@ -121,7 +124,7 @@ class TestCreateController:
 
     def test_create_lqr_missing_required_params_returns_error(self):
         """LQR creation with empty params returns error."""
-        result = create_controller(name="bad", type="LQR", params={})
+        create_controller(name="bad", type="LQR", params={})
         assert "bad" not in _store
 
 

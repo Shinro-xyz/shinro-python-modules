@@ -1,8 +1,9 @@
+
 import numpy as np
-from typing import Optional, Tuple, Dict
-from scipy.linalg import solve_continuous_lyapunov, solve_discrete_lyapunov
-from scipy.sparse import issparse, csr_matrix
 from scipy.integrate import solve_ivp
+from scipy.linalg import solve_continuous_lyapunov, solve_discrete_lyapunov
+from scipy.sparse import csr_matrix, issparse
+
 from utils.array_backend import ArrayBackend, NumpyBackend
 
 
@@ -25,18 +26,18 @@ class LTISystemsAnalyzer:
     def __init__(
         self,
         A: np.ndarray,
-        B: Optional[np.ndarray] = None,
-        C: Optional[np.ndarray] = None,
-        D: Optional[np.ndarray] = None,
-        dt: Optional[float] = None,
-        backend: Optional[ArrayBackend] = None,
+        B: np.ndarray | None = None,
+        C: np.ndarray | None = None,
+        D: np.ndarray | None = None,
+        dt: float | None = None,
+        backend: ArrayBackend | None = None,
     ) -> None:
         self.bk = backend if backend is not None else NumpyBackend()
         self.A: np.ndarray = A
         self.B: np.ndarray = B if B is not None else self.bk.zeros((A.shape[0], 0))
         self.C: np.ndarray = C if C is not None else self.bk.zeros((0, A.shape[0]))
         self.D: np.ndarray = D if D is not None else self.bk.zeros((self.C.shape[0], self.B.shape[1]))
-        self.dt: Optional[float] = dt
+        self.dt: float | None = dt
         self._cached_values = {}
         self._validate_dimensions()
 
@@ -70,8 +71,6 @@ class LTISystemsAnalyzer:
         for i in range(1, n):
             cols.append(self.A @ cols[-1])
         C = self.bk.hstack(cols)
-        rank = self.bk.matrix_rank(C)
-        is_controllable = (rank == n)
         return C
 
     def observability(self):
@@ -84,10 +83,8 @@ class LTISystemsAnalyzer:
         cols = [self.C]
         for i in range(1, n):
             cols.append(self.C @ self.bk.matrix_power(self.A, i))
-        O = self.bk.vstack(cols)
-        rank = self.bk.matrix_rank(O)
-        is_observable = (rank == n)
-        return O
+        O_mat = self.bk.vstack(cols)
+        return O_mat
 
     def _rank_and_condition_check(self, M: np.ndarray):
         """Compute rank and condition number of a matrix.
@@ -118,8 +115,8 @@ class LTISystemsAnalyzer:
         Returns:
             True if the observability matrix has full column rank.
         """
-        O = self.observability()
-        rank = self.bk.matrix_rank(O)
+        O_mat = self.observability()
+        rank = self.bk.matrix_rank(O_mat)
         return rank == self.A.shape[0]
 
     def _solve_continuous_lyap(self, Q: np.ndarray):
@@ -399,7 +396,7 @@ class LTISystemsAnalyzer:
         sigma = self.bk.sqrt(self.bk.sort(eigs)[::-1])
         return sigma
 
-    def balanced_realization(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def balanced_realization(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Return the balanced state-space matrices (Abal, Bbal, Cbal).
 
         The transformation T satisfies:
@@ -411,7 +408,7 @@ class LTISystemsAnalyzer:
         Returns:
             Tuple of (Abal, Bbal, Cbal) with shapes (n, n), (n, m), (p, n).
         """
-        sigma = self.hankel_singular_values()
+        self.hankel_singular_values()
 
         Wc = self.controllability_gramian()
         Wo = self.observability_gramian()
@@ -428,7 +425,7 @@ class LTISystemsAnalyzer:
 
         return Ab, Bb, Cb
 
-    def balanced_truncate(self, r: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    def balanced_truncate(self, r: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Perform balanced truncation to obtain an order-r reduced model.
 
         Args:
@@ -458,19 +455,19 @@ class LTISystemsAnalyzer:
         """Clear all memoised results after manually changing A, B, or C."""
         self._cached_values.clear()
 
-    def rank_report(self) -> Dict[str, Tuple[int, float]]:
+    def rank_report(self) -> dict[str, tuple[int, float]]:
         """Return rank and condition of controllability and observability matrices.
 
         Returns:
             Dict with keys 'controllability' and 'observability', each a
             tuple of (rank, condition_number).
         """
-        C = self.controllabilty()
-        O = self.observability()
-        rank_c = self.bk.matrix_rank(C)
-        rank_o = self.bk.matrix_rank(O)
-        cond_c = self.bk.cond(C) if rank_c == C.shape[0] else np.inf
-        cond_o = self.bk.cond(O) if rank_o == O.shape[0] else np.inf
+        C_mat = self.controllabilty()
+        O_mat = self.observability()
+        rank_c = self.bk.matrix_rank(C_mat)
+        rank_o = self.bk.matrix_rank(O_mat)
+        cond_c = self.bk.cond(C_mat) if rank_c == C_mat.shape[0] else np.inf
+        cond_o = self.bk.cond(O_mat) if rank_o == O_mat.shape[0] else np.inf
         return {
             "controllability": (int(rank_c), float(cond_c)),
             "observability": (int(rank_o), float(cond_o)),

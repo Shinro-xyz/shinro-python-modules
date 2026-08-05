@@ -1,4 +1,8 @@
-.PHONY: test test-quick test-functional test-all lint
+.PHONY: test test-quick test-functional test-all lint \
+	test-controllers test-estimators test-plants test-trajectories test-armrobot \
+	test-components test-array-backend test-controllability test-factories \
+	test-linearization test-adversarial test-mcp-server test-mcp-functional \
+	test-pick-and-place
 
 # Run the full test suite (skips the very large horizon MPC timeout test)
 test:
@@ -16,6 +20,50 @@ test-functional:
 test-all:
 	python3 -m pytest tests/ -v --tb=short
 
-# Run type checker
+# Run linter and type checker
 lint:
+	ruff check .
 	pyright utils/ components.py controllers/ estimators/ trajectories/ plants/
+
+# Run an individual test group by short name, e.g. `make test-controllers`
+test-controllers:
+	python3 -m pytest tests/test_controllers.py -v --tb=short
+
+test-estimators:
+	python3 -m pytest tests/test_estimators.py -v --tb=short
+
+test-plants:
+	python3 -m pytest tests/test_plants.py -v --tb=short
+
+test-trajectories:
+	python3 -m pytest tests/test_trajectories.py -v --tb=short
+
+test-armrobot:
+	python3 -m pytest tests/test_armrobot.py -v --tb=short
+
+test-components:
+	python3 -m pytest tests/test_components.py -v --tb=short
+
+test-array-backend:
+	python3 -m pytest tests/test_array_backend.py -v --tb=short
+
+test-controllability:
+	python3 -m pytest tests/test_controllability_checker.py -v --tb=short
+
+test-factories:
+	python3 -m pytest tests/test_factories.py -v --tb=short
+
+test-linearization:
+	python3 -m pytest tests/test_linearization.py -v --tb=short
+
+test-adversarial:
+	python3 -m pytest tests/test_adversarial.py -v --tb=short
+
+test-mcp-server:
+	python3 -m pytest tests/test_mcp_server.py -v --tb=short
+
+test-mcp-functional:
+	python3 -m pytest tests/test_mcp_server_functional.py -v --tb=short
+
+test-pick-and-place:
+	python3 -m pytest test_pick_and_place.py -v --tb=short
