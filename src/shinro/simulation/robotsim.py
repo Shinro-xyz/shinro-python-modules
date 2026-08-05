@@ -55,6 +55,7 @@ class RobotSim:
             pname = plant_cfg["name"]
 
             from shinro.factories.registry import _PLANT_REGISTRY
+
             cls = _PLANT_REGISTRY[ptype]
             plant_config = {**plant_cfg, "joint_groups": joint_groups, "engine": self.engine, "dt": dt}
             plant = cls.from_config(plant_config)
@@ -65,18 +66,18 @@ class RobotSim:
     def reset(self):
         self.engine.reset()
         for name, plant in self._plants.items():
-            if hasattr(plant, 'state') and isinstance(plant.state, np.ndarray):
+            if hasattr(plant, "state") and isinstance(plant.state, np.ndarray):
                 plant.state = np.zeros_like(plant.state)
 
     def step(self):
         self.engine.step()
-        if hasattr(self, 'base') and hasattr(self.engine, 'has_free_joint') and self.engine.has_free_joint:
+        if hasattr(self, "base") and hasattr(self.engine, "has_free_joint") and self.engine.has_free_joint:
             base_state = self.base.state
             self.engine.data.qpos[0] = base_state[0]
             self.engine.data.qpos[1] = base_state[1]
             self.engine.data.qpos[3:7] = [1.0, 0.0, 0.0, 0.0]
             self.engine.data.qvel[:6] = 0.0
-            if hasattr(self.base, '_target_wheel_delta') and self.base._target_wheel_delta is not None:
+            if hasattr(self.base, "_target_wheel_delta") and self.base._target_wheel_delta is not None:
                 drive_joints = self.config.get("joint_groups", {}).get("drive_joints", [])
                 for name, delta in zip(drive_joints, self.base._target_wheel_delta):
                     jid = self.engine._joint_name_to_id[name]

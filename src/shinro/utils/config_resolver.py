@@ -66,9 +66,7 @@ def resolve_config_path(path: str) -> Path:
         if candidate.exists():
             return candidate
 
-    raise FileNotFoundError(
-        f"Config not found: {path} (tried: {', '.join(str(c) for c in candidates)})"
-    )
+    raise FileNotFoundError(f"Config not found: {path} (tried: {', '.join(str(c) for c in candidates)})")
 
 
 def get_config_path(name: str) -> Path:

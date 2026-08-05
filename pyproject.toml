@@ -14,7 +14,7 @@ dependencies = [
     "numpy>=2.0",
     "scipy>=1.13",
     "osqp>=1.0",
-    "mcp>=1.28",
+    "mcp>=1.28,<2",
 ]
 
 [project.optional-dependencies]

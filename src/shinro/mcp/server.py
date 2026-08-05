@@ -44,15 +44,14 @@ def _from_col(arr):
 def _set_mpc_default_constraints(ctrl: Any) -> None:
     if not hasattr(ctrl, "A_constraints"):
         import scipy.sparse as sp
+
         bk = ctrl.bk
         n_c = ctrl.m
         F = bk.eye(n_c)
         lo = bk.zeros(n_c) - 1e10
         hi = bk.zeros(n_c) + 1e10
         F_np = bk.to_numpy(F)
-        ctrl.A_constraints = sp.csc_matrix(
-            sp.block_diag([sp.coo_array(F_np)] * ctrl.N)
-        )
+        ctrl.A_constraints = sp.csc_matrix(sp.block_diag([sp.coo_array(F_np)] * ctrl.N))
         ctrl.lcons = bk.tile(lo, ctrl.N)
         ctrl.ucons = bk.tile(hi, ctrl.N)
 
@@ -221,10 +220,12 @@ def get_mpc_constraints(name: str) -> str:
     n_c = ctrl.lcons.shape[0] // ctrl.N
     lo = ctrl.lcons[:n_c]
     hi = ctrl.ucons[:n_c]
-    return json.dumps({
-        "upper": _to_list(hi),
-        "lower": _to_list(lo),
-    })
+    return json.dumps(
+        {
+            "upper": _to_list(hi),
+            "lower": _to_list(lo),
+        }
+    )
 
 
 @server.tool()
@@ -408,9 +409,11 @@ def create_trajectory(
             return f"Provide 'params' for trajectory type '{type}'"
         if type == "cubic_segments":
             from shinro.trajectories.cubic_polynomial import CubicPolynomial
+
             traj = CubicPolynomial(backend=bk)
         elif type == "quintic_segments":
             from shinro.trajectories.quintic_polynomial import QuinticPolynomial
+
             traj = QuinticPolynomial(backend=bk)
         else:
             cls = _TRAJECTORY_REGISTRY[type]
@@ -492,11 +495,13 @@ def trajectory_position_at(name: str, t: float) -> str:
     try:
         if hasattr(traj, "position_at"):
             pos, vel, acc = traj.position_at(t)
-            return json.dumps({
-                "position": _to_list(pos),
-                "velocity": _to_list(vel),
-                "acceleration": _to_list(acc),
-            })
+            return json.dumps(
+                {
+                    "position": _to_list(pos),
+                    "velocity": _to_list(vel),
+                    "acceleration": _to_list(acc),
+                }
+            )
         return "This trajectory type does not support position_at()."
     except Exception as e:
         return f"Error in position_at: {e}"
@@ -540,12 +545,14 @@ def analyze_controllability(
         C_mat = analyzer.controllabilty()
         rank = int(np.linalg.matrix_rank(C_mat))
         n = np.array(A, dtype=np.float64).shape[0]
-        return json.dumps({
-            "controllable": rank == n,
-            "rank": rank,
-            "n": n,
-            "condition": float(np.linalg.cond(C_mat)) if rank == n else None,
-        })
+        return json.dumps(
+            {
+                "controllable": rank == n,
+                "rank": rank,
+                "n": n,
+                "condition": float(np.linalg.cond(C_mat)) if rank == n else None,
+            }
+        )
     except Exception as e:
         return json.dumps({"error": str(e)})
 
@@ -569,12 +576,14 @@ def analyze_observability(
         O_mat = analyzer.observability()
         rank = int(np.linalg.matrix_rank(O_mat))
         n = np.array(A, dtype=np.float64).shape[0]
-        return json.dumps({
-            "observable": rank == n,
-            "rank": rank,
-            "n": n,
-            "condition": float(np.linalg.cond(O_mat)) if rank == n else None,
-        })
+        return json.dumps(
+            {
+                "observable": rank == n,
+                "rank": rank,
+                "n": n,
+                "condition": float(np.linalg.cond(O_mat)) if rank == n else None,
+            }
+        )
     except Exception as e:
         return json.dumps({"error": str(e)})
 
@@ -601,9 +610,7 @@ def gramian_continuous(
         try:
             wc = analyzer.controllability_gramian()
             result["controllability_gramian"] = wc.tolist()
-            result["controllability_gramian_eigs"] = (
-                np.sort(np.real(np.linalg.eigvals(wc)))[::-1].tolist()
-            )
+            result["controllability_gramian_eigs"] = np.sort(np.real(np.linalg.eigvals(wc)))[::-1].tolist()
         except ValueError as e:
             result["controllability_gramian"] = None
             result["controllability_gramian_error"] = str(e)
@@ -611,9 +618,7 @@ def gramian_continuous(
         try:
             wo = analyzer.observability_gramian()
             result["observability_gramian"] = wo.tolist()
-            result["observability_gramian_eigs"] = (
-                np.sort(np.real(np.linalg.eigvals(wo)))[::-1].tolist()
-            )
+            result["observability_gramian_eigs"] = np.sort(np.real(np.linalg.eigvals(wo)))[::-1].tolist()
         except ValueError as e:
             result["observability_gramian"] = None
             result["observability_gramian_error"] = str(e)
@@ -653,9 +658,7 @@ def gramian_discrete(
         try:
             wc = analyzer.discrete_controllability_gramian()
             result["controllability_gramian"] = wc.tolist()
-            result["controllability_gramian_eigs"] = (
-                np.sort(np.real(np.linalg.eigvals(wc)))[::-1].tolist()
-            )
+            result["controllability_gramian_eigs"] = np.sort(np.real(np.linalg.eigvals(wc)))[::-1].tolist()
         except ValueError as e:
             result["controllability_gramian"] = None
             result["controllability_gramian_error"] = str(e)
@@ -663,9 +666,7 @@ def gramian_discrete(
         try:
             wo = analyzer.discrete_observability_gramian()
             result["observability_gramian"] = wo.tolist()
-            result["observability_gramian_eigs"] = (
-                np.sort(np.real(np.linalg.eigvals(wo)))[::-1].tolist()
-            )
+            result["observability_gramian_eigs"] = np.sort(np.real(np.linalg.eigvals(wo)))[::-1].tolist()
         except ValueError as e:
             result["observability_gramian"] = None
             result["observability_gramian_error"] = str(e)
@@ -703,11 +704,13 @@ def gramian_finite(
         analyzer = _make_analyzer(A=A, B=B, C=C)
         wc = analyzer.controllability_gramian_finite(T)
         wo = analyzer.observability_gramian_finite(T)
-        return json.dumps({
-            "controllability_gramian": wc.tolist(),
-            "observability_gramian": wo.tolist(),
-            "horizon": T,
-        })
+        return json.dumps(
+            {
+                "controllability_gramian": wc.tolist(),
+                "observability_gramian": wo.tolist(),
+                "horizon": T,
+            }
+        )
     except Exception as e:
         return json.dumps({"error": str(e)})
 
@@ -768,14 +771,16 @@ def balanced_truncation(
         Ar, Br, Cr, Dr = analyzer.balanced_truncate(r)
         sigma = analyzer.hankel_singular_values()
         error_bound = 2.0 * float(np.sum(sigma[r:]))
-        return json.dumps({
-            "Ar": Ar.tolist(),
-            "Br": Br.tolist(),
-            "Cr": Cr.tolist(),
-            "Dr": Dr.tolist(),
-            "reduced_order": r,
-            "error_bound": error_bound,
-        })
+        return json.dumps(
+            {
+                "Ar": Ar.tolist(),
+                "Br": Br.tolist(),
+                "Cr": Cr.tolist(),
+                "Dr": Dr.tolist(),
+                "reduced_order": r,
+                "error_bound": error_bound,
+            }
+        )
     except Exception as e:
         return json.dumps({"error": str(e)})
 

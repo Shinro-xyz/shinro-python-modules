@@ -7,18 +7,17 @@ handles tool calls with correct JSON-RPC structure, and handles errors gracefull
 import json
 import subprocess
 import sys
-from pathlib import Path
 
 import pytest
 
-SERVER_PATH = Path(__file__).resolve().parent.parent / "shinro_mcp_server.py"
+SERVER_PATH = "shinro.mcp.server"
 
 
 @pytest.fixture
 def server():
     """Spawn the MCP server as a subprocess, perform initialize handshake, yield a client helper."""
     proc = subprocess.Popen(
-        [sys.executable, str(SERVER_PATH)],
+        [sys.executable, "-m", SERVER_PATH],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

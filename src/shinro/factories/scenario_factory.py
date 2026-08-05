@@ -92,10 +92,7 @@ class ScenarioFactory:
         sim = RobotSim(resolve_config_path(sim_cfg["config"]), xml_string=xml_string, assets=assets)  # type: ignore[arg-type]
         plant = sim.get_plant(plant_cfg["name"])
         if plant is None:
-            raise KeyError(
-                f"Plant name '{plant_cfg['name']}' not found in RobotSim. "
-                f"Available plants: {sorted(sim._plants.keys())}"
-            )
+            raise KeyError(f"Plant name '{plant_cfg['name']}' not found in RobotSim. Available plants: {sorted(sim._plants.keys())}")
 
         def _create(factory_cls, path: str):
             if backend is not None:
@@ -163,11 +160,7 @@ class ScenarioFactory:
         """
         est_x = getattr(estimator, "A", None)
         if est_x is not None and est_x.shape[0] != n_x:
-            raise ValueError(
-                f"Estimator state dimension {est_x.shape[0]} does not match plant state dimension {n_x}."
-            )
+            raise ValueError(f"Estimator state dimension {est_x.shape[0]} does not match plant state dimension {n_x}.")
         ctrl_B = getattr(controller, "B", None)
         if ctrl_B is not None and ctrl_B.shape[1] != n_u:
-            raise ValueError(
-                f"Controller input dimension {ctrl_B.shape[1]} does not match plant input dimension {n_u}."
-            )
+            raise ValueError(f"Controller input dimension {ctrl_B.shape[1]} does not match plant input dimension {n_u}.")

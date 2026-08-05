@@ -9,7 +9,7 @@ import json
 import numpy as np
 import pytest
 
-from shinro_mcp_server import (
+from shinro.mcp.server import (
     _store,
     analyze_controllability,
     analyze_observability,
@@ -492,7 +492,7 @@ class TestMaliciousEdgeCases:
         import subprocess
         import sys
         code = """
-from shinro_mcp_server import create_controller
+from shinro.mcp.server import create_controller
 result = create_controller(
     name="bad_mpc", type="MPC_LTI",
     params={"dt": 0.02, "horizon": 10000, "state_cost": [1.0], "control_cost": [0.1]},

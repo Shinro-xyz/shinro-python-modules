@@ -10,6 +10,7 @@ def register_controller(name):
         cls._registry_name = name
         _CONTROLLER_REGISTRY[name] = cls
         return cls
+
     return decorator
 
 
@@ -18,6 +19,7 @@ def register_estimator(name):
         cls._registry_name = name
         _ESTIMATOR_REGISTRY[name] = cls
         return cls
+
     return decorator
 
 
@@ -26,6 +28,7 @@ def register_trajectory(name):
         cls._registry_name = name
         _TRAJECTORY_REGISTRY[name] = cls
         return cls
+
     return decorator
 
 
@@ -34,6 +37,7 @@ def register_plant(name):
         cls._registry_name = name
         _PLANT_REGISTRY[name] = cls
         return cls
+
     return decorator
 
 
@@ -47,7 +51,9 @@ def register_plant_detector(plant_type):
     produces ArmRobot + HolonomicMobileRobot). The generator collects all matches
     and produces one ``[[plants]]`` entry per match.
     """
+
     def decorator(fn):
         _PLANT_DETECTOR_REGISTRY[plant_type] = fn
         return fn
+
     return decorator
