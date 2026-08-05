@@ -1,4 +1,5 @@
 .PHONY: test test-quick test-functional test-all test-integration lint install build \
+	release-patch release-minor release-major \
 	test-controllers test-estimators test-plants test-trajectories test-armrobot \
 	test-components test-array-backend test-controllability test-factories \
 	test-linearization test-adversarial test-mcp-server test-mcp-functional
@@ -10,6 +11,36 @@ install:
 # Build source + wheel distributions
 build:
 	python -m build
+
+# ---------------------------------------------------------------------------
+# Release helpers. Versioning is setuptools-scm: the released version IS the
+# git tag (v<X>.<Y>.<Z>). These targets bump the tag, push it, and let the
+# .github/workflows/release.yml build + attach the wheel to a GitHub Release.
+#
+# Semver rules:
+#   patch  — backwards-compatible bug fix          (0.1.0 -> 0.1.1)
+#   minor  — backwards-compatible new feature      (0.1.1 -> 0.2.0)
+#   major  — incompatible API change               (0.2.0 -> 1.0.0)
+# ---------------------------------------------------------------------------
+release-patch:
+	@$(MAKE) _release BUMP=patch
+release-minor:
+	@$(MAKE) _release BUMP=minor
+release-major:
+	@$(MAKE) _release BUMP=major
+
+_release:
+	@current=$$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || echo "0.0.0"); \
+	IFS='.' read -r maj min pat <<< "$$current"; \
+	case "$(BUMP)" in \
+	  patch) new="$$maj.$$min.$$((pat+1))" ;; \
+	  minor) new="$$maj.$$((min+1)).0" ;; \
+	  major) new="$$((maj+1)).0.0" ;; \
+	esac; \
+	echo ">>> Bumping $$current -> v$$new"; \
+	echo "    Add a CHANGELOG.md entry under [$$new] before pushing."; \
+	git tag -a "v$$new" -m "Release v$$new"; \
+	echo ">>> Created tag v$$new. Push with: git push origin v$$new"
 
 # Run the full test suite (skips the very large horizon MPC timeout test)
 test:

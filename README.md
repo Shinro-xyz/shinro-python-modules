@@ -43,9 +43,28 @@ The MCP server is installed as a console command: `shinro-mcp`.
 
 ## Releases
 
-Versions are derived from git tags via `setuptools-scm`. Tag `v0.1.0` to cut
-a release; development builds between tags are auto-numbered
-(`0.1.1.devN+g<sha>`). See `Makefile` targets `make install` and `make build`.
+Versions are derived from git tags via `setuptools-scm`. A release is a
+`vX.Y.Z` tag pushed to `origin`; the `.github/workflows/release.yml` workflow
+builds the wheel + sdist, smoke-tests them, and attaches them to a GitHub
+Release with auto-generated notes.
+
+Semantic versioning:
+- `patch` — backwards-compatible fix (`v0.1.0` → `v0.1.1`)
+- `minor` — backwards-compatible feature (`v0.1.1` → `v0.2.0`)
+- `major` — incompatible API change (`v0.2.0` → `v1.0.0`)
+
+To cut a release:
+
+```bash
+# 1. (optional but recommended) draft release notes
+make release-patch   # or release-minor / release-major
+
+# 2. commit the changelog, then push the tag to trigger the release
+git push origin v0.1.1
+```
+
+Development builds between tags are auto-numbered (`0.1.2.devN+g<sha>`).
+Local build + install sanity: `make install` and `make build`.
 
 ## Run a demo
 
