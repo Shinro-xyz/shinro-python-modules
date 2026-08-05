@@ -1,6 +1,5 @@
-import numpy as np
 import pytest
-
+import numpy as np
 from utils.array_backend import NumpyBackend
 
 

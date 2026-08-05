@@ -15,7 +15,6 @@ Usage:
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
-
 import numpy as np
 
 from factories.registry import _PLANT_DETECTOR_REGISTRY
@@ -88,7 +87,7 @@ def _build_actuator_map(root: ET.Element) -> dict[str, str]:
 
 def _find_arm_chain(root: ET.Element, actuator_map: dict[str, str]) -> list[tuple[str, ET.Element, ET.Element, np.ndarray]]:
     worldbody = root.find('.//worldbody')
-    root.findall('.//default')
+    defaults = root.findall('.//default')
 
     def walk(body_elem, parent_T=np.eye(4)):
         results = []
@@ -202,7 +201,7 @@ def _generate_pendulum_config(root: ET.Element, xml_path: str) -> dict:
     params = _extract_physical_params(root)
     masses = list(params.get('masses', {}).values())
     total_mass = sum(masses) if masses else 0.1
-    list(params.get('joint_ranges', {}).values())
+    joint_ranges = list(params.get('joint_ranges', {}).values())
     damping = list(params.get('damping', {}).values())
     return {
         "type": "InvertedPendulum", "name": "pendulum",
@@ -302,7 +301,7 @@ def generate_config(xml_path: str, cli_type: str = None) -> dict:
 
 
 def _format_toml_list(items: list, indent: int = 0) -> str:
-    " " * indent
+    pad = " " * indent
     if len(items) == 0:
         return "[]"
     if isinstance(items[0], (int, float)):

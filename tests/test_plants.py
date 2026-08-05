@@ -269,6 +269,7 @@ class TestConfigGenerator:
         import xml.etree.ElementTree as ET
 
         from scripts.generate_robot_config import detect_plant_types
+        from scripts.generate_robot_config import detect_plant_types, generate_config
         root = ET.fromstring(self.PENDULUM_XML)
         types = detect_plant_types(root)
         assert "InvertedPendulum" in types

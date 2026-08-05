@@ -1,8 +1,5 @@
-from collections.abc import Callable
-from typing import Any
-
+from typing import Callable, Optional, Tuple, Any
 import numpy as np
-
 from utils.array_backend import ArrayBackend, NumpyBackend
 
 
@@ -10,9 +7,9 @@ def linearize(
     f: Callable[[Any, Any], Any],
     x0: Any,
     u0: Any,
-    backend: ArrayBackend | None = None,
+    backend: Optional[ArrayBackend] = None,
     eps: float = 1e-6,
-) -> tuple[Any, Any]:
+) -> Tuple[Any, Any]:
     """First-order Taylor expansion of f(x, u) around (x0, u0).
 
     Computes the Jacobians A = ∂f/∂x and B = ∂f/∂u at the operating point
