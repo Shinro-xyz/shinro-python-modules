@@ -36,6 +36,12 @@ def server():
         proc.stdin.write(req + "\n")
         proc.stdin.flush()
         line = proc.stdout.readline()
+        if not line.strip():
+            raise AssertionError(
+                "MCP server returned no response to "
+                f"{method!r}. Process exited (rc={proc.poll()}) with stderr:\n"
+                f"{proc.stderr.read()}"
+            )
         return json.loads(line.strip())
 
     def _notify(method: str, params: dict | None = None) -> None:

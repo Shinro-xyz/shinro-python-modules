@@ -1,5 +1,6 @@
-from shinro.components import Controller
 import numpy as np
+
+from shinro.components import Controller
 
 # Model Predictive Path Integral (MPPI) controller
 # optimal control algorithm, sampling based, information theoretic
@@ -27,4 +28,8 @@ class MPPI_Controller(Controller):
             noise_sigma=np.array([0.5])
 
         self.noise_sigma=np.asarray(noise_sigma)
-        self.
+        self.u_min=np.asarray(u_min) if u_min is not None else None
+        self.u_max=np.asarray(u_max) if u_max is not None else None
+
+    def compute(self, state, reference=None, **kwargs):
+        raise NotImplementedError("MPPI compute not yet implemented")
