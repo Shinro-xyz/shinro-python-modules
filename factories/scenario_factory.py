@@ -84,6 +84,11 @@ class ScenarioFactory:
         xml_string, assets = self._physics_xml(physics_cfg)
         sim = RobotSim(sim_cfg["config"], xml_string=xml_string, assets=assets)  # type: ignore[arg-type]
         plant = sim.get_plant(plant_cfg["name"])
+        if plant is None:
+            raise KeyError(
+                f"Plant name '{plant_cfg['name']}' not found in RobotSim. "
+                f"Available plants: {sorted(sim._plants.keys())}"
+            )
 
         def _create(factory_cls, path: str):
             if backend is not None:

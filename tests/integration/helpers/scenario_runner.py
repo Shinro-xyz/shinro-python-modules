@@ -14,15 +14,14 @@ Two drivers are provided:
   the scripted setpoints through a feedback controller.
 """
 
-import dataclasses
 from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 
-from controllers.pid import PIDController
 from controllers.lqr import LQR
 from controllers.mpc_lti import MPC_LTI, MPC_LTI_DeltaU
+from controllers.pid import PIDController
 from factories.scenario_factory import Scenario
 
 MAX_CONTROL = 1e6
@@ -144,6 +143,7 @@ def run_scenario(scenario: Scenario, steps: int | None = None, seed: int = 42) -
     dt = float(scenario.config.get("scenario", {}).get("dt", scenario.sim.engine.dt))
     duration = float(scenario.config.get("scenario", {}).get("duration", 5.0))
     total_steps = steps if steps is not None else int(round(duration / dt))
+    total_steps = min(total_steps, len(traj))  # type: ignore[arg-type]
 
     rng = np.random.default_rng(seed)
     noise_cfg = scenario.config.get("noise", {}).get("measurement")
@@ -153,6 +153,7 @@ def run_scenario(scenario: Scenario, steps: int | None = None, seed: int = 42) -
     n_u = _control_input_dim(scenario)
     u_prev = np.zeros(n_u)
 
+    assert est is not None, "run_scenario requires an estimator"
     records = []
     for step in range(total_steps):
         t = step * dt

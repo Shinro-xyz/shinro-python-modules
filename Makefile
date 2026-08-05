@@ -1,8 +1,7 @@
-.PHONY: test test-quick test-functional test-all lint \
+.PHONY: test test-quick test-functional test-all test-integration lint \
 	test-controllers test-estimators test-plants test-trajectories test-armrobot \
 	test-components test-array-backend test-controllability test-factories \
-	test-linearization test-adversarial test-mcp-server test-mcp-functional \
-	test-pick-and-place
+	test-linearization test-adversarial test-mcp-server test-mcp-functional
 
 # Run the full test suite (skips the very large horizon MPC timeout test)
 test:
@@ -19,6 +18,10 @@ test-functional:
 # Run all tests including the slow horizon test
 test-all:
 	python3 -m pytest tests/ -v --tb=short
+
+# Run the full-loop integration suite (MuJoCo required, opt-in only — not in CI)
+test-integration:
+	python3 -m pytest tests/integration/ -v --tb=short --override-ini="addopts="
 
 # Run linter and type checker
 lint:
@@ -64,6 +67,3 @@ test-mcp-server:
 
 test-mcp-functional:
 	python3 -m pytest tests/test_mcp_server_functional.py -v --tb=short
-
-test-pick-and-place:
-	python3 -m pytest test_pick_and_place.py -v --tb=short

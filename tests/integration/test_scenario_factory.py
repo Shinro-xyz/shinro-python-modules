@@ -2,12 +2,10 @@
 
 import pytest
 
-from factories import ScenarioFactory
 from controllers.lqr import LQR
-from controllers.mpc_lti import MPC_LTI
 from controllers.pid import PIDController
 from estimators.kalman_filter import KalmanFilter
-from estimators.luenberger_observer import LuenbergerObserver
+from factories import ScenarioFactory
 
 pytestmark = [pytest.mark.integration]
 
@@ -52,7 +50,7 @@ class TestScenarioFactory:
         assert isinstance(scenario.controller, PIDController)
         assert isinstance(scenario.estimator, KalmanFilter)
         assert scenario.estimator.A.shape[0] == 6
-        assert scenario.controller.B.shape[1] == 6
+        assert len(scenario.controller.kp) == 6
 
     def test_pick_and_place_is_feedforward(self, mujoco_available):
         """Pick-and-place has no feedback controller/estimator — schedule drives."""
