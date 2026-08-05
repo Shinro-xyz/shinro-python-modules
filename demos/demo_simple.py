@@ -18,8 +18,8 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
-from factories import ControllerFactory, EstimatorFactory, TrajectoryFactory
-from simulation import RobotSim
+from shinro.factories import ControllerFactory, EstimatorFactory, TrajectoryFactory
+from shinro.simulation import RobotSim
 
 HERE = Path(__file__).parent.parent
 

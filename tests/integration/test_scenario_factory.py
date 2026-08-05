@@ -2,10 +2,10 @@
 
 import pytest
 
-from controllers.lqr import LQR
-from controllers.pid import PIDController
-from estimators.kalman_filter import KalmanFilter
-from factories import ScenarioFactory
+from shinro.controllers.lqr import LQR
+from shinro.controllers.pid import PIDController
+from shinro.estimators.kalman_filter import KalmanFilter
+from shinro.factories import ScenarioFactory
 
 pytestmark = [pytest.mark.integration]
 

@@ -10,8 +10,8 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
-from physics_engine.mujoco import MuJoCoEngine
-from simulation.robotsim import RobotSim  # noqa: F401 — re-export
+from shinro.physics_engine.mujoco import MuJoCoEngine
+from shinro.simulation.robotsim import RobotSim  # noqa: F401 — re-export
 
 HERE = Path(__file__).parent
 MJCF_PATH = str(HERE / "lekiwi-sim" / "mjcf_lcmm_robot.xml")
@@ -38,8 +38,8 @@ class LeKiwiSim:
     ]
 
     def __init__(self, dt: float = 0.02, xml_string: str = None, assets: dict = None):
-        from plants.armrobot import ArmRobot
-        from plants.holonomicmobilerobot import HolonomicMobileRobot
+        from shinro.plants.armrobot import ArmRobot
+        from shinro.plants.holonomicmobilerobot import HolonomicMobileRobot
 
         self.engine = MuJoCoEngine(dt=dt, xml_string=xml_string, assets=assets)
 

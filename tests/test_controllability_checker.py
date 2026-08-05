@@ -2,8 +2,8 @@ import numpy as np
 import pytest
 from scipy.linalg import cholesky, solve_continuous_lyapunov
 
-from utils.array_backend import NumpyBackend
-from utils.controllability_checker import LTISystemsAnalyzer
+from shinro.utils.array_backend import NumpyBackend
+from shinro.utils.controllability_checker import LTISystemsAnalyzer
 
 
 def _make_ana(A, B, C, dt=None, bk=None):

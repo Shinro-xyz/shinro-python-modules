@@ -11,7 +11,7 @@ class TestHolonomicMobileRobot:
 
     def test_A_is_identity(self, bk):
         """The discrete-time state matrix A is the 3x3 identity."""
-        from plants.holonomicmobilerobot import HolonomicMobileRobot
+        from shinro.plants.holonomicmobilerobot import HolonomicMobileRobot
         robot = HolonomicMobileRobot(num_wheels=3, radius_robots=0.1, gamma=0.0,
                                      radius_wheels=0.05, dt=0.01, backend=bk)
         A, B = robot.get_model()
@@ -19,7 +19,7 @@ class TestHolonomicMobileRobot:
 
     def test_B_is_dt_times_identity(self, bk):
         """The discrete-time input matrix B is dt * I_3."""
-        from plants.holonomicmobilerobot import HolonomicMobileRobot
+        from shinro.plants.holonomicmobilerobot import HolonomicMobileRobot
         dt = 0.05
         robot = HolonomicMobileRobot(num_wheels=3, radius_robots=0.1, gamma=0.0,
                                      radius_wheels=0.05, dt=dt, backend=bk)
@@ -28,7 +28,7 @@ class TestHolonomicMobileRobot:
 
     def test_step_integrates_correctly(self, bk):
         """step() integrates the state: state += u * dt."""
-        from plants.holonomicmobilerobot import HolonomicMobileRobot
+        from shinro.plants.holonomicmobilerobot import HolonomicMobileRobot
         dt = 0.01
         robot = HolonomicMobileRobot(num_wheels=3, radius_robots=0.1, gamma=0.0,
                                      radius_wheels=0.05, dt=dt, backend=bk)
@@ -40,7 +40,7 @@ class TestHolonomicMobileRobot:
 
     def test_get_state_returns_copy(self, bk):
         """get_state() returns a copy, not a reference to the internal state."""
-        from plants.holonomicmobilerobot import HolonomicMobileRobot
+        from shinro.plants.holonomicmobilerobot import HolonomicMobileRobot
         robot = HolonomicMobileRobot(num_wheels=3, radius_robots=0.1, gamma=0.0,
                                      radius_wheels=0.05, dt=0.01, backend=bk)
         state = robot.get_state()
@@ -50,7 +50,7 @@ class TestHolonomicMobileRobot:
 
     def test_set_pose_updates_state(self, bk):
         """set_pose() directly sets the robot's pose."""
-        from plants.holonomicmobilerobot import HolonomicMobileRobot
+        from shinro.plants.holonomicmobilerobot import HolonomicMobileRobot
         robot = HolonomicMobileRobot(num_wheels=3, radius_robots=0.1, gamma=0.0,
                                      radius_wheels=0.05, dt=0.01, backend=bk)
         robot.set_pose(1.0, 2.0, 0.5)
@@ -59,7 +59,7 @@ class TestHolonomicMobileRobot:
 
     def test_step_returns_wheel_speeds(self, bk):
         """step() returns a wheel speed vector of length n_wheels."""
-        from plants.holonomicmobilerobot import HolonomicMobileRobot
+        from shinro.plants.holonomicmobilerobot import HolonomicMobileRobot
         robot = HolonomicMobileRobot(num_wheels=3, radius_robots=0.1, gamma=0.0,
                                      radius_wheels=0.05, dt=0.01, backend=bk)
         u = bk.array([1.0, 0.0, 0.0])
@@ -71,7 +71,7 @@ class TestInvertedPendulum:
     """Verify inverted pendulum: standalone dynamics, linearized model, state bounds, from_config."""
 
     def test_step_falls(self, bk):
-        from plants.inverted_pendulum import InvertedPendulum
+        from shinro.plants.inverted_pendulum import InvertedPendulum
         pend = InvertedPendulum(mass=0.1, length=0.5, gravity=9.81, dt=0.01, backend=bk)
         pend.state = bk.array([0.1, 0.0])
         pend.step(bk.array([0.0]))
@@ -79,7 +79,7 @@ class TestInvertedPendulum:
         assert _to_np(state, bk)[0] > 0.1
 
     def test_step_upright(self, bk):
-        from plants.inverted_pendulum import InvertedPendulum
+        from shinro.plants.inverted_pendulum import InvertedPendulum
         pend = InvertedPendulum(mass=0.1, length=0.5, gravity=9.81, dt=0.01, backend=bk)
         pend.state = bk.array([0.0, 0.0])
         pend.step(bk.array([0.0]))
@@ -87,7 +87,7 @@ class TestInvertedPendulum:
         assert np.allclose(_to_np(state, bk), [0.0, 0.0], atol=1e-10)
 
     def test_step_balancing(self, bk):
-        from plants.inverted_pendulum import InvertedPendulum
+        from shinro.plants.inverted_pendulum import InvertedPendulum
         pend = InvertedPendulum(mass=0.1, length=0.5, gravity=9.81, dt=0.01, backend=bk)
         theta = 0.2
         tau = -pend.m * pend.g * pend.l * np.sin(theta)
@@ -95,27 +95,27 @@ class TestInvertedPendulum:
         assert abs(_to_np(dx, bk)[1]) < 1e-10
 
     def test_dynamics_shape(self, bk):
-        from plants.inverted_pendulum import InvertedPendulum
+        from shinro.plants.inverted_pendulum import InvertedPendulum
         pend = InvertedPendulum(backend=bk)
         dx = pend.dynamics(bk.array([0.1, 0.0]), bk.array([0.0]))
         assert _to_np(dx, bk).shape == (2,)
 
     def test_get_model_shape(self, bk):
-        from plants.inverted_pendulum import InvertedPendulum
+        from shinro.plants.inverted_pendulum import InvertedPendulum
         pend = InvertedPendulum(backend=bk)
         A, B = pend.get_model()
         assert _to_np(A, bk).shape == (2, 2)
         assert _to_np(B, bk).shape == (2, 1)
 
     def test_get_model_unstable(self, bk):
-        from plants.inverted_pendulum import InvertedPendulum
+        from shinro.plants.inverted_pendulum import InvertedPendulum
         pend = InvertedPendulum(backend=bk)
         A, _ = pend.get_model()
         eigs = np.linalg.eigvals(_to_np(A, bk))
         assert np.any(np.real(eigs) > 0)
 
     def test_state_bounds(self, bk):
-        from plants.inverted_pendulum import InvertedPendulum
+        from shinro.plants.inverted_pendulum import InvertedPendulum
         lo = bk.array([-1.0, -5.0])
         hi = bk.array([1.0, 5.0])
         pend = InvertedPendulum(state_bounds=(lo, hi), backend=bk)
@@ -125,7 +125,7 @@ class TestInvertedPendulum:
         assert _to_np(state, bk)[0] <= 1.0
 
     def test_from_config(self, bk):
-        from plants.inverted_pendulum import InvertedPendulum
+        from shinro.plants.inverted_pendulum import InvertedPendulum
         config = {"mass": 0.2, "length": 1.0, "damping": 0.01, "gravity": 9.81, "dt": 0.02}
         pend = InvertedPendulum.from_config(config, backend=bk)
         assert pend.m == 0.2
@@ -138,7 +138,7 @@ class TestCartPole:
     """Verify cart-pole: standalone dynamics, linearized model, track limits, from_config."""
 
     def test_step_falls(self, bk):
-        from plants.cartpole import CartPole
+        from shinro.plants.cartpole import CartPole
         cp = CartPole(cart_mass=0.5, pole_mass=0.1, pole_length=0.5, gravity=9.81, dt=0.01, backend=bk)
         cp.state = bk.array([0.0, 0.0, 0.1, 0.0])
         cp.step(bk.array([0.0]))
@@ -146,7 +146,7 @@ class TestCartPole:
         assert _to_np(state, bk)[2] > 0.1
 
     def test_step_upright(self, bk):
-        from plants.cartpole import CartPole
+        from shinro.plants.cartpole import CartPole
         cp = CartPole(cart_mass=0.5, pole_mass=0.1, pole_length=0.5, gravity=9.81, dt=0.01, backend=bk)
         cp.state = bk.array([0.0, 0.0, 0.0, 0.0])
         cp.step(bk.array([0.0]))
@@ -154,27 +154,27 @@ class TestCartPole:
         assert np.allclose(_to_np(state, bk), [0.0, 0.0, 0.0, 0.0], atol=1e-10)
 
     def test_dynamics_shape(self, bk):
-        from plants.cartpole import CartPole
+        from shinro.plants.cartpole import CartPole
         cp = CartPole(backend=bk)
         dx = cp.dynamics(bk.array([0.0, 0.0, 0.1, 0.0]), bk.array([0.0]))
         assert _to_np(dx, bk).shape == (4,)
 
     def test_get_model_shape(self, bk):
-        from plants.cartpole import CartPole
+        from shinro.plants.cartpole import CartPole
         cp = CartPole(backend=bk)
         A, B = cp.get_model()
         assert _to_np(A, bk).shape == (4, 4)
         assert _to_np(B, bk).shape == (4, 1)
 
     def test_get_model_unstable(self, bk):
-        from plants.cartpole import CartPole
+        from shinro.plants.cartpole import CartPole
         cp = CartPole(backend=bk)
         A, _ = cp.get_model()
         eigs = np.linalg.eigvals(_to_np(A, bk))
         assert np.any(np.real(eigs) > 0)
 
     def test_track_limits(self, bk):
-        from plants.cartpole import CartPole
+        from shinro.plants.cartpole import CartPole
         cp = CartPole(cart_mass=0.5, pole_mass=0.1, pole_length=0.5, gravity=9.81, dt=0.01,
                       track_limits=(-1.0, 1.0), backend=bk)
         cp.state = bk.array([5.0, 0.0, 0.0, 0.0])
@@ -183,7 +183,7 @@ class TestCartPole:
         assert _to_np(state, bk)[0] <= 1.0
 
     def test_from_config(self, bk):
-        from plants.cartpole import CartPole
+        from shinro.plants.cartpole import CartPole
         config = {"cart_mass": 1.0, "pole_mass": 0.2, "pole_length": 0.8, "damping": 0.01,
                   "gravity": 9.81, "dt": 0.02, "track_limits": [-2.0, 2.0]}
         cp = CartPole.from_config(config, backend=bk)

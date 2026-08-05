@@ -1,7 +1,52 @@
+[build-system]
+requires = ["setuptools>=68", "setuptools-scm[toml]>=8.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shinro"
+description = "Whole-body control framework: controllers, plants, estimators, trajectories, and a MuJoCo-backed simulation factory."
+readme = "README.md"
+requires-python = ">=3.12"
+dynamic = ["version"]
+license = { text = "MIT" }
+authors = [{ name = "Shinro" }]
+dependencies = [
+    "numpy>=2.0",
+    "scipy>=1.13",
+    "osqp>=1.0",
+    "mcp>=1.28",
+]
+
+[project.optional-dependencies]
+mujoco = ["mujoco>=3.0"]
+torch = ["torch>=2.0"]
+lerobot = ["lerobot>=0.5"]
+media = ["imageio>=2.30", "Pillow>=10.0", "matplotlib>=3.8"]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
+    "pyright>=1.1.370",
+    "build>=1.2",
+    "setuptools-scm[toml]>=8.0",
+]
+
+[project.scripts]
+shinro-mcp = "shinro.mcp.server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+shinro = ["configs/**/*.toml"]
+
+[tool.setuptools_scm]
+write_to = "src/shinro/_version.py"
+fallback_version = "0.0.0"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
-pythonpath = ["."]
+pythonpath = ["src"]
 addopts = "-m 'not integration'"
 markers = [
     "integration: full-loop physics-backed tests (slow, requires MuJoCo; run via `make test-integration`)",
@@ -9,7 +54,7 @@ markers = [
 
 [tool.ruff]
 target-version = "py312"
-exclude = [".codebase", "lab-notes", "demos", "deprecated"]
+exclude = [".codebase", "lab-notes", "demos", "deprecated", "src/shinro/_version.py"]
 line-length = 140
 
 [tool.ruff.lint]
@@ -18,6 +63,7 @@ select = ["E", "F", "I", "W", "UP"]
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["UP006", "UP007", "E501", "E741"]
 "__init__.py" = ["F401"]
+"src/shinro/__init__.py" = ["F401"]
 
 [tool.ruff.format]
 quote-style = "double"

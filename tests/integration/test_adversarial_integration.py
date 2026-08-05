@@ -9,7 +9,7 @@ controller, and the tests below pin that behavior end-to-end.
 import numpy as np
 import pytest
 
-from factories import ScenarioFactory
+from shinro.factories import ScenarioFactory
 
 from .helpers.scenario_runner import run_scenario
 

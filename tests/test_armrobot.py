@@ -10,7 +10,7 @@ def _to_np(x, bk):
 
 def _make_arm(bk, dt=0.01):
     """Helper: create a default 6-DOF ArmRobot for testing."""
-    from plants.armrobot import ArmRobot
+    from shinro.plants.armrobot import ArmRobot
     num_dof = 6
     joint_limits = bk.array([[-np.pi, np.pi]] * num_dof)
     joint_offsets = bk.array([
@@ -78,7 +78,7 @@ class TestArmRobotStep:
 
     def test_step_clips_joints(self, bk):
         """step() clips joint angles to joint_limits."""
-        from plants.armrobot import ArmRobot
+        from shinro.plants.armrobot import ArmRobot
         num_dof = 6
         tight_limits = bk.array([[-0.1, 0.1]] * num_dof)
         joint_offsets = bk.array([[0.0, 0.0, 0.0]] * num_dof)
@@ -198,7 +198,7 @@ class TestArmRobotInverseKinematics:
 
     def test_ik_respects_joint_limits(self, bk):
         """IK output stays within joint_limits."""
-        from plants.armrobot import ArmRobot
+        from shinro.plants.armrobot import ArmRobot
         num_dof = 6
         tight_limits = bk.array([[-0.5, 0.5]] * num_dof)
         joint_offsets = bk.array([[0.0, 0.0, 0.0]] * num_dof)
@@ -231,7 +231,7 @@ class TestArmRobotInvalidInputs:
 
     def test_invalid_axis(self, bk):
         """Invalid rotation axis string raises ValueError during FK."""
-        from plants.armrobot import ArmRobot
+        from shinro.plants.armrobot import ArmRobot
         num_dof = 1
         joint_limits = bk.array([[-np.pi, np.pi]])
         joint_offsets = bk.array([[0.0, 0.0, 0.0]])

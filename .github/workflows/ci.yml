@@ -20,6 +20,9 @@ jobs:
             ${{ runner.os }}-pip-
       - run: pip install -r requirements-dev.txt
       - run: pip install -r requirements.txt
+      - run: pip install -e .
+      - run: python -c "import shinro; print(shinro.__version__)"
+      - run: python -c "from shinro.controllers import LQR; print('ok')"
       - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
       - run: pytest tests/ -v --tb=short
-      - run: pyright utils/ components.py controllers/ estimators/ trajectories/ plants/
+      - run: pyright src/shinro/utils/ src/shinro/components.py src/shinro/controllers/ src/shinro/estimators/ src/shinro/trajectories/ src/shinro/plants/

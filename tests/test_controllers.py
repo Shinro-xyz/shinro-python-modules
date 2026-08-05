@@ -16,7 +16,7 @@ class TestLQR:
         B = bk.eye(1)
         Q = bk.eye(1)
         R = bk.eye(1)
-        from controllers.lqr import LQR
+        from shinro.controllers.lqr import LQR
         lqr = LQR(Q, R, A, B, backend=bk)
         K = lqr.K
         A_cl = A - B @ K
@@ -29,7 +29,7 @@ class TestLQR:
         B = bk.eye(1)
         Q = bk.eye(1)
         R = bk.eye(1)
-        from controllers.lqr import LQR
+        from shinro.controllers.lqr import LQR
         lqr = LQR(Q, R, A, B, backend=bk)
         K = _to_np(lqr.K, bk)[0, 0]
         P_expected = (1 + np.sqrt(5)) / 2
@@ -42,7 +42,7 @@ class TestLQR:
         B = bk.eye(1)
         Q = bk.eye(1)
         R = bk.eye(1)
-        from controllers.lqr import LQR
+        from shinro.controllers.lqr import LQR
         LQR(Q, R, A, B, backend=bk)
         from scipy.linalg import solve_discrete_are
         P = solve_discrete_are(_to_np(A, bk), _to_np(B, bk), _to_np(Q, bk), _to_np(R, bk))
@@ -55,7 +55,7 @@ class TestLQR:
         B = bk.eye(2)
         Q = bk.eye(2)
         R = 0.5 * bk.eye(2)
-        from controllers.lqr import LQR
+        from shinro.controllers.lqr import LQR
         lqr = LQR(Q, R, A, B, backend=bk)
         from scipy.linalg import solve_discrete_are
         P_np = solve_discrete_are(_to_np(A, bk), _to_np(B, bk), _to_np(Q, bk), _to_np(R, bk))
@@ -69,7 +69,7 @@ class TestLQR:
         B = bk.array([[0.0], [0.1]])
         Q = bk.eye(2)
         R = bk.array([[0.1]])
-        from controllers.lqr import LQR
+        from shinro.controllers.lqr import LQR
         lqr = LQR(Q, R, A, B, backend=bk)
         A_cl = A - B @ lqr.K
         eigs = np.linalg.eigvals(_to_np(A_cl, bk))
@@ -81,7 +81,7 @@ class TestLQR:
         B = bk.eye(2)
         Q = bk.eye(2)
         R = bk.eye(2)
-        from controllers.lqr import LQR
+        from shinro.controllers.lqr import LQR
         lqr = LQR(Q, R, A, B, backend=bk)
         x = bk.array([1.5, -0.7])
         u = lqr.compute(x)
@@ -94,7 +94,7 @@ class TestLQR:
         B = bk.eye(2)
         Q = bk.eye(2)
         R = bk.eye(2)
-        from controllers.lqr import LQR
+        from shinro.controllers.lqr import LQR
         lqr = LQR(Q, R, A, B, backend=bk)
         x = bk.array([1.0, 2.0])
         u = lqr.compute(x)
@@ -106,7 +106,7 @@ class TestLQR:
         B = bk.eye(2)
         Q = bk.eye(2)
         R = bk.eye(2)
-        from controllers.lqr import LQR
+        from shinro.controllers.lqr import LQR
         lqr = LQR(Q, R, A, B, backend=bk)
         x = bk.array([1.0, 2.0])
         u = lqr.compute(x)
@@ -116,7 +116,7 @@ class TestLQR:
     def test_lqr_from_config(self, bk):
         """from_config creates a valid LQR controller with a gain matrix."""
         config = {"state_cost": [1.0, 1.0], "control_cost": [1.0, 1.0], "dt": 0.1}
-        from controllers.lqr import LQR
+        from shinro.controllers.lqr import LQR
         lqr = LQR.from_config(config, backend=bk)
         assert lqr.K is not None
 
@@ -129,7 +129,7 @@ class TestLQR:
             "B_dynamics": [[0.0, 0.1], [0.1, 0.0]],
             "dt": 0.1,
         }
-        from controllers.lqr import LQR
+        from shinro.controllers.lqr import LQR
         lqr = LQR.from_config(config, backend=bk)
         assert lqr.K is not None
         assert _to_np(lqr.Q, bk).shape == (2, 2)
@@ -142,7 +142,7 @@ class TestPID:
 
     def test_pid_derivative_zero_on_first_call(self, bk):
         """Derivative term is zero on the first call (no previous error)."""
-        from controllers.pid import PIDController
+        from shinro.controllers.pid import PIDController
         pid = PIDController(
             kp=bk.array([1.0]),
             ki=bk.array([0.0]),
@@ -156,7 +156,7 @@ class TestPID:
 
     def test_pid_derivative_on_second_call(self, bk):
         """Derivative term on the second call is kd * (e_k - e_{k-1}) / dt."""
-        from controllers.pid import PIDController
+        from shinro.controllers.pid import PIDController
         pid = PIDController(
             kp=bk.array([0.0]),
             ki=bk.array([0.0]),
@@ -171,7 +171,7 @@ class TestPID:
 
     def test_pid_integral_accumulates(self, bk):
         """The integral term accumulates error over successive calls."""
-        from controllers.pid import PIDController
+        from shinro.controllers.pid import PIDController
         pid = PIDController(
             kp=bk.array([0.0]),
             ki=bk.array([1.0]),
@@ -188,7 +188,7 @@ class TestPID:
 
     def test_pid_output_limits_clamp(self, bk):
         """Output limits clamp the control effort to [min, max]."""
-        from controllers.pid import PIDController
+        from shinro.controllers.pid import PIDController
         pid = PIDController(
             kp=bk.array([10.0]),
             ki=bk.array([0.0]),
@@ -202,7 +202,7 @@ class TestPID:
 
     def test_pi_eliminates_steady_state_error(self, bk):
         """PI control drives a first-order lag plant to the target with zero steady-state error."""
-        from controllers.pid import PIDController
+        from shinro.controllers.pid import PIDController
         # First-order lag: x_{k+1} = a*x + b*dt*u, tau=0.1s, dt=0.01s.
         a = float(np.exp(-0.01 / 0.1))
         b = 1.0
@@ -222,7 +222,7 @@ class TestPID:
 
     def test_p_only_steady_state_error(self, bk):
         """P-only control leaves a non-zero steady-state error for a first-order lag plant."""
-        from controllers.pid import PIDController
+        from shinro.controllers.pid import PIDController
         # First-order lag: x_{k+1} = a*x + b*dt*u, tau=0.1s, dt=0.01s.
         a = float(np.exp(-0.01 / 0.1))
         b = 1.0
@@ -247,7 +247,7 @@ class TestPID:
 
     def test_pid_anti_windup(self, bk):
         """When output is clamped, the integral term back-calculates on saturated channels."""
-        from controllers.pid import PIDController
+        from shinro.controllers.pid import PIDController
         lo = bk.array([-0.5])
         hi = bk.array([0.5])
         pid = PIDController(
@@ -267,7 +267,7 @@ class TestPID:
 
     def test_pid_reset(self, bk):
         """reset() clears the integral accumulator and previous error."""
-        from controllers.pid import PIDController
+        from shinro.controllers.pid import PIDController
         pid = PIDController(
             kp=bk.array([1.0]),
             ki=bk.array([1.0]),
@@ -284,7 +284,7 @@ class TestPID:
     def test_pid_from_config(self, bk):
         """from_config creates a valid PID controller."""
         config = {"kp": [1.0], "ki": [0.5], "kd": [0.1], "dt": 0.01}
-        from controllers.pid import PIDController
+        from shinro.controllers.pid import PIDController
         pid = PIDController.from_config(config, backend=bk)
         assert pid.kp is not None
 
@@ -294,7 +294,7 @@ class TestMPC:
 
     def test_mpc_H_symmetric(self, bk):
         """The QP Hessian H is symmetric."""
-        from controllers.mpc_lti import MPC_LTI
+        from shinro.controllers.mpc_lti import MPC_LTI
         n = 2
         m = 2
         A = bk.eye(n)
@@ -309,7 +309,7 @@ class TestMPC:
 
     def test_mpc_F_shape(self, bk):
         """The QP linear term F has shape (n_x, N * n_u)."""
-        from controllers.mpc_lti import MPC_LTI
+        from shinro.controllers.mpc_lti import MPC_LTI
         n = 2
         m = 2
         A = bk.eye(n)
@@ -324,7 +324,7 @@ class TestMPC:
 
     def test_mpc_compute_shape(self, bk):
         """compute() returns a control vector of dimension n_u."""
-        from controllers.mpc_lti import MPC_LTI
+        from shinro.controllers.mpc_lti import MPC_LTI
         n = 2
         m = 2
         A = bk.eye(n)
@@ -342,7 +342,7 @@ class TestMPC:
 
     def test_mpc_constraints_respected(self, bk):
         """MPC respects hard input constraints |u| <= bound."""
-        from controllers.mpc_lti import MPC_LTI
+        from shinro.controllers.mpc_lti import MPC_LTI
         n = 2
         m = 2
         A = bk.eye(n)
@@ -368,7 +368,7 @@ class TestMPC:
             "control_cost": [1.0, 1.0],
             "dt": 0.1,
         }
-        from controllers.mpc_lti import MPC_LTI_Base
+        from shinro.controllers.mpc_lti import MPC_LTI_Base
         mpc = MPC_LTI_Base.from_config(config, backend=bk)
         assert mpc.H is not None
         assert mpc.F is not None
@@ -383,7 +383,7 @@ class TestMPC:
             "B_dynamics": [[0.0, 0.1], [0.1, 0.0]],
             "dt": 0.1,
         }
-        from controllers.mpc_lti import MPC_LTI_Base
+        from shinro.controllers.mpc_lti import MPC_LTI_Base
         mpc = MPC_LTI_Base.from_config(config, backend=bk)
         assert mpc.H is not None
         assert mpc.F is not None
@@ -394,38 +394,38 @@ class TestSMC:
 
     def test_smc_construction_hurwitz_rejection(self, bk):
         """Non-Hurwitz surface coefficients raise ValueError."""
-        from controllers.smc import SlidingModeController
+        from shinro.controllers.smc import SlidingModeController
         with pytest.raises(ValueError, match="Hurwitz"):
             SlidingModeController(c=[-1.0, 1.0], k1=1.0, backend=bk)
 
     def test_smc_construction_unknown_smoother(self, bk):
         """Unknown smoother name raises ValueError."""
-        from controllers.smc import SlidingModeController
+        from shinro.controllers.smc import SlidingModeController
         with pytest.raises(ValueError, match="Unknown smoother"):
             SlidingModeController(c=[1.0, 2.0], k1=1.0, smoother="foo", backend=bk)
 
     def test_smc_n_property(self, bk):
         """n returns the length of the surface coefficient vector."""
-        from controllers.smc import SlidingModeController
+        from shinro.controllers.smc import SlidingModeController
         ctrl = SlidingModeController(c=[1.0, 2.0], k1=1.0, backend=bk)
         assert ctrl.n == 2
 
     def test_smc_hurwitz_polynomial_correct(self, bk):
         """c=[1,2] gives polynomial 2λ+1=0 with root at -0.5 (Hurwitz)."""
-        from controllers.smc import SlidingModeController
+        from shinro.controllers.smc import SlidingModeController
         ctrl = SlidingModeController(c=[1.0, 2.0], k1=1.0, backend=bk)
         assert ctrl._is_hurwitz()
 
     def test_smc_hurwitz_polynomial_rejects_positive_root(self, bk):
         """c=[-1,1] gives polynomial λ-1=0 with root at +1 (not Hurwitz)."""
-        from controllers.smc import SlidingModeController
+        from shinro.controllers.smc import SlidingModeController
         ctrl = SlidingModeController(c=[1.0, 2.0], k1=1.0, backend=bk)
         ctrl.c = ctrl.bk.array([-1.0, 1.0])
         assert not ctrl._is_hurwitz()
 
     def test_smc_compute_shape_scalar(self, bk):
         """compute() returns a 1-element array for a scalar-input system."""
-        from controllers.smc import SlidingModeController
+        from shinro.controllers.smc import SlidingModeController
         ctrl = SlidingModeController(c=[1.0, 2.0], k1=1.0, phi=0.1, backend=bk)
         x = bk.array([1.0, -0.5])
         f_x = bk.array([0.0, 0.0])
@@ -435,7 +435,7 @@ class TestSMC:
 
     def test_smc_compute_shape_multi_input(self, bk):
         """compute() returns an m-element array for an m-input system."""
-        from controllers.smc import SlidingModeController
+        from shinro.controllers.smc import SlidingModeController
         ctrl = SlidingModeController(c=[1.0, 1.0], k1=1.0, phi=0.1, backend=bk)
         x = bk.array([1.0, -0.5])
         f_x = bk.array([0.0, 0.0])
@@ -445,7 +445,7 @@ class TestSMC:
 
     def test_smc_equivalent_control_analytical(self, bk):
         """For x_dot = f + g u with f=0, g=[0,1]^T, the equivalent control is u = -(c^T g)^{-1} c^T f = 0."""
-        from controllers.smc import SlidingModeController
+        from shinro.controllers.smc import SlidingModeController
         ctrl = SlidingModeController(c=[1.0, 2.0], k1=0.0, phi=0.1, backend=bk)
         x = bk.array([1.0, -0.5])
         f_x = bk.array([0.0, 0.0])
@@ -458,7 +458,7 @@ class TestSMC:
 
     def test_smc_equivalent_control_nonzero_f(self, bk):
         """For x_dot = f + g u with f=[0,1]^T, g=[0,1]^T, the control cancels f."""
-        from controllers.smc import SlidingModeController
+        from shinro.controllers.smc import SlidingModeController
         ctrl = SlidingModeController(c=[1.0, 2.0], k1=0.0, phi=0.1, backend=bk)
         x = bk.array([1.0, -0.5])
         f_x = bk.array([0.0, 1.0])
@@ -474,7 +474,7 @@ class TestSMC:
 
     def test_smc_sliding_surface_derivative_matches_desired(self, bk):
         """The actual s_dot = c^T f + c^T g u matches the desired reaching law."""
-        from controllers.smc import SlidingModeController
+        from shinro.controllers.smc import SlidingModeController
         ctrl = SlidingModeController(c=[1.0, 2.0], k1=1.5, phi=0.1, backend=bk)
         x = bk.array([1.0, -0.5])
         f_x = bk.array([0.0, 0.0])
@@ -491,7 +491,7 @@ class TestSMC:
 
     def test_smc_reaching_law_includes_k2_term(self, bk):
         """The reaching law includes the -k2*s term when k2 > 0."""
-        from controllers.smc import SlidingModeController
+        from shinro.controllers.smc import SlidingModeController
         ctrl = SlidingModeController(c=[1.0, 2.0], k1=1.0, k2=3.0, phi=0.1, backend=bk)
         x = bk.array([1.0, -0.5])
         f_x = bk.array([0.0, 0.0])
@@ -508,7 +508,7 @@ class TestSMC:
 
     def test_smc_alpha_zero_gives_sign_law(self, bk):
         """With alpha=0, the reaching law is s_dot = -k1 * smooth(s) (|s|^0 = 1)."""
-        from controllers.smc import SlidingModeController
+        from shinro.controllers.smc import SlidingModeController
         ctrl = SlidingModeController(c=[1.0, 2.0], k1=2.0, alpha=0.0, phi=0.1, backend=bk)
         x = bk.array([1.0, -0.5])
         f_x = bk.array([0.0, 0.0])
@@ -525,7 +525,7 @@ class TestSMC:
 
     def test_smc_alpha_half_gives_sqrt_law(self, bk):
         """With alpha=0.5, the reaching law is s_dot = -k1 * |s|^0.5 * smooth(s)."""
-        from controllers.smc import SlidingModeController
+        from shinro.controllers.smc import SlidingModeController
         ctrl = SlidingModeController(c=[1.0, 2.0], k1=2.0, alpha=0.5, phi=0.1, backend=bk)
         x = bk.array([1.0, -0.5])
         f_x = bk.array([0.0, 0.0])
@@ -542,7 +542,7 @@ class TestSMC:
 
     def test_smc_sliding_surface_converges(self, bk):
         """The sliding surface s = c^T x converges toward zero under the control law."""
-        from controllers.smc import SlidingModeController
+        from shinro.controllers.smc import SlidingModeController
         ctrl = SlidingModeController(c=[1.0, 2.0], k1=2.0, phi=0.05, backend=bk)
         dt = 0.01
         x = bk.array([1.0, 0.0])
@@ -557,7 +557,7 @@ class TestSMC:
 
     def test_smc_sign_smoother_no_phi(self, bk):
         """With phi=0, the controller uses sign() and still drives s toward zero."""
-        from controllers.smc import SlidingModeController
+        from shinro.controllers.smc import SlidingModeController
         ctrl = SlidingModeController(c=[1.0, 2.0], k1=2.0, phi=0.0, backend=bk)
         dt = 0.001
         x = bk.array([1.0, 0.0])
@@ -572,7 +572,7 @@ class TestSMC:
 
     def test_smc_tanh_smoother(self, bk):
         """The tanh smoother produces a valid control action."""
-        from controllers.smc import SlidingModeController
+        from shinro.controllers.smc import SlidingModeController
         ctrl = SlidingModeController(c=[1.0, 2.0], k1=1.0, phi=0.1, smoother="tanh", backend=bk)
         x = bk.array([1.0, -0.5])
         f_x = bk.array([0.0, 0.0])
@@ -582,7 +582,7 @@ class TestSMC:
 
     def test_smc_sigmoid_smoother(self, bk):
         """The sigmoid smoother produces a valid control action."""
-        from controllers.smc import SlidingModeController
+        from shinro.controllers.smc import SlidingModeController
         ctrl = SlidingModeController(c=[1.0, 2.0], k1=1.0, phi=0.1, smoother="sigmoid", backend=bk)
         x = bk.array([1.0, -0.5])
         f_x = bk.array([0.0, 0.0])
@@ -592,7 +592,7 @@ class TestSMC:
 
     def test_smc_alpha_affects_convergence(self, bk):
         """Non-zero alpha changes the reaching law."""
-        from controllers.smc import SlidingModeController
+        from shinro.controllers.smc import SlidingModeController
         ctrl = SlidingModeController(c=[1.0, 2.0], k1=1.0, phi=0.1, alpha=0.5, backend=bk)
         x = bk.array([1.0, -0.5])
         f_x = bk.array([0.0, 0.0])
@@ -602,7 +602,7 @@ class TestSMC:
 
     def test_smc_loss_of_controllability(self, bk):
         """A near-zero c^T g(x) raises RuntimeError."""
-        from controllers.smc import SlidingModeController
+        from shinro.controllers.smc import SlidingModeController
         ctrl = SlidingModeController(c=[1.0, 2.0, 0.0], k1=1.0, backend=bk)
         x = bk.array([1.0, 0.0, 0.0])
         f_x = bk.array([0.0, 0.0, 0.0])
@@ -612,14 +612,14 @@ class TestSMC:
 
     def test_smc_reset(self, bk):
         """reset() is a no-op (does not raise)."""
-        from controllers.smc import SlidingModeController
+        from shinro.controllers.smc import SlidingModeController
         ctrl = SlidingModeController(c=[1.0, 2.0], k1=1.0, backend=bk)
         ctrl.reset()
 
     def test_smc_from_config(self, bk):
         """from_config creates a valid SMC controller."""
         config = {"c": [1.0, 2.0], "k1": 1.0, "phi": 0.1}
-        from controllers.smc import SlidingModeController
+        from shinro.controllers.smc import SlidingModeController
         ctrl = SlidingModeController.from_config(config, backend=bk)
         assert ctrl.n == 2
         assert ctrl.k1 == 1.0
@@ -635,7 +635,7 @@ class TestSMC:
             "smoother": "tanh",
             "alpha": 0.3,
         }
-        from controllers.smc import SlidingModeController
+        from shinro.controllers.smc import SlidingModeController
         ctrl = SlidingModeController.from_config(config, backend=bk)
         assert ctrl.n == 3
         assert ctrl.k1 == 2.0

@@ -11,7 +11,7 @@ class TestCubicPolynomial:
 
     def test_position_continuity(self, bk):
         """Position at t=0 matches p0 and at t=T matches pf."""
-        from trajectories.cubic_polynomial import CubicPolynomial
+        from shinro.trajectories.cubic_polynomial import CubicPolynomial
         traj = CubicPolynomial(backend=bk)
         p0 = bk.array([0.0, 0.0])
         pf = bk.array([1.0, 2.0])
@@ -26,7 +26,7 @@ class TestCubicPolynomial:
 
     def test_cubic_coefficient_formula(self, bk):
         """Cubic coefficients match the closed-form solution a0=p0, a1=v0, a2=3Δp/T² - (2v0+vf)/T, a3=-2Δp/T³ + (v0+vf)/T²."""
-        from trajectories.cubic_polynomial import CubicPolynomial
+        from shinro.trajectories.cubic_polynomial import CubicPolynomial
         traj = CubicPolynomial(backend=bk)
         p0 = bk.array([1.0])
         pf = bk.array([4.0])
@@ -46,7 +46,7 @@ class TestCubicPolynomial:
 
     def test_cubic_velocity_at_endpoints(self, bk):
         """Velocity at t=0 and t=T matches the specified boundary conditions."""
-        from trajectories.cubic_polynomial import CubicPolynomial
+        from shinro.trajectories.cubic_polynomial import CubicPolynomial
         traj = CubicPolynomial(backend=bk)
         p0 = bk.array([0.0])
         pf = bk.array([1.0])
@@ -61,7 +61,7 @@ class TestCubicPolynomial:
 
     def test_cubic_derivative_of_position_is_velocity(self, bk):
         """The velocity returned is the analytic derivative of the position polynomial."""
-        from trajectories.cubic_polynomial import CubicPolynomial
+        from shinro.trajectories.cubic_polynomial import CubicPolynomial
         traj = CubicPolynomial(backend=bk)
         p0 = bk.array([0.0])
         pf = bk.array([2.0])
@@ -78,7 +78,7 @@ class TestCubicPolynomial:
 
     def test_velocity_continuity(self, bk):
         """Velocity at t=0 matches v0 and at t=T matches vf."""
-        from trajectories.cubic_polynomial import CubicPolynomial
+        from shinro.trajectories.cubic_polynomial import CubicPolynomial
         traj = CubicPolynomial(backend=bk)
         p0 = bk.array([0.0])
         pf = bk.array([1.0])
@@ -93,7 +93,7 @@ class TestCubicPolynomial:
 
     def test_acceleration_not_constrained(self, bk):
         """Cubic polynomial does NOT constrain acceleration at the boundaries."""
-        from trajectories.cubic_polynomial import CubicPolynomial
+        from shinro.trajectories.cubic_polynomial import CubicPolynomial
         traj = CubicPolynomial(backend=bk)
         p0 = bk.array([0.0])
         pf = bk.array([1.0])
@@ -108,7 +108,7 @@ class TestCubicPolynomial:
 
     def test_time_clamped(self, bk):
         """Time outside [0, T] is clamped to the nearest endpoint."""
-        from trajectories.cubic_polynomial import CubicPolynomial
+        from shinro.trajectories.cubic_polynomial import CubicPolynomial
         traj = CubicPolynomial(backend=bk)
         p0 = bk.array([0.0])
         pf = bk.array([1.0])
@@ -123,7 +123,7 @@ class TestCubicPolynomial:
 
     def test_ndimensional(self, bk):
         """Cubic polynomial supports N-dimensional positions."""
-        from trajectories.cubic_polynomial import CubicPolynomial
+        from shinro.trajectories.cubic_polynomial import CubicPolynomial
         traj = CubicPolynomial(backend=bk)
         p0 = bk.array([0.0, 1.0, 2.0])
         pf = bk.array([3.0, 4.0, 5.0])
@@ -140,7 +140,7 @@ class TestQuinticPolynomial:
 
     def test_position_continuity(self, bk):
         """Position at t=0 matches p0 and at t=T matches pf."""
-        from trajectories.quintic_polynomial import QuinticPolynomial
+        from shinro.trajectories.quintic_polynomial import QuinticPolynomial
         traj = QuinticPolynomial(backend=bk)
         p0 = bk.array([0.0, 0.0])
         pf = bk.array([1.0, 2.0])
@@ -153,7 +153,7 @@ class TestQuinticPolynomial:
 
     def test_quintic_solves_6x6_system(self, bk):
         """Quintic coefficients satisfy the 6 boundary conditions exactly."""
-        from trajectories.quintic_polynomial import QuinticPolynomial
+        from shinro.trajectories.quintic_polynomial import QuinticPolynomial
         traj = QuinticPolynomial(backend=bk)
         p0 = bk.array([1.0])
         pf = bk.array([4.0])
@@ -174,7 +174,7 @@ class TestQuinticPolynomial:
 
     def test_quintic_minimum_jerk_rest_to_rest(self, bk):
         """Rest-to-rest quintic matches the minimum-jerk formula p(s) = p0 + (pf-p0)(10s^3 - 15s^4 + 6s^5)."""
-        from trajectories.quintic_polynomial import QuinticPolynomial
+        from shinro.trajectories.quintic_polynomial import QuinticPolynomial
         traj = QuinticPolynomial(backend=bk)
         p0 = bk.array([0.0])
         pf = bk.array([1.0])
@@ -189,7 +189,7 @@ class TestQuinticPolynomial:
 
     def test_quintic_derivative_of_position_is_velocity(self, bk):
         """The velocity returned is the analytic derivative of the position polynomial."""
-        from trajectories.quintic_polynomial import QuinticPolynomial
+        from shinro.trajectories.quintic_polynomial import QuinticPolynomial
         traj = QuinticPolynomial(backend=bk)
         p0 = bk.array([0.0])
         pf = bk.array([2.0])
@@ -204,7 +204,7 @@ class TestQuinticPolynomial:
 
     def test_quintic_derivative_of_velocity_is_acceleration(self, bk):
         """The acceleration returned is the analytic derivative of the velocity polynomial."""
-        from trajectories.quintic_polynomial import QuinticPolynomial
+        from shinro.trajectories.quintic_polynomial import QuinticPolynomial
         traj = QuinticPolynomial(backend=bk)
         p0 = bk.array([0.0])
         pf = bk.array([2.0])
@@ -219,7 +219,7 @@ class TestQuinticPolynomial:
 
     def test_velocity_continuity(self, bk):
         """Velocity at t=0 matches v0 and at t=T matches vf."""
-        from trajectories.quintic_polynomial import QuinticPolynomial
+        from shinro.trajectories.quintic_polynomial import QuinticPolynomial
         traj = QuinticPolynomial(backend=bk)
         p0 = bk.array([0.0])
         pf = bk.array([1.0])
@@ -234,7 +234,7 @@ class TestQuinticPolynomial:
 
     def test_acceleration_continuity(self, bk):
         """Acceleration at t=0 matches a0 and at t=T matches af."""
-        from trajectories.quintic_polynomial import QuinticPolynomial
+        from shinro.trajectories.quintic_polynomial import QuinticPolynomial
         traj = QuinticPolynomial(backend=bk)
         p0 = bk.array([0.0])
         pf = bk.array([1.0])
@@ -249,7 +249,7 @@ class TestQuinticPolynomial:
 
     def test_minimum_jerk_rest_to_rest(self, bk):
         """Rest-to-rest quintic matches the minimum-jerk formula p(s) = p0 + (pf-p0)(10s^3 - 15s^4 + 6s^5)."""
-        from trajectories.quintic_polynomial import QuinticPolynomial
+        from shinro.trajectories.quintic_polynomial import QuinticPolynomial
         traj = QuinticPolynomial(backend=bk)
         p0 = bk.array([0.0])
         pf = bk.array([1.0])
@@ -264,7 +264,7 @@ class TestQuinticPolynomial:
 
     def test_time_clamped(self, bk):
         """Time outside [0, T] is clamped to the nearest endpoint."""
-        from trajectories.quintic_polynomial import QuinticPolynomial
+        from shinro.trajectories.quintic_polynomial import QuinticPolynomial
         traj = QuinticPolynomial(backend=bk)
         p0 = bk.array([0.0])
         pf = bk.array([1.0])
@@ -277,7 +277,7 @@ class TestQuinticPolynomial:
 
     def test_ndimensional(self, bk):
         """Quintic polynomial supports N-dimensional positions."""
-        from trajectories.quintic_polynomial import QuinticPolynomial
+        from shinro.trajectories.quintic_polynomial import QuinticPolynomial
         traj = QuinticPolynomial(backend=bk)
         p0 = bk.array([0.0, 1.0, 2.0])
         pf = bk.array([3.0, 4.0, 5.0])

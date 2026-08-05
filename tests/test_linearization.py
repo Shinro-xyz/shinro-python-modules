@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from utils.array_backend import NumpyBackend
+from shinro.utils.array_backend import NumpyBackend
 
 
 def _to_np(x, bk):
@@ -75,7 +75,7 @@ class TestTorchBackendJacobian:
 
     def setup_method(self):
         torch = pytest.importorskip("torch")
-        from utils.array_backend import TorchBackend
+        from shinro.utils.array_backend import TorchBackend
         self.bk = TorchBackend(device="cpu")
         self.torch = torch
 
@@ -160,7 +160,7 @@ class TestLinearize:
 
     def test_simple_integrator(self, bk):
         """f(x,u) = u → A=0, B=I."""
-        from utils.linearization import linearize
+        from shinro.utils.linearization import linearize
         def f(x, u):
             return u
         x0 = bk.zeros(2)
@@ -171,7 +171,7 @@ class TestLinearize:
 
     def test_double_integrator(self, bk):
         """f([x,v], u) = [v, u] → A=[[0,1],[0,0]], B=[[0],[1]]."""
-        from utils.linearization import linearize
+        from shinro.utils.linearization import linearize
         def f(x, u):
             return np.array([x[1], u[0]])
         x0 = bk.zeros(2)
@@ -182,7 +182,7 @@ class TestLinearize:
 
     def test_pendulum_upright(self, bk):
         """Linearized pendulum at upright: A=[[0,1],[-g/l,0]], B=[[0],[1/(ml^2)]]."""
-        from utils.linearization import linearize
+        from shinro.utils.linearization import linearize
         g, l, m = 9.81, 0.5, 0.1
         def f(x, u):
             theta, theta_dot = x
@@ -199,7 +199,7 @@ class TestLinearize:
 
     def test_pendulum_downward(self, bk):
         """Linearized pendulum at downward: A=[[0,1],[g/l,0]], B=[[0],[1/(ml^2)]]."""
-        from utils.linearization import linearize
+        from shinro.utils.linearization import linearize
         g, l, m = 9.81, 0.5, 0.1
         def f(x, u):
             theta, theta_dot = x
@@ -216,7 +216,7 @@ class TestLinearize:
 
     def test_cartpole_upright(self, bk):
         """Linearized cartpole at upright equilibrium."""
-        from utils.linearization import linearize
+        from shinro.utils.linearization import linearize
         mc, mp, l, g = 1.0, 0.1, 0.5, 9.81
         def f(x, u):
             x_pos, theta, xd, thd = x
@@ -243,7 +243,7 @@ class TestLinearize:
 
     def test_default_backend(self):
         """linearize() uses NumpyBackend when no backend is given."""
-        from utils.linearization import linearize
+        from shinro.utils.linearization import linearize
         def f(x, u):
             return u
         x0 = np.zeros(2)
@@ -254,7 +254,7 @@ class TestLinearize:
 
     def test_eps_affects_result(self, bk):
         """Larger eps reduces accuracy for cubic function."""
-        from utils.linearization import linearize
+        from shinro.utils.linearization import linearize
         def f(x, u):
             return np.array([x[0]**3 + u[0]])
         x0 = bk.array([2.0])
@@ -270,7 +270,7 @@ class TestLinearizeEdgeCases:
 
     def test_zero_operating_point(self, bk):
         """Linearization at zero works for a system with no drift."""
-        from utils.linearization import linearize
+        from shinro.utils.linearization import linearize
         def f(x, u):
             return np.array([x[1], -x[0] + u[0]])
         x0 = bk.zeros(2)
@@ -281,7 +281,7 @@ class TestLinearizeEdgeCases:
 
     def test_nonzero_operating_point(self, bk):
         """Linearization at a nonzero operating point captures local dynamics."""
-        from utils.linearization import linearize
+        from shinro.utils.linearization import linearize
         def f(x, u):
             return np.array([x[1], -np.sin(x[0]) + u[0]])
         x0 = bk.array([0.5, 0.0])
@@ -294,7 +294,7 @@ class TestLinearizeEdgeCases:
 
     def test_scalar_state_and_input(self, bk):
         """Linearization works with scalar (1D) state and input."""
-        from utils.linearization import linearize
+        from shinro.utils.linearization import linearize
         def f(x, u):
             return np.array([-x[0] + u[0]])
         x0 = bk.array([0.0])
@@ -305,7 +305,7 @@ class TestLinearizeEdgeCases:
 
     def test_multi_input(self, bk):
         """Linearization with multi-dimensional input."""
-        from utils.linearization import linearize
+        from shinro.utils.linearization import linearize
         def f(x, u):
             return np.array([u[0] + u[1], u[0] - u[1]])
         x0 = bk.zeros(2)
@@ -316,7 +316,7 @@ class TestLinearizeEdgeCases:
 
     def test_linear_system_is_exact(self, bk):
         """Linearization of a linear system recovers the exact matrices."""
-        from utils.linearization import linearize
+        from shinro.utils.linearization import linearize
         A_true = np.array([[0.5, 1.0], [-0.2, 0.8]])
         B_true = np.array([[0.0], [1.0]])
         def f(x, u):
@@ -329,7 +329,7 @@ class TestLinearizeEdgeCases:
 
     def test_high_dimensional(self, bk):
         """Linearization works for 10-dimensional state and 5-dimensional input."""
-        from utils.linearization import linearize
+        from shinro.utils.linearization import linearize
         n, m = 10, 5
         rng = np.random.default_rng(42)
         A_true = rng.standard_normal((n, n))

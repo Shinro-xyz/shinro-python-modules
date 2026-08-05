@@ -28,8 +28,8 @@ import matplotlib.pyplot as plt
 import mujoco
 import numpy as np
 
-from factories import TrajectoryFactory
-from simulation import RobotSim
+from shinro.factories import TrajectoryFactory
+from shinro.simulation import RobotSim
 
 HERE = Path(__file__).parent.parent
 OUTPUT_PATH = str(HERE / "lekiwi_arm_demo.gif")

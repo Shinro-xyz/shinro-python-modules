@@ -39,10 +39,10 @@ import matplotlib.pyplot as plt
 import mujoco
 import numpy as np
 
-from factories import ControllerFactory, EstimatorFactory, TrajectoryFactory
+from shinro.factories import ControllerFactory, EstimatorFactory, TrajectoryFactory
 from lekiwi_sim import HERE as LEKIWI_HOME
 from lekiwi_sim import MJCF_PATH
-from simulation import RobotSim
+from shinro.simulation import RobotSim
 
 HERE = Path(__file__).parent.parent
 OUTPUT_PATH = str(HERE / "lekiwi_demo.gif")

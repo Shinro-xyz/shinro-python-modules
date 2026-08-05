@@ -1,7 +1,15 @@
-.PHONY: test test-quick test-functional test-all test-integration lint \
+.PHONY: test test-quick test-functional test-all test-integration lint install build \
 	test-controllers test-estimators test-plants test-trajectories test-armrobot \
 	test-components test-array-backend test-controllability test-factories \
 	test-linearization test-adversarial test-mcp-server test-mcp-functional
+
+# Install the package in editable mode
+install:
+	pip install -e .
+
+# Build source + wheel distributions
+build:
+	python -m build
 
 # Run the full test suite (skips the very large horizon MPC timeout test)
 test:
@@ -26,7 +34,7 @@ test-integration:
 # Run linter and type checker
 lint:
 	ruff check .
-	pyright utils/ components.py controllers/ estimators/ trajectories/ plants/
+	pyright src/shinro/utils/ src/shinro/components.py src/shinro/controllers/ src/shinro/estimators/ src/shinro/trajectories/ src/shinro/plants/
 
 # Run an individual test group by short name, e.g. `make test-controllers`
 test-controllers:

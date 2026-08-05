@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from utils.array_backend import NumpyBackend
+from shinro.utils.array_backend import NumpyBackend
 
 
 class TestNumpyBackend:
@@ -251,7 +251,7 @@ class TestTorchBackend:
 
     def setup_method(self):
         torch = pytest.importorskip("torch")
-        from utils.array_backend import TorchBackend
+        from shinro.utils.array_backend import TorchBackend
         self.bk = TorchBackend(device="cpu")
         self.torch = torch
 
@@ -314,7 +314,7 @@ class TestTorchBackendBatched:
 
     def setup_method(self):
         torch = pytest.importorskip("torch")
-        from utils.array_backend import TorchBackend
+        from shinro.utils.array_backend import TorchBackend
         self.bk = TorchBackend(device="cpu")
         self.torch = torch
 

@@ -1,0 +1,31 @@
+# Robot configuration for LeKiwi (holonomic base + SO-ARM100 arm)
+model = "lekiwi-sim/mjcf_lcmm_robot.xml"
+dt = 0.02
+
+[joint_groups]
+arm_joints = ["Rotation", "Pitch", "Elbow", "Wrist_Pitch", "Wrist_Roll", "Jaw"]
+drive_joints = ["ST3215_Servo_Motor-v1-2_Hub---Servo", "ST3215_Servo_Motor-v1-1_Hub-2---Servo", "ST3215_Servo_Motor-v1_Revolute-40"]
+
+[[plants]]
+type = "ArmRobot"
+name = "arm"
+num_dof = 6
+joint_group = "arm_joints"
+ee_body_name = "Moving_Jaw_08d-v1"
+rot_axes = ["y", "z", "z", "x", "z", "z"]
+joint_offsets = [
+  [0.018300, 0.030600, 0.052200],
+  [-0.001500, -0.114582, 0.018082],
+  [-0.001500, 0.132932, 0.028720],
+  [-0.020100, 0.025822, -0.055375],
+  [0.019800, 0.026631, -0.013098],
+  [0.0, 0.0, 0.0],
+]
+
+[[plants]]
+type = "HolonomicMobileRobot"
+name = "base"
+num_wheels = 3
+radius_robots = 0.12
+gamma = -1.57079632679
+radius_wheels = 0.09

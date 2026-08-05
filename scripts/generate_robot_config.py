@@ -18,7 +18,7 @@ from pathlib import Path
 
 import numpy as np
 
-from factories.registry import _PLANT_DETECTOR_REGISTRY
+from shinro.factories.registry import _PLANT_DETECTOR_REGISTRY
 
 
 def _parse_pos(pos_str: str) -> np.ndarray:

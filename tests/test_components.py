@@ -1,7 +1,7 @@
 import pytest
 
-from components import Controller, PhysicsEngine, Plant, StateEstimator, TrajectoryGenerator
-from utils.array_backend import NumpyBackend
+from shinro.components import Controller, PhysicsEngine, Plant, StateEstimator, TrajectoryGenerator
+from shinro.utils.array_backend import NumpyBackend
 
 
 class TestABCs:

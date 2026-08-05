@@ -23,9 +23,29 @@ This README stays limited to repo-local setup and contributor pointers.
 
 ## Install
 
+From a source checkout (recommended for development):
+
 ```bash
-pip install numpy scipy osqp mujoco
+pip install -e .            # core (numpy, scipy, osqp, mcp)
+pip install -e ".[mujoco]"  # add MuJoCo physics backend
+pip install -e ".[torch]"   # add torch backend
+pip install -e ".[lerobot]" # add learned-policy adapter
 ```
+
+Once published, consumers can install from a git ref or an index without a
+checkout:
+
+```bash
+pip install "shinro[mujoco,torch] @ git+https://github.com/<org>/shinro-python-modules@v0.1.0"
+```
+
+The MCP server is installed as a console command: `shinro-mcp`.
+
+## Releases
+
+Versions are derived from git tags via `setuptools-scm`. Tag `v0.1.0` to cut
+a release; development builds between tags are auto-numbered
+(`0.1.1.devN+g<sha>`). See `Makefile` targets `make install` and `make build`.
 
 ## Run a demo
 

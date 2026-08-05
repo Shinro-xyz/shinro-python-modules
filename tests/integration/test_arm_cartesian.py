@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from factories import ScenarioFactory
+from shinro.factories import ScenarioFactory
 
 from .helpers.assertions import (
     assert_estimator_recovery,

@@ -11,7 +11,7 @@ class TestKalmanFilter:
 
     def test_estimate_shape(self, bk):
         """estimate() returns a state vector of shape (n_x, 1)."""
-        from estimators.kalman_filter import KalmanFilter
+        from shinro.estimators.kalman_filter import KalmanFilter
         n, _m, p = 2, 1, 2
         A = bk.eye(n)
         B = bk.array([[1.0], [0.0]])
@@ -26,7 +26,7 @@ class TestKalmanFilter:
 
     def test_kalman_predict_update_equations(self, bk):
         """The estimate follows the standard KF predict-update equations exactly."""
-        from estimators.kalman_filter import KalmanFilter
+        from shinro.estimators.kalman_filter import KalmanFilter
         n = 2
         A = bk.array([[0.9, 0.1], [0.0, 0.8]])
         B = bk.array([[1.0], [0.0]])
@@ -50,7 +50,7 @@ class TestKalmanFilter:
 
     def test_kalman_innovation_zero_when_perfect(self, bk):
         """When measurement matches prediction exactly, innovation is zero and x_hat unchanged."""
-        from estimators.kalman_filter import KalmanFilter
+        from shinro.estimators.kalman_filter import KalmanFilter
         n = 2
         A = bk.eye(n)
         B = bk.zeros((n, 1))
@@ -67,7 +67,7 @@ class TestKalmanFilter:
 
     def test_kalman_covariance_monotonic_decrease(self, bk):
         """The trace of P decreases monotonically (or stays same) as measurements arrive."""
-        from estimators.kalman_filter import KalmanFilter
+        from shinro.estimators.kalman_filter import KalmanFilter
         n = 2
         A = 0.9 * bk.eye(n)
         B = bk.eye(n)
@@ -86,7 +86,7 @@ class TestKalmanFilter:
 
     def test_P_remains_psd(self, bk):
         """The error covariance P remains positive semidefinite after multiple updates."""
-        from estimators.kalman_filter import KalmanFilter
+        from shinro.estimators.kalman_filter import KalmanFilter
         n, p = 2, 2
         A = 0.9 * bk.eye(n)
         B = bk.eye(n)
@@ -104,7 +104,7 @@ class TestKalmanFilter:
 
     def test_innovation_covariance_psd(self, bk):
         """The innovation covariance S = C P_pred C^T + R is positive semidefinite."""
-        from estimators.kalman_filter import KalmanFilter
+        from shinro.estimators.kalman_filter import KalmanFilter
         n, p = 2, 2
         A = 0.9 * bk.eye(n)
         B = bk.eye(n)
@@ -122,7 +122,7 @@ class TestKalmanFilter:
 
     def test_estimate_converges_1d(self, bk):
         """The Kalman filter estimate tracks the true state for a detectable (A, C) pair."""
-        from estimators.kalman_filter import KalmanFilter
+        from shinro.estimators.kalman_filter import KalmanFilter
         A = bk.array([[0.9]])
         B = bk.array([[1.0]])
         Q = bk.array([[0.01]])
@@ -140,7 +140,7 @@ class TestKalmanFilter:
 
     def test_reset(self, bk):
         """reset() clears the state estimate to zero."""
-        from estimators.kalman_filter import KalmanFilter
+        from shinro.estimators.kalman_filter import KalmanFilter
         n = 2
         A = 0.9 * bk.eye(n)
         B = bk.eye(n)
@@ -160,7 +160,7 @@ class TestLuenbergerObserver:
 
     def test_estimate_shape(self, bk):
         """estimate() returns a state vector of shape (n_x, 1)."""
-        from estimators.luenberger_observer import LuenbergerObserver
+        from shinro.estimators.luenberger_observer import LuenbergerObserver
         n, _m, _p = 2, 1, 2
         A = bk.eye(n)
         B = bk.array([[1.0], [0.0]])
@@ -174,7 +174,7 @@ class TestLuenbergerObserver:
 
     def test_luenberger_observer_equation(self, bk):
         """The estimate follows x_hat = A x_hat + B u + L (y - C (A x_hat + B u)) exactly."""
-        from estimators.luenberger_observer import LuenbergerObserver
+        from shinro.estimators.luenberger_observer import LuenbergerObserver
         n = 2
         A = bk.array([[0.9, 0.1], [0.0, 0.8]])
         B = bk.array([[1.0], [0.0]])
@@ -192,7 +192,7 @@ class TestLuenbergerObserver:
 
     def test_luenberger_innovation_zero_when_perfect(self, bk):
         """When measurement matches prediction, innovation is zero and x_hat unchanged."""
-        from estimators.luenberger_observer import LuenbergerObserver
+        from shinro.estimators.luenberger_observer import LuenbergerObserver
         n = 2
         A = bk.eye(n)
         B = bk.zeros((n, 1))
@@ -208,7 +208,7 @@ class TestLuenbergerObserver:
 
     def test_luenberger_error_dynamics_eigenvalues(self, bk):
         """The error dynamics A - L C has eigenvalues inside the unit circle."""
-        from estimators.luenberger_observer import LuenbergerObserver
+        from shinro.estimators.luenberger_observer import LuenbergerObserver
         n = 2
         A = bk.array([[0.9, 0.1], [0.0, 0.8]])
         L = bk.array([[0.5, 0.0], [0.0, 0.5]])
@@ -221,7 +221,7 @@ class TestLuenbergerObserver:
 
     def test_error_dynamics_stable(self, bk):
         """The error dynamics matrix A - L @ C has all eigenvalues inside the unit circle."""
-        from estimators.luenberger_observer import LuenbergerObserver
+        from shinro.estimators.luenberger_observer import LuenbergerObserver
         n = 2
         A = 0.9 * bk.eye(n)
         L = 0.5 * bk.eye(n)
@@ -234,7 +234,7 @@ class TestLuenbergerObserver:
 
     def test_estimate_converges_1d(self, bk):
         """The Luenberger observer estimate converges to the true state for stable error dynamics."""
-        from estimators.luenberger_observer import LuenbergerObserver
+        from shinro.estimators.luenberger_observer import LuenbergerObserver
         A = bk.array([[0.9]])
         B = bk.array([[1.0]])
         L = bk.array([[0.5]])
@@ -251,7 +251,7 @@ class TestLuenbergerObserver:
 
     def test_reset(self, bk):
         """reset() clears the state estimate to zero."""
-        from estimators.luenberger_observer import LuenbergerObserver
+        from shinro.estimators.luenberger_observer import LuenbergerObserver
         n = 2
         A = 0.9 * bk.eye(n)
         B = bk.eye(n)

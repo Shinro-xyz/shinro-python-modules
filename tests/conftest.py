@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from utils.array_backend import NumpyBackend
+from shinro.utils.array_backend import NumpyBackend
 
 
 @pytest.fixture
@@ -12,7 +12,7 @@ def numpy_backend():
 @pytest.fixture
 def torch_backend():
     pytest.importorskip("torch")
-    from utils.array_backend import TorchBackend
+    from shinro.utils.array_backend import TorchBackend
     return TorchBackend(device="cpu")
 
 
@@ -21,7 +21,7 @@ def bk(request):
     if request.param == "numpy":
         return NumpyBackend()
     pytest.importorskip("torch")
-    from utils.array_backend import TorchBackend
+    from shinro.utils.array_backend import TorchBackend
     return TorchBackend(device="cpu")
 
 

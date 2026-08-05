@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from scipy.sparse import csr_matrix
 
-from utils.array_backend import NumpyBackend
+from shinro.utils.array_backend import NumpyBackend
 
 
 def _to_np(x, bk):
@@ -317,7 +317,7 @@ class TestControllabilityCheckerAdversarial:
 
     def test_zero_system(self):
         """A zero system (A=0, B=0) is not controllable but is observable (C=I)."""
-        from utils.controllability_checker import LTISystemsAnalyzer
+        from shinro.utils.controllability_checker import LTISystemsAnalyzer
         n = 3
         A = np.zeros((n, n))
         B = np.zeros((n, 1))
@@ -328,7 +328,7 @@ class TestControllabilityCheckerAdversarial:
 
     def test_identity_system(self):
         """An identity system (A=I, B=I, C=I) is both controllable and observable."""
-        from utils.controllability_checker import LTISystemsAnalyzer
+        from shinro.utils.controllability_checker import LTISystemsAnalyzer
         n = 3
         A = np.eye(n)
         B = np.eye(n)
@@ -339,7 +339,7 @@ class TestControllabilityCheckerAdversarial:
 
     def test_scalar_system(self):
         """A 1x1 stable system has a known analytical Gramian Wc = 0.5."""
-        from utils.controllability_checker import LTISystemsAnalyzer
+        from shinro.utils.controllability_checker import LTISystemsAnalyzer
         A = np.array([[-1.0]])
         B = np.array([[1.0]])
         C = np.array([[1.0]])
@@ -351,7 +351,7 @@ class TestControllabilityCheckerAdversarial:
 
     def test_jordan_block(self):
         """A Jordan block (chain of integrators) with B = [0,0,1]^T is controllable."""
-        from utils.controllability_checker import LTISystemsAnalyzer
+        from shinro.utils.controllability_checker import LTISystemsAnalyzer
         A = np.array([[0, 1, 0], [0, 0, 1], [0, 0, 0]], dtype=float)
         B = np.array([[0], [0], [1]], dtype=float)
         C = np.eye(3)
@@ -361,7 +361,7 @@ class TestControllabilityCheckerAdversarial:
 
     def test_jordan_block_uncontrollable(self):
         """A Jordan block with B = [1,0,0]^T is NOT controllable (input only reaches first state)."""
-        from utils.controllability_checker import LTISystemsAnalyzer
+        from shinro.utils.controllability_checker import LTISystemsAnalyzer
         A = np.array([[0, 1, 0], [0, 0, 1], [0, 0, 0]], dtype=float)
         B = np.array([[1], [0], [0]], dtype=float)
         C = np.eye(3)
@@ -370,7 +370,7 @@ class TestControllabilityCheckerAdversarial:
 
     def test_discrete_dt_zero(self):
         """Discrete Gramian with dt=0 still works (dt=0 is valid, just means no time passes)."""
-        from utils.controllability_checker import LTISystemsAnalyzer
+        from shinro.utils.controllability_checker import LTISystemsAnalyzer
         A = np.array([[0.9, 0.1], [0, 0.8]], dtype=float)
         B = np.array([[0], [0.1]], dtype=float)
         C = np.eye(2)
@@ -380,7 +380,7 @@ class TestControllabilityCheckerAdversarial:
 
     def test_sparse_A(self):
         """A sparse matrix A works correctly with the controllability checker."""
-        from utils.controllability_checker import LTISystemsAnalyzer
+        from shinro.utils.controllability_checker import LTISystemsAnalyzer
         A = csr_matrix(np.array([[0, 1], [-1, -2]], dtype=float))
         B = np.array([[0], [1]], dtype=float)
         C = np.eye(2)
@@ -389,7 +389,7 @@ class TestControllabilityCheckerAdversarial:
 
     def test_gramian_condition_singular(self):
         """gramian_condition raises ValueError for a non-Hurwitz system (Gramian does not exist)."""
-        from utils.controllability_checker import LTISystemsAnalyzer
+        from shinro.utils.controllability_checker import LTISystemsAnalyzer
         A = np.zeros((2, 2))
         B = np.array([[1], [1]], dtype=float)
         C = np.eye(2)
@@ -399,7 +399,7 @@ class TestControllabilityCheckerAdversarial:
 
     def test_gramian_spectrum_finite_horizon_malformed(self):
         """gramian_spectrum with a malformed finite-horizon identifier raises ValueError."""
-        from utils.controllability_checker import LTISystemsAnalyzer
+        from shinro.utils.controllability_checker import LTISystemsAnalyzer
         A = np.array([[0, 1], [-1, -2]], dtype=float)
         B = np.array([[0], [1]], dtype=float)
         C = np.eye(2)
@@ -409,7 +409,7 @@ class TestControllabilityCheckerAdversarial:
 
     def test_balanced_truncate_r_equals_n(self):
         """Balanced truncation with r=n returns the full-order model unchanged."""
-        from utils.controllability_checker import LTISystemsAnalyzer
+        from shinro.utils.controllability_checker import LTISystemsAnalyzer
         A = np.array([[0, 1], [-1, -2]], dtype=float)
         B = np.array([[0], [1]], dtype=float)
         C = np.eye(2)
@@ -419,7 +419,7 @@ class TestControllabilityCheckerAdversarial:
 
     def test_rank_report_on_zero_system(self):
         """rank_report on a zero system returns rank 0 for both controllability and observability."""
-        from utils.controllability_checker import LTISystemsAnalyzer
+        from shinro.utils.controllability_checker import LTISystemsAnalyzer
         A = np.zeros((3, 3))
         B = np.zeros((3, 1))
         C = np.zeros((2, 3))
@@ -430,7 +430,7 @@ class TestControllabilityCheckerAdversarial:
 
     def test_summary_on_zero_system(self):
         """summary on a zero system raises ValueError (Gramian does not exist for unstable A)."""
-        from utils.controllability_checker import LTISystemsAnalyzer
+        from shinro.utils.controllability_checker import LTISystemsAnalyzer
         A = np.zeros((2, 2))
         B = np.zeros((2, 1))
         C = np.eye(2)
@@ -444,7 +444,7 @@ class TestLQRAdversarial:
 
     def test_lqr_zero_Q(self, bk):
         """LQR with Q=0 (zero state cost) raises LinAlgError (DARE has no finite solution)."""
-        from controllers.lqr import LQR
+        from shinro.controllers.lqr import LQR
         A = bk.eye(2)
         B = bk.eye(2)
         Q = bk.zeros((2, 2))
@@ -454,7 +454,7 @@ class TestLQRAdversarial:
 
     def test_lqr_zero_R(self, bk):
         """LQR with R=0 (zero control cost) produces a finite gain (inverse is handled)."""
-        from controllers.lqr import LQR
+        from shinro.controllers.lqr import LQR
         A = bk.eye(2)
         B = bk.eye(2)
         Q = bk.eye(2)
@@ -465,7 +465,7 @@ class TestLQRAdversarial:
 
     def test_lqr_non_psd_Q(self, bk):
         """LQR with non-PSD Q (negative eigenvalues) raises an error."""
-        from controllers.lqr import LQR
+        from shinro.controllers.lqr import LQR
         A = bk.eye(2)
         B = bk.eye(2)
         Q = bk.array([[-1, 0], [0, -1]])
@@ -475,7 +475,7 @@ class TestLQRAdversarial:
 
     def test_lqr_mismatched_dims(self, bk):
         """LQR with mismatched A and B dimensions raises an error."""
-        from controllers.lqr import LQR
+        from shinro.controllers.lqr import LQR
         A = bk.eye(2)
         B = bk.eye(3)
         Q = bk.eye(2)
@@ -485,7 +485,7 @@ class TestLQRAdversarial:
 
     def test_lqr_compute_with_target(self, bk):
         """compute(x, target) returns u = -K @ (x - target)."""
-        from controllers.lqr import LQR
+        from shinro.controllers.lqr import LQR
         A = bk.eye(2)
         B = bk.eye(2)
         Q = bk.eye(2)
@@ -499,7 +499,7 @@ class TestLQRAdversarial:
 
     def test_lqr_compute_wrong_shape(self, bk):
         """compute with a wrong-shaped state vector raises an error."""
-        from controllers.lqr import LQR
+        from shinro.controllers.lqr import LQR
         A = bk.eye(2)
         B = bk.eye(2)
         Q = bk.eye(2)
@@ -515,7 +515,7 @@ class TestPIDAdversarial:
 
     def test_pid_zero_gains(self, bk):
         """PID with all gains zero produces zero control effort."""
-        from controllers.pid import PIDController
+        from shinro.controllers.pid import PIDController
         pid = PIDController(
             kp=bk.array([0.0]),
             ki=bk.array([0.0]),
@@ -528,7 +528,7 @@ class TestPIDAdversarial:
 
     def test_pid_negative_kp(self, bk):
         """PID with negative Kp drives the state away from the target (positive feedback)."""
-        from controllers.pid import PIDController
+        from shinro.controllers.pid import PIDController
         pid = PIDController(
             kp=bk.array([-1.0]),
             ki=bk.array([0.0]),
@@ -545,7 +545,7 @@ class TestPIDAdversarial:
 
     def test_pid_mismatched_gain_lengths(self, bk):
         """PID with mismatched gain lengths broadcasts (numpy behavior)."""
-        from controllers.pid import PIDController
+        from shinro.controllers.pid import PIDController
         pid = PIDController(
             kp=bk.array([1.0, 2.0]),
             ki=bk.array([0.5]),
@@ -558,7 +558,7 @@ class TestPIDAdversarial:
 
     def test_pid_zero_dt(self, bk):
         """PID with dt=0 produces finite output (no division by zero in derivative)."""
-        from controllers.pid import PIDController
+        from shinro.controllers.pid import PIDController
         pid = PIDController(
             kp=bk.array([1.0]),
             ki=bk.array([0.5]),
@@ -571,7 +571,7 @@ class TestPIDAdversarial:
 
     def test_pid_negative_dt(self, bk):
         """PID with negative dt produces finite output (backward time step)."""
-        from controllers.pid import PIDController
+        from shinro.controllers.pid import PIDController
         pid = PIDController(
             kp=bk.array([1.0]),
             ki=bk.array([0.5]),
@@ -584,7 +584,7 @@ class TestPIDAdversarial:
 
     def test_pid_wrong_state_shape(self, bk):
         """PID with wrong-shaped state broadcasts (numpy behavior)."""
-        from controllers.pid import PIDController
+        from shinro.controllers.pid import PIDController
         pid = PIDController(
             kp=bk.array([1.0]),
             ki=bk.array([0.0]),
@@ -601,7 +601,7 @@ class TestMPCAdversarial:
 
     def test_mpc_horizon_1(self, bk):
         """MPC with horizon=1 produces a valid control output."""
-        from controllers.mpc_lti import MPC_LTI
+        from shinro.controllers.mpc_lti import MPC_LTI
         n = 2
         m = 2
         A = bk.eye(n)
@@ -619,7 +619,7 @@ class TestMPCAdversarial:
 
     def test_mpc_mismatched_B_dims(self, bk):
         """MPC with mismatched A and B dimensions raises an error."""
-        from controllers.mpc_lti import MPC_LTI
+        from shinro.controllers.mpc_lti import MPC_LTI
         n = 2
         m = 3
         A = bk.eye(n)
@@ -633,7 +633,7 @@ class TestMPCAdversarial:
 
     def test_mpc_no_constraints_crashes(self, bk):
         """MPC without calling constraints() raises AttributeError in compute()."""
-        from controllers.mpc_lti import MPC_LTI
+        from shinro.controllers.mpc_lti import MPC_LTI
         n = 2
         m = 2
         A = bk.eye(n)
@@ -649,7 +649,7 @@ class TestMPCAdversarial:
 
     def test_mpc_zero_horizon(self, bk):
         """MPC with horizon=0 raises an error."""
-        from controllers.mpc_lti import MPC_LTI
+        from shinro.controllers.mpc_lti import MPC_LTI
         n = 2
         m = 2
         A = bk.eye(n)
@@ -663,7 +663,7 @@ class TestMPCAdversarial:
 
     def test_mpc_negative_horizon(self, bk):
         """MPC with negative horizon raises an error."""
-        from controllers.mpc_lti import MPC_LTI
+        from shinro.controllers.mpc_lti import MPC_LTI
         n = 2
         m = 2
         A = bk.eye(n)
@@ -681,7 +681,7 @@ class TestKalmanFilterAdversarial:
 
     def test_kalman_zero_noise(self, bk):
         """Kalman filter with Q=0, R=0 (no noise) produces a finite estimate."""
-        from estimators.kalman_filter import KalmanFilter
+        from shinro.estimators.kalman_filter import KalmanFilter
         n = 2
         A = 0.9 * bk.eye(n)
         B = bk.eye(n)
@@ -696,7 +696,7 @@ class TestKalmanFilterAdversarial:
 
     def test_kalman_infinite_measurement_noise(self, bk):
         """Kalman filter with very large R (infinite measurement noise) ignores measurements."""
-        from estimators.kalman_filter import KalmanFilter
+        from shinro.estimators.kalman_filter import KalmanFilter
         n = 2
         A = 0.9 * bk.eye(n)
         B = bk.eye(n)
@@ -711,7 +711,7 @@ class TestKalmanFilterAdversarial:
 
     def test_kalman_infinite_process_noise(self, bk):
         """Kalman filter with very large Q (infinite process noise) trusts measurements fully."""
-        from estimators.kalman_filter import KalmanFilter
+        from shinro.estimators.kalman_filter import KalmanFilter
         n = 2
         A = 0.9 * bk.eye(n)
         B = bk.eye(n)
@@ -726,7 +726,7 @@ class TestKalmanFilterAdversarial:
 
     def test_kalman_mismatched_dims(self, bk):
         """Kalman filter with mismatched C and R dimensions raises ValueError in estimate()."""
-        from estimators.kalman_filter import KalmanFilter
+        from shinro.estimators.kalman_filter import KalmanFilter
         n = 2
         A = bk.eye(n)
         B = bk.eye(n)
@@ -741,7 +741,7 @@ class TestKalmanFilterAdversarial:
 
     def test_kalman_non_psd_Q(self, bk):
         """Kalman filter with non-PSD Q (negative eigenvalues) still produces a finite estimate."""
-        from estimators.kalman_filter import KalmanFilter
+        from shinro.estimators.kalman_filter import KalmanFilter
         n = 2
         A = 0.9 * bk.eye(n)
         B = bk.eye(n)
@@ -760,7 +760,7 @@ class TestLuenbergerObserverAdversarial:
 
     def test_luenberger_zero_gain(self, bk):
         """Luenberger observer with L=0 (open-loop) produces a finite estimate (no correction)."""
-        from estimators.luenberger_observer import LuenbergerObserver
+        from shinro.estimators.luenberger_observer import LuenbergerObserver
         n = 2
         A = 0.9 * bk.eye(n)
         B = bk.eye(n)
@@ -774,7 +774,7 @@ class TestLuenbergerObserverAdversarial:
 
     def test_luenberger_destabilizing_gain(self, bk):
         """Luenberger observer with a large gain L produces unstable error dynamics (|eig| >= 1)."""
-        from estimators.luenberger_observer import LuenbergerObserver
+        from shinro.estimators.luenberger_observer import LuenbergerObserver
         n = 2
         A = 0.9 * bk.eye(n)
         B = bk.eye(n)
@@ -787,7 +787,7 @@ class TestLuenbergerObserverAdversarial:
 
     def test_luenberger_mismatched_gain(self, bk):
         """Luenberger observer with a wrong-shaped gain L raises ValueError in estimate()."""
-        from estimators.luenberger_observer import LuenbergerObserver
+        from shinro.estimators.luenberger_observer import LuenbergerObserver
         n = 2
         A = 0.9 * bk.eye(n)
         B = bk.eye(n)
@@ -805,7 +805,7 @@ class TestCubicPolynomialAdversarial:
 
     def test_cubic_zero_duration(self, bk):
         """Cubic polynomial with zero duration produces NaN (division by zero in coefficients)."""
-        from trajectories.cubic_polynomial import CubicPolynomial
+        from shinro.trajectories.cubic_polynomial import CubicPolynomial
         traj = CubicPolynomial(backend=bk)
         p0 = bk.array([0.0])
         pf = bk.array([1.0])
@@ -817,7 +817,7 @@ class TestCubicPolynomialAdversarial:
 
     def test_cubic_negative_duration(self, bk):
         """Cubic polynomial with negative duration produces a finite position (time is clamped)."""
-        from trajectories.cubic_polynomial import CubicPolynomial
+        from shinro.trajectories.cubic_polynomial import CubicPolynomial
         traj = CubicPolynomial(backend=bk)
         p0 = bk.array([0.0])
         pf = bk.array([1.0])
@@ -829,7 +829,7 @@ class TestCubicPolynomialAdversarial:
 
     def test_cubic_mismatched_dims(self, bk):
         """Cubic polynomial with mismatched p0 and pf dimensions broadcasts (numpy behavior)."""
-        from trajectories.cubic_polynomial import CubicPolynomial
+        from shinro.trajectories.cubic_polynomial import CubicPolynomial
         traj = CubicPolynomial(backend=bk)
         p0 = bk.array([0.0, 0.0])
         pf = bk.array([1.0])
@@ -841,7 +841,7 @@ class TestCubicPolynomialAdversarial:
 
     def test_cubic_zero_dimensional(self, bk):
         """Cubic polynomial with zero-dimensional positions produces an empty result."""
-        from trajectories.cubic_polynomial import CubicPolynomial
+        from shinro.trajectories.cubic_polynomial import CubicPolynomial
         traj = CubicPolynomial(backend=bk)
         p0 = bk.array([])
         pf = bk.array([])
@@ -853,7 +853,7 @@ class TestCubicPolynomialAdversarial:
 
     def test_cubic_large_time(self, bk):
         """Cubic polynomial with very large time is clamped to T."""
-        from trajectories.cubic_polynomial import CubicPolynomial
+        from shinro.trajectories.cubic_polynomial import CubicPolynomial
         traj = CubicPolynomial(backend=bk)
         p0 = bk.array([0.0])
         pf = bk.array([1.0])
@@ -869,7 +869,7 @@ class TestQuinticPolynomialAdversarial:
 
     def test_quintic_zero_duration(self, bk):
         """Quintic polynomial with zero duration raises an error (singular linear system)."""
-        from trajectories.quintic_polynomial import QuinticPolynomial
+        from shinro.trajectories.quintic_polynomial import QuinticPolynomial
         traj = QuinticPolynomial(backend=bk)
         p0 = bk.array([0.0])
         pf = bk.array([1.0])
@@ -878,7 +878,7 @@ class TestQuinticPolynomialAdversarial:
 
     def test_quintic_negative_duration(self, bk):
         """Quintic polynomial with negative duration produces a finite position."""
-        from trajectories.quintic_polynomial import QuinticPolynomial
+        from shinro.trajectories.quintic_polynomial import QuinticPolynomial
         traj = QuinticPolynomial(backend=bk)
         p0 = bk.array([0.0])
         pf = bk.array([1.0])
@@ -888,7 +888,7 @@ class TestQuinticPolynomialAdversarial:
 
     def test_quintic_mismatched_dims(self, bk):
         """Quintic polynomial with mismatched p0 and pf dimensions raises an error."""
-        from trajectories.quintic_polynomial import QuinticPolynomial
+        from shinro.trajectories.quintic_polynomial import QuinticPolynomial
         traj = QuinticPolynomial(backend=bk)
         p0 = bk.array([0.0, 0.0])
         pf = bk.array([1.0])
@@ -897,7 +897,7 @@ class TestQuinticPolynomialAdversarial:
 
     def test_quintic_zero_dimensional(self, bk):
         """Quintic polynomial with zero-dimensional positions produces an empty result."""
-        from trajectories.quintic_polynomial import QuinticPolynomial
+        from shinro.trajectories.quintic_polynomial import QuinticPolynomial
         traj = QuinticPolynomial(backend=bk)
         p0 = bk.array([])
         pf = bk.array([])
@@ -907,7 +907,7 @@ class TestQuinticPolynomialAdversarial:
 
     def test_quintic_large_time(self, bk):
         """Quintic polynomial with very large time is clamped to T."""
-        from trajectories.quintic_polynomial import QuinticPolynomial
+        from shinro.trajectories.quintic_polynomial import QuinticPolynomial
         traj = QuinticPolynomial(backend=bk)
         p0 = bk.array([0.0])
         pf = bk.array([1.0])
@@ -921,7 +921,7 @@ class TestHolonomicMobileRobotAdversarial:
 
     def test_zero_dt(self, bk):
         """HolonomicMobileRobot with dt=0 does not move (state stays at origin)."""
-        from plants.holonomicmobilerobot import HolonomicMobileRobot
+        from shinro.plants.holonomicmobilerobot import HolonomicMobileRobot
         robot = HolonomicMobileRobot(num_wheels=3, radius_robots=0.1, gamma=0.0,
                                      radius_wheels=0.05, dt=0.0, backend=bk)
         u = bk.array([1.0, 0.0, 0.0])
@@ -931,7 +931,7 @@ class TestHolonomicMobileRobotAdversarial:
 
     def test_negative_dt(self, bk):
         """HolonomicMobileRobot with negative dt moves backward."""
-        from plants.holonomicmobilerobot import HolonomicMobileRobot
+        from shinro.plants.holonomicmobilerobot import HolonomicMobileRobot
         robot = HolonomicMobileRobot(num_wheels=3, radius_robots=0.1, gamma=0.0,
                                      radius_wheels=0.05, dt=-0.01, backend=bk)
         u = bk.array([1.0, 0.0, 0.0])
@@ -941,7 +941,7 @@ class TestHolonomicMobileRobotAdversarial:
 
     def test_zero_wheel_radius(self, bk):
         """HolonomicMobileRobot with zero wheel radius raises ZeroDivisionError on step()."""
-        from plants.holonomicmobilerobot import HolonomicMobileRobot
+        from shinro.plants.holonomicmobilerobot import HolonomicMobileRobot
         robot = HolonomicMobileRobot(num_wheels=3, radius_robots=0.1, gamma=0.0,
                                      radius_wheels=0.0, dt=0.01, backend=bk)
         u = bk.array([1.0, 0.0, 0.0])
@@ -950,7 +950,7 @@ class TestHolonomicMobileRobotAdversarial:
 
     def test_zero_robot_radius(self, bk):
         """HolonomicMobileRobot with zero robot radius still produces wheel speeds."""
-        from plants.holonomicmobilerobot import HolonomicMobileRobot
+        from shinro.plants.holonomicmobilerobot import HolonomicMobileRobot
         robot = HolonomicMobileRobot(num_wheels=3, radius_robots=0.0, gamma=0.0,
                                      radius_wheels=0.05, dt=0.01, backend=bk)
         u = bk.array([1.0, 0.0, 0.0])
@@ -959,7 +959,7 @@ class TestHolonomicMobileRobotAdversarial:
 
     def test_single_wheel(self, bk):
         """HolonomicMobileRobot with a single wheel produces a 1-element wheel speed vector."""
-        from plants.holonomicmobilerobot import HolonomicMobileRobot
+        from shinro.plants.holonomicmobilerobot import HolonomicMobileRobot
         robot = HolonomicMobileRobot(num_wheels=1, radius_robots=0.1, gamma=0.0,
                                      radius_wheels=0.05, dt=0.01, backend=bk)
         u = bk.array([1.0, 0.0, 0.0])
@@ -968,7 +968,7 @@ class TestHolonomicMobileRobotAdversarial:
 
     def test_many_wheels(self, bk):
         """HolonomicMobileRobot with 10 wheels produces a 10-element wheel speed vector."""
-        from plants.holonomicmobilerobot import HolonomicMobileRobot
+        from shinro.plants.holonomicmobilerobot import HolonomicMobileRobot
         robot = HolonomicMobileRobot(num_wheels=10, radius_robots=0.1, gamma=0.0,
                                      radius_wheels=0.05, dt=0.01, backend=bk)
         u = bk.array([1.0, 0.0, 0.0])
@@ -977,7 +977,7 @@ class TestHolonomicMobileRobotAdversarial:
 
     def test_wrong_input_shape(self, bk):
         """HolonomicMobileRobot with a wrong-shaped input raises an error."""
-        from plants.holonomicmobilerobot import HolonomicMobileRobot
+        from shinro.plants.holonomicmobilerobot import HolonomicMobileRobot
         robot = HolonomicMobileRobot(num_wheels=3, radius_robots=0.1, gamma=0.0,
                                      radius_wheels=0.05, dt=0.01, backend=bk)
         u = bk.array([1.0, 0.0])
@@ -986,7 +986,7 @@ class TestHolonomicMobileRobotAdversarial:
 
     def test_set_pose_then_step(self, bk):
         """HolonomicMobileRobot with zero velocity stays at the set pose."""
-        from plants.holonomicmobilerobot import HolonomicMobileRobot
+        from shinro.plants.holonomicmobilerobot import HolonomicMobileRobot
         robot = HolonomicMobileRobot(num_wheels=3, radius_robots=0.1, gamma=0.0,
                                      radius_wheels=0.05, dt=0.01, backend=bk)
         robot.set_pose(1.0, 2.0, 0.5)

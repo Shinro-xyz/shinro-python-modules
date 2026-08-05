@@ -4,6 +4,9 @@ __pycache__/
 *$py.class
 run_ci_local.txt
 
+# setuptools-scm generated version module
+src/shinro/_version.py
+
 # C extensions
 *.so
 

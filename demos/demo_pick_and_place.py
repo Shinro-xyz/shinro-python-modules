@@ -14,10 +14,10 @@ from pathlib import Path
 import imageio.v3 as iio
 import mujoco
 
-from factories import TrajectoryFactory
+from shinro.factories import TrajectoryFactory
 from lekiwi_sim import HERE as LEKIWI_HOME
 from lekiwi_sim import MJCF_PATH
-from simulation import RobotSim
+from shinro.simulation import RobotSim
 
 HERE = Path(__file__).parent.parent
 OUTPUT_PATH = str(HERE / "lekiwi_demo.gif")

@@ -19,10 +19,10 @@ from typing import Any
 
 import numpy as np
 
-from controllers.lqr import LQR
-from controllers.mpc_lti import MPC_LTI, MPC_LTI_DeltaU
-from controllers.pid import PIDController
-from factories.scenario_factory import Scenario
+from shinro.controllers.lqr import LQR
+from shinro.controllers.mpc_lti import MPC_LTI, MPC_LTI_DeltaU
+from shinro.controllers.pid import PIDController
+from shinro.factories.scenario_factory import Scenario
 
 MAX_CONTROL = 1e6
 
