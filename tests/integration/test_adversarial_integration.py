@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 from factories import ScenarioFactory
+
 from .helpers.scenario_runner import run_scenario
 
 pytestmark = [pytest.mark.integration]

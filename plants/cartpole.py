@@ -1,8 +1,8 @@
-from typing import Optional
-from components import Plant, PhysicsEngine
+
+
+from components import PhysicsEngine, Plant
 from factories.registry import register_plant, register_plant_detector
 from utils.array_backend import ArrayBackend, NumpyBackend
-import numpy as np
 
 
 @register_plant("CartPole")
@@ -65,8 +65,8 @@ class CartPole(Plant):
         damping: float = 0.0,
         gravity: float = 9.81,
         dt: float = 0.01,
-        track_limits: Optional[tuple] = None,
-        backend: Optional[ArrayBackend] = None,
+        track_limits: tuple | None = None,
+        backend: ArrayBackend | None = None,
     ):
         self.bk = backend or NumpyBackend()
         self.M = cart_mass
@@ -79,7 +79,7 @@ class CartPole(Plant):
         self.state = self.bk.zeros(4)
         self._engine = None
 
-    def physics_engine(self, engine: Optional[PhysicsEngine]):
+    def physics_engine(self, engine: PhysicsEngine | None):
         """Attach or detach a physics engine.
 
         When attached, the backend is inherited from the engine and the
@@ -147,7 +147,7 @@ class CartPole(Plant):
         Returns:
             Tuple of (x_ddot, theta_ddot).
         """
-        M, m, l, g, b = self.M, self.m, self.l, self.g, self.b
+        M, m, l, g, _ = self.M, self.m, self.l, self.g, self.b
         sin_theta = self.bk.sin(theta)
         cos_theta = self.bk.cos(theta)
         denom = l - m * l * cos_theta**2 / (M + m)
@@ -205,7 +205,7 @@ class CartPole(Plant):
         return self.state
 
     @classmethod
-    def from_config(cls, config, backend: Optional[ArrayBackend] = None):
+    def from_config(cls, config, backend: ArrayBackend | None = None):
         """Create a CartPole from a TOML config dict.
 
         Config fields:

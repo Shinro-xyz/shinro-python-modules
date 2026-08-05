@@ -1,8 +1,8 @@
-from typing import Optional
-from components import Plant, PhysicsEngine
+
+
+from components import PhysicsEngine, Plant
 from factories.registry import register_plant, register_plant_detector
 from utils.array_backend import ArrayBackend, NumpyBackend
-import numpy as np
 
 
 @register_plant("InvertedPendulum")
@@ -54,8 +54,8 @@ class InvertedPendulum(Plant):
         damping: float = 0.0,
         gravity: float = 9.81,
         dt: float = 0.01,
-        state_bounds: Optional[tuple] = None,
-        backend: Optional[ArrayBackend] = None,
+        state_bounds: tuple | None = None,
+        backend: ArrayBackend | None = None,
     ):
         self.bk = backend or NumpyBackend()
         self.m = mass
@@ -67,7 +67,7 @@ class InvertedPendulum(Plant):
         self.state = self.bk.zeros(2)
         self._engine = None
 
-    def physics_engine(self, engine: Optional[PhysicsEngine]):
+    def physics_engine(self, engine: PhysicsEngine | None):
         """Attach or detach a physics engine.
 
         When attached, the backend is inherited from the engine and the
@@ -156,7 +156,7 @@ class InvertedPendulum(Plant):
         return self.state
 
     @classmethod
-    def from_config(cls, config, backend: Optional[ArrayBackend] = None):
+    def from_config(cls, config, backend: ArrayBackend | None = None):
         """Create an InvertedPendulum from a TOML config dict.
 
         Config fields:

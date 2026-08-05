@@ -1,7 +1,3 @@
-from typing import Optional
-from components import Plant
-from factories.registry import register_plant, register_plant_detector
-from utils.array_backend import ArrayBackend, NumpyBackend
 import numpy as np
 
 from components import Plant

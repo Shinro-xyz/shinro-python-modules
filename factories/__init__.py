@@ -14,8 +14,8 @@ from factories.registry import (
     register_plant,
     register_trajectory,
 )
-from factories.trajectory_factory import TrajectoryFactory
 from factories.scenario_factory import Scenario, ScenarioFactory
+from factories.trajectory_factory import TrajectoryFactory
 
 __all__ = [
     "ControllerFactory", "EstimatorFactory", "TrajectoryFactory",
