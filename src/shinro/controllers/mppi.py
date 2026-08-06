@@ -225,18 +225,23 @@ class MPPIController(Controller):
             v = np.clip(v, self.u_min, self.u_max)
 
         # Backend-native rollout. The dynamics/cost callables operate on the
-        # backend's tensors; only the sampled perturbations and nominal
-        # sequence live in numpy and are bridged per step.
+        # backend's tensors; the sampled perturbations and nominal sequence
+        # live in numpy and are bridged once before the loop. Each from_numpy
+        # is a CPU->GPU transfer on a torch backend, so converting the
+        # loop-invariant arrays up front removes 2K transfers per compute().
         x_current = self.bk.from_numpy(np.tile(x0_np, (self.N, 1)))
         u_plan = self.bk.from_numpy(v)
+        eps_b = self.bk.from_numpy(epsilon)
+        u_nom_b = self.bk.from_numpy(self.u)
+        sigma2_b = self.bk.from_numpy(self.noise_sigma**2)
         costs = self.bk.zeros(self.N)
         lam = self.lam
 
         for k in range(self.K):
             u_k = u_plan[:, k, :]
             costs = costs + cost_fn(x_current, u_k)
-            inv_var_weighted_u = self.bk.from_numpy(self.u[k] / (self.noise_sigma**2))
-            control_penalty = lam * self.bk.sum(inv_var_weighted_u * self.bk.from_numpy(epsilon[:, k, :]), axis=1)
+            inv_var_weighted_u = u_nom_b[k] / sigma2_b
+            control_penalty = lam * self.bk.sum(inv_var_weighted_u * eps_b[:, k, :], axis=1)
             costs = costs + control_penalty
             x_current = dynamics_fn(x_current, u_k, self.dt)
 
