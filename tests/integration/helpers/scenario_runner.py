@@ -21,6 +21,7 @@ import numpy as np
 
 from shinro.controllers.lqr import LQR
 from shinro.controllers.mpc_lti import MPC_LTI, MPC_LTI_DeltaU
+from shinro.controllers.mppi import MPPIController
 from shinro.controllers.pid import PIDController
 from shinro.factories.scenario_factory import Scenario
 
@@ -266,6 +267,8 @@ def _compute_control(ctrl, estimate: np.ndarray, reference: np.ndarray, u_prev: 
     """
     if isinstance(ctrl, (LQR, PIDController)):
         return ctrl.compute(estimate, reference)
+    if isinstance(ctrl, MPPIController):
+        return ctrl.compute(estimate, x_ref=reference)
     if isinstance(ctrl, MPC_LTI_DeltaU):
         return ctrl.compute(estimate - reference, u_prev=u_prev)  # type: ignore[call-arg]
     if isinstance(ctrl, MPC_LTI):

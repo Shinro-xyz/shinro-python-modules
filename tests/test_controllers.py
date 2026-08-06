@@ -652,8 +652,8 @@ class TestMPPI:
         """Build a minimal MPPI controller with identity dynamics and quadratic cost."""
         from shinro.controllers.mppi import MPPIController
         params = dict(
-            dynamics_fn=lambda x, u, dt: x.copy(),
-            cost_fn=lambda x, u: np.sum(u**2, axis=1),
+            dynamics_fn=lambda x, u, dt: bk.copy(x),
+            cost_fn=lambda x, u: bk.sum(u**2, axis=1),
             num_samples=8,
             temperature=1.0,
             dt=0.1,
@@ -733,7 +733,7 @@ class TestMPPI:
             noise_sigma=[0.5],
             temperature=2.0,
             seed=7,
-            cost_fn=lambda x, u: np.zeros(x.shape[0]),
+            cost_fn=lambda x, u: bk.zeros(x.shape[0]),
         )
         ctrl.u = np.array([[2.0]])
         ctrl.compute(bk.array([0.0, 0.0]))
@@ -779,8 +779,8 @@ class TestMPPI:
         seen = {"max": 0.0}
 
         def cost_fn(x, u):
-            seen["max"] = max(seen["max"], float(np.max(np.abs(u))))
-            return np.zeros(x.shape[0])
+            seen["max"] = max(seen["max"], float(np.max(np.abs(_to_np(u, bk)))))
+            return bk.zeros(x.shape[0])
 
         ctrl = self._ctrl(bk, num_samples=6, horizon=4, noise_sigma=[5.0], u_min=[-bound], u_max=[bound])
         ctrl.cost_fn = cost_fn
@@ -795,7 +795,7 @@ class TestMPPI:
             return x + dt * u
 
         def cost(x, u):
-            return np.sum(x**2, axis=1) + 0.1 * np.sum(u**2, axis=1)
+            return bk.sum(x**2, axis=1) + 0.1 * bk.sum(u**2, axis=1)
 
         ctrl = self._ctrl(
             bk,
@@ -867,3 +867,83 @@ class TestMPPI:
         u = ctrl.compute(x0)
         assert isinstance(u, bk.torch.Tensor)
         assert _to_np(u, bk).shape == (1,)
+
+    def test_mppi_attach_plant_lti(self, bk):
+        """attach_plant wires an LTI plant's dynamics/cost into the controller."""
+        from shinro.controllers.mppi import MPPIController
+        from shinro.plants.holonomicmobilerobot import HolonomicMobileRobot
+        plant = HolonomicMobileRobot(num_wheels=3, radius_robots=0.1, gamma=0.0, radius_wheels=0.03, dt=0.02, backend=bk)
+        ctrl = MPPIController(
+            num_samples=8, temperature=1.0, dt=0.02, horizon=4,
+            noise_sigma=[0.5, 0.5, 0.5], seed=1, backend=bk,
+        )
+        ctrl.attach_plant(plant)
+        u = ctrl.compute(bk.array([1.0, 2.0, 0.0]))
+        assert _to_np(u, bk).shape == (3,)
+
+    def test_mppi_attach_plant_nonlinear(self, bk):
+        """attach_plant wires a nonlinear plant's dynamics/cost into the controller."""
+        from shinro.controllers.mppi import MPPIController
+        from shinro.plants.inverted_pendulum import InvertedPendulum
+        plant = InvertedPendulum(backend=bk)
+        ctrl = MPPIController(
+            num_samples=8, temperature=1.0, dt=0.01, horizon=4,
+            noise_sigma=[0.5], seed=1, backend=bk,
+        )
+        ctrl.attach_plant(plant)
+        u = ctrl.compute(bk.array([0.1, 0.0]))
+        assert _to_np(u, bk).shape == (1,)
+
+    def test_mppi_attach_plant_dimension_mismatch(self, bk):
+        """attach_plant raises when the plant control dim disagrees with noise_sigma."""
+        from shinro.controllers.mppi import MPPIController
+        from shinro.plants.inverted_pendulum import InvertedPendulum
+        plant = InvertedPendulum(backend=bk)
+        ctrl = MPPIController(
+            num_samples=8, temperature=1.0, dt=0.01, horizon=4,
+            noise_sigma=[0.5, 0.5], seed=1, backend=bk,
+        )
+        with pytest.raises(ValueError, match="control dimension"):
+            ctrl.attach_plant(plant)
+
+    def test_mppi_tracking_with_x_ref(self, bk):
+        """With x_ref set, MPPI drives a plant toward the reference."""
+        from shinro.controllers.mppi import MPPIController
+        from shinro.plants.holonomicmobilerobot import HolonomicMobileRobot
+        plant = HolonomicMobileRobot(num_wheels=3, radius_robots=0.1, gamma=0.0, radius_wheels=0.03, dt=0.02, backend=bk)
+        Q = bk.array([10.0, 10.0, 10.0])
+        R = bk.array([0.1, 0.1, 0.1])
+        ctrl = MPPIController(
+            num_samples=50, temperature=1.0, dt=0.02, horizon=10,
+            noise_sigma=[2.0, 2.0, 2.0], seed=1, backend=bk,
+        )
+        ctrl.attach_plant(plant, Q=Q, R=R)
+        x_ref = bk.array([1.0, 0.0, 0.0])
+        x = bk.array([0.0, 0.0, 0.0])
+        for _ in range(300):
+            u = ctrl.compute(x, x_ref=x_ref)
+            # first-order integrator: state += u * dt (matches A=I, B=dt*I)
+            x = x + 0.02 * u
+        assert abs(_to_np(x, bk)[0] - 1.0) < 0.1
+
+    def test_mppi_torch_backend_batched_ops(self, bk):
+        """Torch + LTI plant: the rollout runs on torch tensors via batched matmul."""
+        pytest.importorskip("torch")
+        if not hasattr(bk, "torch"):
+            pytest.skip("requires TorchBackend")
+        from shinro.controllers.mppi import MPPIController
+        from shinro.plants.holonomicmobilerobot import HolonomicMobileRobot
+        plant = HolonomicMobileRobot(num_wheels=3, radius_robots=0.1, gamma=0.0, radius_wheels=0.03, dt=0.02, backend=bk)
+        ctrl = MPPIController(
+            num_samples=8, temperature=1.0, dt=0.02, horizon=4,
+            noise_sigma=[0.5, 0.5, 0.5], seed=1, backend=bk,
+        )
+        ctrl.attach_plant(plant)
+        u = ctrl.compute(bk.array([1.0, 2.0, 0.0]))
+        assert isinstance(u, bk.torch.Tensor)
+        # the batched dynamics runs a torch matmul: verify a known rollout
+        x = bk.array([[1.0, 2.0, 0.0], [0.0, 0.0, 0.0]])
+        u_b = bk.zeros((2, 3))
+        x_next = ctrl.dynamics_fn(x, u_b, 0.02)
+        assert isinstance(x_next, bk.torch.Tensor)
+        assert _to_np(x_next, bk).shape == (2, 3)

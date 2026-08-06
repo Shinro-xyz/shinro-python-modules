@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from shinro.components import Controller, Plant, StateEstimator, TrajectoryGenerator
+from shinro.controllers.mppi import MPPIController
 from shinro.factories.controller_factory import ControllerFactory
 from shinro.factories.estimator_factory import EstimatorFactory
 from shinro.factories.trajectory_factory import TrajectoryFactory
@@ -108,6 +109,13 @@ class ScenarioFactory:
         if "estimator" in self.config:
             estimator = _create(EstimatorFactory, self.config["estimator"]["config"])
 
+        # MPPI is function-based: its dynamics/cost are produced from the
+        # plant's model via a batched adapter, so it must be wired after the
+        # plant is built (this also sets its D_u for validation). Q/R come
+        # from the controller's own config.
+        if isinstance(controller, MPPIController):
+            controller.attach_plant(plant)
+
         if controller is not None and estimator is not None:
             n_x = plant.get_state().shape[0]
             _, B = plant.get_model()
@@ -164,3 +172,6 @@ class ScenarioFactory:
         ctrl_B = getattr(controller, "B", None)
         if ctrl_B is not None and ctrl_B.shape[1] != n_u:
             raise ValueError(f"Controller input dimension {ctrl_B.shape[1]} does not match plant input dimension {n_u}.")
+        ctrl_nu = getattr(controller, "D_u", None)
+        if ctrl_nu is not None and ctrl_nu != n_u:
+            raise ValueError(f"Controller input dimension {ctrl_nu} does not match plant input dimension {n_u}.")

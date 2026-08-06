@@ -168,7 +168,7 @@ class CartPole(Plant):
         x, x_dot, theta, theta_dot = state[0], state[1], state[2], state[3]
         F = control[0] if hasattr(control, '__len__') else control
         x_ddot, theta_ddot = self._compute_accels(x, theta, x_dot, theta_dot, F)
-        return self.bk.array([x_dot, x_ddot, theta_dot, theta_ddot])
+        return self.bk.stack([x_dot, x_ddot, theta_dot, theta_ddot])
 
     def step(self, u):
         """Execute one control step.

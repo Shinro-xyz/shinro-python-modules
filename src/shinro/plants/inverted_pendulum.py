@@ -124,7 +124,7 @@ class InvertedPendulum(Plant):
         theta, theta_dot = state[0], state[1]
         tau = control[0] if hasattr(control, '__len__') else control
         theta_ddot = (self.g / self.l) * self.bk.sin(theta) + tau / (self.m * self.l**2) - (self.b / (self.m * self.l**2)) * theta_dot
-        return self.bk.array([theta_dot, theta_ddot])
+        return self.bk.stack([theta_dot, theta_ddot])
 
     def step(self, u):
         """Execute one control step.
