@@ -183,8 +183,9 @@ class MPPIController(Controller):
         self.u += weighted_eps
 
         u_0 = self.u[0].copy()
-        self.u[:-1] = self.u[1:]
-        self.u[-1] = self.u[-2]
+        if self.K > 1:
+            self.u[:-1] = self.u[1:]
+            self.u[-1] = self.u[-2]
 
         if self.u_min is not None or self.u_max is not None:
             u_0 = np.clip(u_0, self.u_min, self.u_max)
