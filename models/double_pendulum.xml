@@ -1,0 +1,24 @@
+<mujoco model="double_pendulum">
+  <compiler angle="radian"/>
+  <option gravity="0 0 -9.81"/>
+  <worldbody>
+    <body name="link_1" pos="0 0 0">
+      <joint name="hinge_1" type="hinge" axis="0 1 0" damping="0.0" range="-3.14 3.14"/>
+      <geom type="capsule" fromto="0 0 0 0 0 0.5" size="0.02" mass="0.01"/>
+      <body name="mass_1" pos="0 0 0.5">
+        <geom type="sphere" size="0.05" mass="0.1"/>
+        <body name="link_2" pos="0 0 0">
+          <joint name="hinge_2" type="hinge" axis="0 1 0" damping="0.0" range="-3.14 3.14"/>
+          <geom type="capsule" fromto="0 0 0 0 0 0.5" size="0.02" mass="0.01"/>
+          <body name="mass_2" pos="0 0 0.5">
+            <geom type="sphere" size="0.05" mass="0.1"/>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  <actuator>
+    <motor name="torque_1" joint="hinge_1" gear="1" ctrlrange="-5 5"/>
+    <motor name="torque_2" joint="hinge_2" gear="1" ctrlrange="-5 5"/>
+  </actuator>
+</mujoco>
