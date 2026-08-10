@@ -13,4 +13,6 @@ class DoublePendulum(Plant):
         self.dt=dt
 
     def dynamics(self, state, control):
+        # state: angular velocity of rods 1 and 2 (w_1, w_2), angle of arms 1 and 2
+        theta_1,theta_2,omega_1,omega_2= state[0], state[1],state[2],state[3]
         
