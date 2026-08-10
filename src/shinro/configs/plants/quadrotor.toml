@@ -1,0 +1,22 @@
+# FILE: configs/plants/quadrotor.toml
+# Example config for the Quadrotor plant (placeholder).
+#
+# NOTE: The Quadrotor plant is NOT yet implemented — from_config raises
+# NotImplementedError. This config documents the intended parameter surface
+# (12D state [x, y, z, vx, vy, vz, roll, pitch, yaw, p, q, r], 4D control
+# [thrust, tx, ty, tz]) so the TOML contract is in place for the future port.
+#
+# Usage (once implemented):
+#   plant = _PLANT_REGISTRY["Quadrotor"].from_config(cfg)
+#   plant.step([9.81, 0.0, 0.0, 0.0])
+type = "Quadrotor"
+name = "quadrotor"
+
+# Physical parameters (SI units).
+mass = 0.5       # Total mass (kg)
+radius = 0.1     # Rotor-to-center distance (m)
+inertia = [0.005, 0.005, 0.01]  # Body-frame moments of inertia (kg*m^2)
+thrust_coeff = 1.0   # Thrust per unit of motor command
+torque_coeff = 0.1   # Torque per unit of motor command
+dt = 0.01        # Integration step (s)
+g = 9.81         # Gravitational acceleration (m/s^2)

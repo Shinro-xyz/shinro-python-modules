@@ -1,0 +1,34 @@
+# FILE: configs/plants/armrobot.toml
+# Example config for the ArmRobot plant (SO-ARM100 / LeKiwi arm, 6-DOF).
+#
+# This is a RobotSim [[plants]] entry: when consumed by RobotSim the
+# `joint_groups` and `engine` keys are injected by the sim factory, so a
+# standalone TOML only needs the arm-specific geometry/kinematics fields.
+#
+# Usage:
+#   from shinro.simulation.robotsim import RobotSim
+#   sim = RobotSim("configs/plants/armrobot.toml")  # arm + base via robot_config.toml
+#   sim.arm.step([dx, dy, dz, droll, dpitch, dyaw])
+type = "ArmRobot"
+name = "arm"
+num_dof = 6
+dt = 0.02
+
+# Name of the joint group in the [joint_groups] table (defined in robot_config.toml).
+joint_group = "arm_joints"
+
+# End-effector body used for mesh-accurate FK/IK via the physics engine.
+ee_body_name = "Moving_Jaw_08d-v1"
+
+# Rotation axis of each joint: "x", "y", or "z".
+rot_axes = ["y", "z", "z", "x", "z", "z"]
+
+# Per-joint link offset vectors (m) — one per DOF.
+joint_offsets = [
+  [0.018300, 0.030600, 0.052200],
+  [-0.001500, -0.114582, 0.018082],
+  [-0.001500, 0.132932, 0.028720],
+  [-0.020100, 0.025822, -0.055375],
+  [0.019800, 0.026631, -0.013098],
+  [0.0, 0.0, 0.0],
+]
