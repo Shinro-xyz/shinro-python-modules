@@ -4,13 +4,13 @@
   <worldbody>
     <body name="link_1" pos="0 0 0">
       <joint name="hinge_1" type="hinge" axis="0 1 0" damping="0.0" range="-3.14 3.14"/>
-      <geom type="capsule" fromto="0 0 0 0 0 0.5" size="0.02" mass="0.01"/>
-      <body name="mass_1" pos="0 0 0.5">
+      <geom type="capsule" fromto="0 0 0 0 0 -0.5" size="0.02" mass="0.01"/>
+      <body name="mass_1" pos="0 0 -0.5">
         <geom type="sphere" size="0.05" mass="0.1"/>
         <body name="link_2" pos="0 0 0">
           <joint name="hinge_2" type="hinge" axis="0 1 0" damping="0.0" range="-3.14 3.14"/>
-          <geom type="capsule" fromto="0 0 0 0 0 0.5" size="0.02" mass="0.01"/>
-          <body name="mass_2" pos="0 0 0.5">
+          <geom type="capsule" fromto="0 0 0 0 0 -0.5" size="0.02" mass="0.01"/>
+          <body name="mass_2" pos="0 0 -0.5">
             <geom type="sphere" size="0.05" mass="0.1"/>
           </body>
         </body>

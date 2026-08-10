@@ -10,8 +10,10 @@ class DoublePendulum(Plant):
 
     Models two point masses at the ends of two massless rods, hinged in
     series. The state is :math:`[\\theta_1, \\theta_2, \\omega_1, \\omega_2]`
-    (angle of each rod from upright and its angular velocity) and the control
-    is joint torques :math:`[\\tau_1, \\tau_2]` applied at each hinge.
+    (angle of each rod from the downward vertical and its angular velocity)
+    and the control is joint torques :math:`[\\tau_1, \\tau_2]` applied at
+    each hinge. The rest equilibrium :math:`\\theta=0` is stable (hanging
+    down).
 
     Supports two modes:
 
@@ -119,8 +121,7 @@ class DoublePendulum(Plant):
         """
         C = self.bk.zeros((2, 2))
         w_1, w_2 = angular_velocities[0], angular_velocities[1]
-        C[0, 0] = self.m2 * self.l1 * self.l2 * self.bk.sin(diff_theta) * w_2
-        C[0, 1] = C[0, 0]
+        C[0, 1] = self.m2 * self.l1 * self.l2 * self.bk.sin(diff_theta) * w_2
         C[1, 0] = -self.m2 * self.l2 * self.l1 * self.bk.sin(diff_theta) * w_1
         return C
 
@@ -163,7 +164,7 @@ class DoublePendulum(Plant):
         G = self._make_gravity_vector(self.bk.array([theta_1, theta_2]))
 
         tau = control if hasattr(control, '__len__') else self.bk.array([control, 0.0])
-        b = self.bk.array(tau) - C @ omega - G
+        b = tau - C @ omega - G
         thetaddot = self.bk.solve(M, b)
 
         return self.bk.stack([omega_1, omega_2, thetaddot[0], thetaddot[1]])

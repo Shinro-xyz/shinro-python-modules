@@ -316,6 +316,31 @@ class TestDoublePendulum:
         assert abs(_to_np(dx, bk)[2]) < 1e-8
         assert abs(_to_np(dx, bk)[3]) < 1e-8
 
+    def test_dynamics_coriolis_matches_closed_form(self, bk):
+        """At zero gravity and zero torque, thetaddot = -M^{-1} C omega.
+
+        Verifies the Coriolis matrix against the Euler-Lagrange velocity terms:
+        C omega = [m2 l1 l2 sin(dtheta) w2^2, -m2 l1 l2 sin(dtheta) w1^2].
+        Uses g=0 and tau=0 so only the Coriolis term contributes.
+        """
+        dp = self._make(bk)
+        m1, m2, l1, l2 = dp.m1, dp.m2, dp.l1, dp.l2
+        theta_1, theta_2, w_1, w_2 = 0.3, 0.1, 1.5, -0.7
+        dtheta = theta_1 - theta_2
+        dp.g = 0.0
+        M = np.array([
+            [(m1 + m2) * l1**2, m2 * l1 * l2 * np.cos(dtheta)],
+            [m2 * l1 * l2 * np.cos(dtheta), m2 * l2**2],
+        ])
+        C_omega = np.array([
+            m2 * l1 * l2 * np.sin(dtheta) * w_2**2,
+            -m2 * l1 * l2 * np.sin(dtheta) * w_1**2,
+        ])
+        expected_thetaddot = np.linalg.solve(M, -C_omega)
+        dx = dp.dynamics(bk.array([theta_1, theta_2, w_1, w_2]), bk.array([0.0, 0.0]))
+        assert np.allclose(_to_np(dx, bk)[2:], expected_thetaddot, atol=1e-9)
+        assert np.allclose(_to_np(dx, bk)[:2], [w_1, w_2], atol=1e-12)
+
     def test_get_model_shape(self, bk):
         dp = self._make(bk)
         A, B = dp.get_model()
