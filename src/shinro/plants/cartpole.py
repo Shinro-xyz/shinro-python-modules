@@ -1,5 +1,3 @@
-
-
 from shinro.components import PhysicsEngine, Plant
 from shinro.factories.registry import register_plant, register_plant_detector
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend
