@@ -1,8 +1,8 @@
 import numpy as np
-from torch import diff
 from shinro.components import Plant
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend
 from shinro.factories.registry import register_plant
+from shinro.utils.linearization import linearize_plant
 
 @register_plant("DoublePendulum")
 class DoublePendulum(Plant):
@@ -13,6 +13,7 @@ class DoublePendulum(Plant):
         self.l2=length_bottom
         self.dt=dt
         self.g:float=g
+        self.input_dim=2
 
     def _make_mass_matrix(self, diff_theta):
         M=np.zeros((2,2))
@@ -63,6 +64,9 @@ class DoublePendulum(Plant):
 
         return np.array([omega_1,omega_2,thetaddot[0],thetaddot[1]])
 
-    def get_model(self, x0=None, 
+    def get_model(self, x0=None, u0= None, eps=1e-6):
+        return linearize_plant(self, x0, u0, eps=eps)
+
+    def step(self,u):
         
         

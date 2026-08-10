@@ -1,9 +1,7 @@
-import numpy as np
-
 from shinro.components import PhysicsEngine, Plant
 from shinro.factories.registry import register_plant, register_plant_detector
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend
-from shinro.utils.linearization import linearize
+from shinro.utils.linearization import linearize_plant
 
 
 @register_plant("CartPole")
@@ -79,6 +77,7 @@ class CartPole(Plant):
         self.g = gravity
         self.dt = dt
         self.track_limits = track_limits
+        self.input_dim = 1
         self.state = self.bk.zeros(4)
         self._engine = None
 
@@ -123,8 +122,8 @@ class CartPole(Plant):
 
         Linearizes the continuous-time dynamics :math:`f(x, u) = \\dot{x}`
         around ``(x0, u0)`` using central finite differences via
-        :func:`shinro.utils.linearization.linearize`. When ``x0``/``u0`` are
-        omitted, defaults to the upright equilibrium
+        :func:`shinro.utils.linearization.linearize_plant`. When ``x0``/``u0``
+        are omitted, defaults to the upright equilibrium
         :math:`(x=0, \\dot{x}=0, \\theta=0, \\dot{\\theta}=0)` with zero
         control, matching the closed-form model previously returned.
 
@@ -137,27 +136,7 @@ class CartPole(Plant):
         Returns:
             Tuple of (A, B) where A = ∂f/∂x is (4, 4) and B = ∂f/∂u is (4, 1).
         """
-        x0 = x0 if x0 is not None else self.bk.zeros(4)
-        u0 = u0 if u0 is not None else self.bk.zeros(1)
-        return linearize(self._dynamics_np, x0, u0, self.bk, eps=eps)
-
-    def _dynamics_np(self, x, u):
-        """Backend-agnostic wrapper around :meth:`dynamics` for linearize().
-
-        The :func:`linearize` helper passes numpy arrays to ``f`` regardless
-        of the backend, so this converts to the backend's native type, calls
-        the dynamics, and converts the result back to numpy.
-
-        Args:
-            x: State (4,) as numpy array.
-            u: Control (1,) as numpy array.
-
-        Returns:
-            Time derivative of the state (4,) as numpy array.
-        """
-        x_b = self.bk.from_numpy(x)
-        u_b = self.bk.from_numpy(u)
-        return np.asarray(self.bk.to_numpy(self.dynamics(x_b, u_b)), dtype=np.float64)
+        return linearize_plant(self, x0, u0, eps=eps)
 
     def _compute_accels(self, x, theta, x_dot, theta_dot, F):
         """Compute the accelerations from the equations of motion.

@@ -1,11 +1,9 @@
 
 
-import numpy as np
-
 from shinro.components import PhysicsEngine, Plant
 from shinro.factories.registry import register_plant, register_plant_detector
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend
-from shinro.utils.linearization import linearize
+from shinro.utils.linearization import linearize_plant
 
 
 @register_plant("InvertedPendulum")
@@ -69,6 +67,7 @@ class InvertedPendulum(Plant):
         self.g = gravity
         self.dt = dt
         self.state_bounds = state_bounds
+        self.input_dim = 1
         self.state = self.bk.zeros(2)
         self._engine = None
 
@@ -110,8 +109,8 @@ class InvertedPendulum(Plant):
 
         Linearizes the continuous-time dynamics :math:`f(x, u) = \\dot{x}`
         around ``(x0, u0)`` using central finite differences via
-        :func:`shinro.utils.linearization.linearize`. When ``x0``/``u0`` are
-        omitted, defaults to the upright equilibrium
+        :func:`shinro.utils.linearization.linearize_plant`. When ``x0``/``u0``
+        are omitted, defaults to the upright equilibrium
         :math:`(\\theta=0, \\dot{\\theta}=0)` with zero control, matching the
         closed-form model previously returned.
 
@@ -124,27 +123,7 @@ class InvertedPendulum(Plant):
         Returns:
             Tuple of (A, B) where A = ∂f/∂x is (2, 2) and B = ∂f/∂u is (2, 1).
         """
-        x0 = x0 if x0 is not None else self.bk.zeros(2)
-        u0 = u0 if u0 is not None else self.bk.zeros(1)
-        return linearize(self._dynamics_np, x0, u0, self.bk, eps=eps)
-
-    def _dynamics_np(self, x, u):
-        """Backend-agnostic wrapper around :meth:`dynamics` for linearize().
-
-        The :func:`linearize` helper passes numpy arrays to ``f`` regardless
-        of the backend, so this converts to the backend's native type, calls
-        the dynamics, and converts the result back to numpy.
-
-        Args:
-            x: State (2,) as numpy array.
-            u: Control (1,) as numpy array.
-
-        Returns:
-            Time derivative of the state (2,) as numpy array.
-        """
-        x_b = self.bk.from_numpy(x)
-        u_b = self.bk.from_numpy(u)
-        return np.asarray(self.bk.to_numpy(self.dynamics(x_b, u_b)), dtype=np.float64)
+        return linearize_plant(self, x0, u0, eps=eps)
 
     def dynamics(self, state, control):
         """Continuous-time dynamics :math:`\\dot{x} = f(x, u)`.
