@@ -114,6 +114,38 @@ class TestInvertedPendulum:
         eigs = np.linalg.eigvals(_to_np(A, bk))
         assert np.any(np.real(eigs) > 0)
 
+    def test_get_model_upright_matches_analytic(self, bk):
+        """get_model() at default upright equals the closed-form Jacobians."""
+        from shinro.plants.inverted_pendulum import InvertedPendulum
+        pend = InvertedPendulum(mass=0.1, length=0.5, gravity=9.81, dt=0.01, backend=bk)
+        A, B = pend.get_model()
+        expected_A = np.array([
+            [0.0, 1.0],
+            [pend.g / pend.l, -pend.b / (pend.m * pend.l**2)],
+        ])
+        expected_B = np.array([[0.0], [1.0 / (pend.m * pend.l**2)]])
+        assert np.allclose(_to_np(A, bk), expected_A, atol=1e-6)
+        assert np.allclose(_to_np(B, bk), expected_B, atol=1e-6)
+
+    def test_get_model_default_matches_explicit_upright(self, bk):
+        """get_model() with no args equals get_model(zeros, zeros)."""
+        from shinro.plants.inverted_pendulum import InvertedPendulum
+        pend = InvertedPendulum(backend=bk)
+        A_default, B_default = pend.get_model()
+        A_explicit, B_explicit = pend.get_model(bk.zeros(2), bk.zeros(1))
+        assert np.allclose(_to_np(A_default, bk), _to_np(A_explicit, bk), atol=1e-12)
+        assert np.allclose(_to_np(B_default, bk), _to_np(B_explicit, bk), atol=1e-12)
+
+    def test_get_model_nonzero_point(self, bk):
+        """Linearization at a non-upright point differs from the upright model."""
+        from shinro.plants.inverted_pendulum import InvertedPendulum
+        pend = InvertedPendulum(mass=0.1, length=0.5, gravity=9.81, dt=0.01, backend=bk)
+        A_upright, _ = pend.get_model()
+        A_off, B_off = pend.get_model(bk.array([0.5, 0.0]), bk.zeros(1))
+        assert _to_np(A_off, bk).shape == (2, 2)
+        assert _to_np(B_off, bk).shape == (2, 1)
+        assert not np.allclose(_to_np(A_off, bk), _to_np(A_upright, bk), atol=1e-6)
+
     def test_state_bounds(self, bk):
         from shinro.plants.inverted_pendulum import InvertedPendulum
         lo = bk.array([-1.0, -5.0])
@@ -172,6 +204,41 @@ class TestCartPole:
         A, _ = cp.get_model()
         eigs = np.linalg.eigvals(_to_np(A, bk))
         assert np.any(np.real(eigs) > 0)
+
+    def test_get_model_upright_matches_analytic(self, bk):
+        """get_model() at default upright equals the closed-form Jacobians."""
+        from shinro.plants.cartpole import CartPole
+        cp = CartPole(cart_mass=0.5, pole_mass=0.1, pole_length=0.5, gravity=9.81, dt=0.01, backend=bk)
+        M, m, pole_len, g, b = cp.M, cp.m, cp.l, cp.g, cp.b
+        A, B = cp.get_model()
+        expected_A = np.array([
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, -m * g / M, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+            [0.0, 0.0, (M + m) * g / (M * pole_len), -b / (M * pole_len**2)],
+        ])
+        expected_B = np.array([[0.0], [1.0 / M], [0.0], [-1.0 / (M * pole_len)]])
+        assert np.allclose(_to_np(A, bk), expected_A, atol=1e-6)
+        assert np.allclose(_to_np(B, bk), expected_B, atol=1e-6)
+
+    def test_get_model_default_matches_explicit_upright(self, bk):
+        """get_model() with no args equals get_model(zeros, zeros)."""
+        from shinro.plants.cartpole import CartPole
+        cp = CartPole(backend=bk)
+        A_default, B_default = cp.get_model()
+        A_explicit, B_explicit = cp.get_model(bk.zeros(4), bk.zeros(1))
+        assert np.allclose(_to_np(A_default, bk), _to_np(A_explicit, bk), atol=1e-12)
+        assert np.allclose(_to_np(B_default, bk), _to_np(B_explicit, bk), atol=1e-12)
+
+    def test_get_model_nonzero_point(self, bk):
+        """Linearization at a non-upright point differs from the upright model."""
+        from shinro.plants.cartpole import CartPole
+        cp = CartPole(cart_mass=0.5, pole_mass=0.1, pole_length=0.5, gravity=9.81, dt=0.01, backend=bk)
+        A_upright, _ = cp.get_model()
+        A_off, B_off = cp.get_model(bk.array([0.0, 0.0, 0.1, 0.0]), bk.zeros(1))
+        assert _to_np(A_off, bk).shape == (4, 4)
+        assert _to_np(B_off, bk).shape == (4, 1)
+        assert not np.allclose(_to_np(A_off, bk), _to_np(A_upright, bk), atol=1e-6)
 
     def test_track_limits(self, bk):
         from shinro.plants.cartpole import CartPole

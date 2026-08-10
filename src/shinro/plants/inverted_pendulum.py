@@ -1,8 +1,11 @@
 
 
+import numpy as np
+
 from shinro.components import PhysicsEngine, Plant
 from shinro.factories.registry import register_plant, register_plant_detector
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend
+from shinro.utils.linearization import linearize
 
 
 @register_plant("InvertedPendulum")
@@ -27,8 +30,10 @@ class InvertedPendulum(Plant):
         \\ddot{\\theta} = \\frac{g}{l} \\sin(\\theta)
         + \\frac{\\tau}{m l^2} - \\frac{b}{m l^2} \\dot{\\theta}
 
-    The linearized model around the upright equilibrium
-    :math:`(\\theta=0, \\dot{\\theta}=0)` is:
+    The linearized model is computed about an operating point supplied to
+    :meth:`get_model`, defaulting to the upright equilibrium
+    :math:`(\\theta=0, \\dot{\\theta}=0)` where the continuous-time Jacobians
+    are:
 
     .. math::
 
@@ -100,16 +105,46 @@ class InvertedPendulum(Plant):
             return self.bk.array([qpos, qvel])
         return self.bk.copy(self.state)
 
-    def get_model(self):
-        """Get the linearized discrete-time state-space model.
+    def get_model(self, x0=None, u0=None, eps=1e-6):
+        """Get the linearized state-space model around an operating point.
+
+        Linearizes the continuous-time dynamics :math:`f(x, u) = \\dot{x}`
+        around ``(x0, u0)`` using central finite differences via
+        :func:`shinro.utils.linearization.linearize`. When ``x0``/``u0`` are
+        omitted, defaults to the upright equilibrium
+        :math:`(\\theta=0, \\dot{\\theta}=0)` with zero control, matching the
+        closed-form model previously returned.
+
+        Args:
+            x0: Operating point state (2,) — [theta, theta_dot].
+                Defaults to zeros (upright equilibrium).
+            u0: Operating point control (1,) — [tau]. Defaults to zeros.
+            eps: Step size for finite differences.
 
         Returns:
-            Tuple of (A, B) where A is (2, 2) and B is (2, 1).
+            Tuple of (A, B) where A = ∂f/∂x is (2, 2) and B = ∂f/∂u is (2, 1).
         """
-        g, pole_len, b, m = self.g, self.l, self.b, self.m
-        A = self.bk.array([[0.0, 1.0], [g / pole_len, -b / (m * pole_len**2)]])
-        B = self.bk.array([[0.0], [1.0 / (m * pole_len**2)]])
-        return A, B
+        x0 = x0 if x0 is not None else self.bk.zeros(2)
+        u0 = u0 if u0 is not None else self.bk.zeros(1)
+        return linearize(self._dynamics_np, x0, u0, self.bk, eps=eps)
+
+    def _dynamics_np(self, x, u):
+        """Backend-agnostic wrapper around :meth:`dynamics` for linearize().
+
+        The :func:`linearize` helper passes numpy arrays to ``f`` regardless
+        of the backend, so this converts to the backend's native type, calls
+        the dynamics, and converts the result back to numpy.
+
+        Args:
+            x: State (2,) as numpy array.
+            u: Control (1,) as numpy array.
+
+        Returns:
+            Time derivative of the state (2,) as numpy array.
+        """
+        x_b = self.bk.from_numpy(x)
+        u_b = self.bk.from_numpy(u)
+        return np.asarray(self.bk.to_numpy(self.dynamics(x_b, u_b)), dtype=np.float64)
 
     def dynamics(self, state, control):
         """Continuous-time dynamics :math:`\\dot{x} = f(x, u)`.

@@ -3,27 +3,16 @@ from shinro.components import Plant
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend
 from shinro.factories.registry import register_plant
 
-@register_plant( "DoublePendulum")
+@register_plant("DoublePendulum")
 class DoublePendulum(Plant):
     def __init__(self,
-        m1: float,
-        m2:float,
-        l1: float,
-        l2: float,
-        dt:float)
-        pass
-
-    def get_model(self, *args: Any, **kwargs: Any) -> Any:
-        return super().get_model(*args, **kwargs)
-
-    def get_state(self, *args: Any, **kwargs: Any) -> Any:
-        return super().get_state(*args, **kwargs)
-
-    def dynamics(self, state: Any, control: Any) -> Any:
-        return super().dynamics(state, control)
-
-    def step(self, *args: Any, **kwargs: Any) -> Any:
-        return super().step(*args, **kwargs)
-
-    
-    
+    mass_top:float,
+    mass_bottom:float,
+    length_top:float,
+    length_bottom:float,
+    dt:float):
+        self.m1=mass_top
+        self.m2=mass_bottom
+        self.l1=length_top
+        self.l2=length_bottom
+        self.dt=dt
