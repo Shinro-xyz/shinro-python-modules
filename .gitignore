@@ -224,3 +224,6 @@ __marimo__/
 
 # local codebase index (built by git hook, not committed)
 .codebase/
+
+# opencode-mem preseed (ephemeral, regenerate per-repo)
+lab-notes/memories.json
