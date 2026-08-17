@@ -1,0 +1,24 @@
+# FILE: configs/plants/double_pendulum.toml
+# Example config for the DoublePendulum plant — 4D state [theta1, theta2, w1, w2],
+# 2D torque control [tau1, tau2]. Consumed by DoublePendulum.from_config().
+#
+# Usage:
+#   from shinro.factories.registry import _PLANT_REGISTRY
+#   plant = _PLANT_REGISTRY["DoublePendulum"].from_config(cfg)
+#   plant.step([0.1, 0.1])
+type = "DoublePendulum"
+name = "double_pendulum"
+
+# Physical parameters (SI units).
+mass_top = 0.1      # Top bob mass (kg)
+mass_bottom = 0.1   # Bottom bob mass (kg)
+length_top = 0.5    # Top rod length (m)
+length_bottom = 0.5 # Bottom rod length (m)
+dt = 0.01           # Integration step (s)
+g = 9.81            # Gravitational acceleration (m/s^2)
+
+# Optional state clipping bounds: [theta1, theta2, omega1, omega2].
+# Omit for unbounded integration.
+[state_bounds]
+min = [-3.14, -3.14, -10.0, -10.0]
+max = [3.14, 3.14, 10.0, 10.0]

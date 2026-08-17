@@ -643,3 +643,307 @@ class TestSMC:
         assert ctrl.k2 == 0.5
         assert ctrl.alpha == 0.3
         assert ctrl._smoother_name == "tanh"
+
+
+class TestMPPI:
+    """Verify MPPI: softmax weighting, control penalty, receding-horizon shift, and from_config."""
+
+    def _ctrl(self, bk, **kwargs):
+        """Build a minimal MPPI controller with identity dynamics and quadratic cost."""
+        from shinro.controllers.mppi import MPPIController
+        params = dict(
+            dynamics_fn=lambda x, u, dt: bk.copy(x),
+            cost_fn=lambda x, u: bk.sum(u**2, axis=1),
+            num_samples=8,
+            temperature=1.0,
+            dt=0.1,
+            horizon=4,
+            noise_sigma=[0.5],
+            seed=1,
+            backend=bk,
+        )
+        params.update(kwargs)
+        return MPPIController(**params)
+
+    def test_mppi_construction_validation(self, bk):
+        """Invalid constructor parameters raise ValueError."""
+        from shinro.controllers.mppi import MPPIController
+        with pytest.raises(ValueError, match="num_samples"):
+            MPPIController(num_samples=0, backend=bk)
+        with pytest.raises(ValueError, match="temperature"):
+            MPPIController(temperature=0.0, backend=bk)
+        with pytest.raises(ValueError, match="horizon"):
+            MPPIController(horizon=-1, backend=bk)
+        with pytest.raises(ValueError, match="dt"):
+            MPPIController(dt=0.0, backend=bk)
+
+    def test_mppi_compute_shape(self, bk):
+        """compute() returns a control vector of dimension D_u."""
+        ctrl = self._ctrl(bk, noise_sigma=[0.5, 0.5])
+        u = ctrl.compute(bk.array([1.0, 2.0]))
+        assert _to_np(u, bk).shape == (2,)
+
+    def test_mppi_compute_requires_callables(self, bk):
+        """compute() without injected dynamics/cost raises RuntimeError."""
+        from shinro.controllers.mppi import MPPIController
+        ctrl = MPPIController(
+            num_samples=5, temperature=1.0, dt=0.1, horizon=3,
+            noise_sigma=[0.5], backend=bk,
+        )
+        with pytest.raises(RuntimeError, match="dynamics_fn and cost_fn"):
+            ctrl.compute(bk.array([0.0]))
+
+    def test_mppi_compute_respects_bounds(self, bk):
+        """The returned action stays within [u_min, u_max] even under large noise."""
+        bound = 0.5
+        ctrl = self._ctrl(bk, num_samples=20, noise_sigma=[5.0], u_min=[-bound], u_max=[bound])
+        u = ctrl.compute(bk.array([5.0, 5.0]))
+        assert abs(_to_np(u, bk)[0]) <= bound + 1e-9
+
+    def test_mppi_softmax_weights_analytical(self, bk):
+        """The applied update equals the analytic softmax-weighted average of perturbations.
+
+        With K=1, identity dynamics, nominal u=0 (first call), and cost x -> u^2,
+        the total cost of rollout i is exactly epsilon_i^2 (the control penalty
+        vanishes because u=0). The returned action must equal
+        sum_i w_i * eps_i with w_i = softmax(-costs/lambda).
+        """
+        N, K = 8, 1
+        ctrl = self._ctrl(bk, num_samples=N, horizon=K, noise_sigma=[1.0], seed=123)
+        u = ctrl.compute(bk.array([0.0, 0.0]))
+        eps = ctrl._last_epsilon[:, 0, 0]
+        costs = eps**2
+        beta = costs.min()
+        w = np.exp(-(costs - beta) / ctrl.lam)
+        w /= w.sum()
+        expected_u0 = np.sum(w * eps)
+        assert np.allclose(_to_np(u, bk)[0], expected_u0, atol=1e-10)
+
+    def test_mppi_control_penalty_term(self, bk):
+        """With zero stage cost, the rollout cost equals the variance-weighted control penalty.
+
+        For a non-zero nominal sequence and cost_fn = 0, the total cost of
+        rollout i reduces to exactly lam * sum_k u_k^T Sigma^{-1} eps_{i,k}.
+        """
+        N, K = 5, 1
+        ctrl = self._ctrl(
+            bk,
+            num_samples=N,
+            horizon=K,
+            noise_sigma=[0.5],
+            temperature=2.0,
+            seed=7,
+            cost_fn=lambda x, u: bk.zeros(x.shape[0]),
+        )
+        ctrl.u = np.array([[2.0]])
+        ctrl.compute(bk.array([0.0, 0.0]))
+        eps = ctrl._last_epsilon[:, 0, 0]
+        expected = ctrl.lam * (2.0 / (0.5**2)) * eps
+        assert np.allclose(ctrl._last_costs, expected, atol=1e-10)
+
+    def test_mppi_first_action_equals_u0(self, bk):
+        """The returned action is the first element of the updated nominal sequence."""
+        ctrl = self._ctrl(bk, horizon=3)
+        ctrl.u = np.arange(3, dtype=np.float64).reshape(3, 1) * 0.5
+        u_before = ctrl.u.copy()
+        u0 = ctrl.compute(bk.array([0.0, 0.0]))
+        eps = ctrl._last_epsilon
+        costs = ctrl._last_costs
+        beta = costs.min()
+        w = np.exp(-(costs - beta) / ctrl.lam)
+        w /= w.sum()
+        weighted_eps = np.sum(w[:, np.newaxis, np.newaxis] * eps, axis=0)
+        updated = u_before + weighted_eps
+        assert np.allclose(_to_np(u0, bk)[0], updated[0, 0], atol=1e-10)
+
+    def test_mppi_nominal_sequence_shift(self, bk):
+        """After compute, the nominal sequence is shifted left with the last step duplicated."""
+        K = 3
+        ctrl = self._ctrl(bk, horizon=K)
+        ctrl.u = np.arange(K, dtype=np.float64).reshape(K, 1) * 0.5
+        u_before = ctrl.u.copy()
+        ctrl.compute(bk.array([0.0, 0.0]))
+        eps = ctrl._last_epsilon
+        costs = ctrl._last_costs
+        beta = costs.min()
+        w = np.exp(-(costs - beta) / ctrl.lam)
+        w /= w.sum()
+        weighted_eps = np.sum(w[:, np.newaxis, np.newaxis] * eps, axis=0)
+        updated = u_before + weighted_eps
+        expected_shift = np.concatenate([updated[1:], updated[-1:]])
+        assert np.allclose(ctrl.u, expected_shift, atol=1e-10)
+
+    def test_mppi_bounds_clamp_in_rollout(self, bk):
+        """The cost function never observes a control outside the configured bounds."""
+        bound = 0.3
+        seen = {"max": 0.0}
+
+        def cost_fn(x, u):
+            seen["max"] = max(seen["max"], float(np.max(np.abs(_to_np(u, bk)))))
+            return bk.zeros(x.shape[0])
+
+        ctrl = self._ctrl(bk, num_samples=6, horizon=4, noise_sigma=[5.0], u_min=[-bound], u_max=[bound])
+        ctrl.cost_fn = cost_fn
+        ctrl.compute(bk.array([0.0, 0.0]))
+        assert seen["max"] <= bound + 1e-12
+
+    def test_mppi_regulation_to_zero(self, bk):
+        """MPPI drives a first-order integrator plant to the origin under a quadratic cost."""
+        dt = 0.01
+
+        def dynamics(x, u, dt):
+            return x + dt * u
+
+        def cost(x, u):
+            return bk.sum(x**2, axis=1) + 0.1 * bk.sum(u**2, axis=1)
+
+        ctrl = self._ctrl(
+            bk,
+            dynamics_fn=dynamics,
+            cost_fn=cost,
+            num_samples=300,
+            temperature=2.0,
+            dt=dt,
+            horizon=30,
+            noise_sigma=[2.0],
+            u_min=[-10.0],
+            u_max=[10.0],
+        )
+        x = np.array([1.0])
+        for _ in range(1500):
+            u = ctrl.compute(bk.from_numpy(x))
+            x = x + dt * _to_np(u, bk)[0]
+        assert abs(x[0]) < 0.05
+
+    def test_mppi_reset_clears_nominal_sequence(self, bk):
+        """reset() zeros the nominal sequence and clears last-sample bookkeeping."""
+        ctrl = self._ctrl(bk)
+        ctrl.compute(bk.array([1.0, 1.0]))
+        ctrl.reset()
+        assert np.allclose(ctrl.u, 0.0)
+        assert ctrl._last_epsilon is None
+        assert ctrl._last_costs is None
+
+    def test_mppi_from_config(self, bk):
+        """from_config creates a valid MPPI controller with callables injected later."""
+        config = {
+            "num_samples": 50,
+            "temperature": 2.0,
+            "dt": 0.02,
+            "horizon": 8,
+            "noise_sigma": [0.4, 0.4],
+            "u_min": [-1.0, -1.0],
+            "u_max": [1.0, 1.0],
+            "seed": 11,
+        }
+        from shinro.controllers.mppi import MPPIController
+        ctrl = MPPIController.from_config(config, backend=bk)
+        assert ctrl.N == 50
+        assert ctrl.K == 8
+        assert ctrl.lam == 2.0
+        assert ctrl.D_u == 2
+        assert ctrl.dynamics_fn is None
+        assert ctrl.cost_fn is None
+
+    def test_mppi_seed_reproducibility(self, bk):
+        """The same seed produces identical control actions across instances."""
+        def make():
+            return self._ctrl(bk, seed=42)
+
+        c1 = make()
+        c2 = make()
+        u1 = c1.compute(bk.array([1.0, 2.0]))
+        u2 = c2.compute(bk.array([1.0, 2.0]))
+        assert np.allclose(_to_np(u1, bk), _to_np(u2, bk), atol=1e-12)
+
+    def test_mppi_torch_backend(self, bk):
+        """The torch backend accepts torch inputs and returns torch tensors."""
+        pytest.importorskip("torch")
+        if not hasattr(bk, "torch"):
+            pytest.skip("requires TorchBackend")
+        ctrl = self._ctrl(bk)
+        x0 = bk.array([1.0, 2.0])
+        assert isinstance(x0, bk.torch.Tensor)
+        u = ctrl.compute(x0)
+        assert isinstance(u, bk.torch.Tensor)
+        assert _to_np(u, bk).shape == (1,)
+
+    def test_mppi_attach_plant_lti(self, bk):
+        """attach_plant wires an LTI plant's dynamics/cost into the controller."""
+        from shinro.controllers.mppi import MPPIController
+        from shinro.plants.holonomicmobilerobot import HolonomicMobileRobot
+        plant = HolonomicMobileRobot(num_wheels=3, radius_robots=0.1, gamma=0.0, radius_wheels=0.03, dt=0.02, backend=bk)
+        ctrl = MPPIController(
+            num_samples=8, temperature=1.0, dt=0.02, horizon=4,
+            noise_sigma=[0.5, 0.5, 0.5], seed=1, backend=bk,
+        )
+        ctrl.attach_plant(plant)
+        u = ctrl.compute(bk.array([1.0, 2.0, 0.0]))
+        assert _to_np(u, bk).shape == (3,)
+
+    def test_mppi_attach_plant_nonlinear(self, bk):
+        """attach_plant wires a nonlinear plant's dynamics/cost into the controller."""
+        from shinro.controllers.mppi import MPPIController
+        from shinro.plants.inverted_pendulum import InvertedPendulum
+        plant = InvertedPendulum(backend=bk)
+        ctrl = MPPIController(
+            num_samples=8, temperature=1.0, dt=0.01, horizon=4,
+            noise_sigma=[0.5], seed=1, backend=bk,
+        )
+        ctrl.attach_plant(plant)
+        u = ctrl.compute(bk.array([0.1, 0.0]))
+        assert _to_np(u, bk).shape == (1,)
+
+    def test_mppi_attach_plant_dimension_mismatch(self, bk):
+        """attach_plant raises when the plant control dim disagrees with noise_sigma."""
+        from shinro.controllers.mppi import MPPIController
+        from shinro.plants.inverted_pendulum import InvertedPendulum
+        plant = InvertedPendulum(backend=bk)
+        ctrl = MPPIController(
+            num_samples=8, temperature=1.0, dt=0.01, horizon=4,
+            noise_sigma=[0.5, 0.5], seed=1, backend=bk,
+        )
+        with pytest.raises(ValueError, match="control dimension"):
+            ctrl.attach_plant(plant)
+
+    def test_mppi_tracking_with_x_ref(self, bk):
+        """With x_ref set, MPPI drives a plant toward the reference."""
+        from shinro.controllers.mppi import MPPIController
+        from shinro.plants.holonomicmobilerobot import HolonomicMobileRobot
+        plant = HolonomicMobileRobot(num_wheels=3, radius_robots=0.1, gamma=0.0, radius_wheels=0.03, dt=0.02, backend=bk)
+        Q = bk.array([10.0, 10.0, 10.0])
+        R = bk.array([0.1, 0.1, 0.1])
+        ctrl = MPPIController(
+            num_samples=50, temperature=1.0, dt=0.02, horizon=10,
+            noise_sigma=[2.0, 2.0, 2.0], seed=1, backend=bk,
+        )
+        ctrl.attach_plant(plant, Q=Q, R=R)
+        x_ref = bk.array([1.0, 0.0, 0.0])
+        x = bk.array([0.0, 0.0, 0.0])
+        for _ in range(300):
+            u = ctrl.compute(x, x_ref=x_ref)
+            # first-order integrator: state += u * dt (matches A=I, B=dt*I)
+            x = x + 0.02 * u
+        assert abs(_to_np(x, bk)[0] - 1.0) < 0.1
+
+    def test_mppi_torch_backend_batched_ops(self, bk):
+        """Torch + LTI plant: the rollout runs on torch tensors via batched matmul."""
+        pytest.importorskip("torch")
+        if not hasattr(bk, "torch"):
+            pytest.skip("requires TorchBackend")
+        from shinro.controllers.mppi import MPPIController
+        from shinro.plants.holonomicmobilerobot import HolonomicMobileRobot
+        plant = HolonomicMobileRobot(num_wheels=3, radius_robots=0.1, gamma=0.0, radius_wheels=0.03, dt=0.02, backend=bk)
+        ctrl = MPPIController(
+            num_samples=8, temperature=1.0, dt=0.02, horizon=4,
+            noise_sigma=[0.5, 0.5, 0.5], seed=1, backend=bk,
+        )
+        ctrl.attach_plant(plant)
+        u = ctrl.compute(bk.array([1.0, 2.0, 0.0]))
+        assert isinstance(u, bk.torch.Tensor)
+        # the batched dynamics runs a torch matmul: verify a known rollout
+        x = bk.array([[1.0, 2.0, 0.0], [0.0, 0.0, 0.0]])
+        u_b = bk.zeros((2, 3))
+        x_next = ctrl.dynamics_fn(x, u_b, 0.02)
+        assert isinstance(x_next, bk.torch.Tensor)
+        assert _to_np(x_next, bk).shape == (2, 3)

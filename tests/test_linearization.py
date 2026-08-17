@@ -396,3 +396,96 @@ class TestJacobianEdgeCases:
             return np.array([x[0]**2])
         J = self.bk.jacobian(f, self.bk.array([1.0]), eps=1e-12)
         assert np.allclose(J, [[2.0]], atol=1e-3)
+
+
+class TestAsNumpyF:
+    """Verify as_numpy_f bridges backend-bound f(x, u) into numpy I/O."""
+
+    def test_numpy_backend_passthrough(self):
+        """Wrapping a numpy f with NumpyBackend is a passthrough."""
+        from shinro.utils.linearization import as_numpy_f
+        bk = NumpyBackend()
+        def f(x, u):
+            return np.array([x[0] + u[0], x[1]])
+        f_np = as_numpy_f(f, bk)
+        out = f_np(np.array([1.0, 2.0]), np.array([3.0]))
+        assert isinstance(out, np.ndarray)
+        assert out.dtype == np.float64
+        assert np.allclose(out, [4.0, 2.0])
+
+    def test_torch_backend_round_trip(self):
+        """Inner f returns torch tensors; wrapper accepts numpy, returns float64 numpy."""
+        pytest.importorskip("torch")
+        from shinro.utils.array_backend import TorchBackend
+        from shinro.utils.linearization import as_numpy_f
+        bk = TorchBackend(device="cpu")
+        def f(x, u):
+            return bk.stack([x[0] + u[0], x[1]])
+        f_np = as_numpy_f(f, bk)
+        out = f_np(np.array([1.0, 2.0]), np.array([3.0]))
+        assert isinstance(out, np.ndarray)
+        assert out.dtype == np.float64
+        assert np.allclose(out, [4.0, 2.0])
+
+
+class _StubPlant:
+    """Minimal Plant-like object for testing linearize_plant without the ABC."""
+
+    def __init__(self, bk, input_dim=None, state_dim=2):
+        self.bk = bk
+        self.input_dim = input_dim
+        self._state_dim = state_dim
+
+    def get_state(self):
+        return self.bk.zeros(self._state_dim)
+
+    def dynamics(self, state, control):
+        x_b = self.bk.from_numpy(np.asarray(state, dtype=np.float64))
+        u_b = self.bk.from_numpy(np.asarray(control, dtype=np.float64))
+        return self.bk.stack([x_b[1], u_b[0]])
+
+
+class TestLinearizePlant:
+    """Verify linearize_plant resolves defaults and bridges plant.dynamics."""
+
+    def test_cartpole_upright_matches_analytic(self, bk):
+        """linearize_plant(CartPole) matches the closed-form upright Jacobians."""
+        from shinro.plants.cartpole import CartPole
+        from shinro.utils.linearization import linearize_plant
+        cp = CartPole(cart_mass=0.5, pole_mass=0.1, pole_length=0.5, gravity=9.81, dt=0.01, backend=bk)
+        M, m, pole_len, g, b = cp.M, cp.m, cp.l, cp.g, cp.b
+        A, B = linearize_plant(cp)
+        expected_A = np.array([
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, -m * g / M, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+            [0.0, 0.0, (M + m) * g / (M * pole_len), -b / (M * pole_len**2)],
+        ])
+        expected_B = np.array([[0.0], [1.0 / M], [0.0], [-1.0 / (M * pole_len)]])
+        assert np.allclose(_to_np(A, bk), expected_A, atol=1e-6)
+        assert np.allclose(_to_np(B, bk), expected_B, atol=1e-6)
+
+    def test_defaults_match_explicit(self, bk):
+        """linearize_plant(plant) equals linearize_plant(plant, zeros, zeros)."""
+        from shinro.plants.cartpole import CartPole
+        from shinro.utils.linearization import linearize_plant
+        cp = CartPole(backend=bk)
+        A_default, B_default = linearize_plant(cp)
+        A_explicit, B_explicit = linearize_plant(cp, bk.zeros(4), bk.zeros(1))
+        assert np.allclose(_to_np(A_default, bk), _to_np(A_explicit, bk), atol=1e-12)
+        assert np.allclose(_to_np(B_default, bk), _to_np(B_explicit, bk), atol=1e-12)
+
+    def test_raises_when_input_dim_unset(self, bk):
+        """linearize_plant raises ValueError when input_dim is None and u0 not passed."""
+        from shinro.utils.linearization import linearize_plant
+        plant = _StubPlant(bk, input_dim=None)
+        with pytest.raises(ValueError, match="input_dim"):
+            linearize_plant(plant)
+
+    def test_uses_input_dim_for_u0_default(self, bk):
+        """u0 defaults to zeros(input_dim); B has shape (state_dim, input_dim)."""
+        from shinro.utils.linearization import linearize_plant
+        plant = _StubPlant(bk, input_dim=3, state_dim=2)
+        A, B = linearize_plant(plant)
+        assert _to_np(A, bk).shape == (2, 2)
+        assert _to_np(B, bk).shape == (2, 3)

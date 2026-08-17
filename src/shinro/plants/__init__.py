@@ -9,12 +9,14 @@ Available plants:
     HolonomicMobileRobot   — N-wheel holonomic base with omni-wheel kinematics
     InvertedPendulum       — 2D inverted pendulum with analytical dynamics
     CartPole               — 4D cart-pole with coupled dynamics
+    DoublePendulum         — 4D planar double pendulum with analytical dynamics
     Quadrotor              — 12D quadrotor (placeholder)
 """
 from .armrobot import ArmRobot
 from .cartpole import CartPole
+from .double_pendulum import DoublePendulum
 from .holonomicmobilerobot import HolonomicMobileRobot
 from .inverted_pendulum import InvertedPendulum
 from .quadrotor import Quadrotor
 
-__all__ = ["ArmRobot", "HolonomicMobileRobot", "InvertedPendulum", "CartPole", "Quadrotor"]
+__all__ = ["ArmRobot", "HolonomicMobileRobot", "InvertedPendulum", "CartPole", "DoublePendulum", "Quadrotor"]

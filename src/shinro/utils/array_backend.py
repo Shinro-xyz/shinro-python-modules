@@ -182,6 +182,10 @@ class ArrayBackend(ABC):
         ...
 
     @abstractmethod
+    def stack(self, arrays) -> Any:
+        ...
+
+    @abstractmethod
     def block(self, blocks) -> Any:
         ...
 
@@ -339,6 +343,9 @@ class NumpyBackend(ArrayBackend):
 
     def hstack(self, arrays):
         return np.hstack(arrays)
+
+    def stack(self, arrays):
+        return np.stack(arrays)
 
     def block(self, blocks):
         return np.block(blocks)
@@ -520,6 +527,9 @@ class TorchBackend(ArrayBackend):
 
     def hstack(self, arrays):
         return self.torch.hstack(arrays)
+
+    def stack(self, arrays):
+        return self.torch.stack(arrays)
 
     def block(self, blocks):
         rows = [self.torch.cat(row, dim=1) for row in blocks]

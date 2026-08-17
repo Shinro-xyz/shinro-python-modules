@@ -1,7 +1,7 @@
 .PHONY: test test-quick test-functional test-all test-integration lint install build \
 	release-patch release-minor release-major \
 	test-controllers test-estimators test-plants test-trajectories test-armrobot \
-	test-components test-array-backend test-controllability test-factories \
+	test-components test-array-backend test-batched-adapter test-controllability test-factories \
 	test-linearization test-adversarial test-mcp-server test-mcp-functional
 
 # Install the package in editable mode
@@ -48,7 +48,7 @@ test:
 
 # Run only unit tests (fast)
 test-quick:
-	python3 -m pytest tests/test_mcp_server.py tests/test_controllers.py tests/test_estimators.py tests/test_trajectories.py tests/test_plants.py tests/test_factories.py tests/test_components.py tests/test_array_backend.py tests/test_controllability_checker.py -v --tb=short
+	python3 -m pytest tests/test_mcp_server.py tests/test_controllers.py tests/test_estimators.py tests/test_trajectories.py tests/test_plants.py tests/test_factories.py tests/test_components.py tests/test_array_backend.py tests/test_batched_adapter.py tests/test_controllability_checker.py -v --tb=short
 
 # Run only functional tests (spawns real server)
 test-functional:
@@ -88,6 +88,9 @@ test-components:
 
 test-array-backend:
 	python3 -m pytest tests/test_array_backend.py -v --tb=short
+
+test-batched-adapter:
+	python3 -m pytest tests/test_batched_adapter.py -v --tb=short
 
 test-controllability:
 	python3 -m pytest tests/test_controllability_checker.py -v --tb=short

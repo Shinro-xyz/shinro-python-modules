@@ -1,8 +1,7 @@
-
-
 from shinro.components import PhysicsEngine, Plant
 from shinro.factories.registry import register_plant, register_plant_detector
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend
+from shinro.utils.linearization import linearize_plant
 
 
 @register_plant("CartPole")
@@ -32,8 +31,10 @@ class CartPole(Plant):
         \\ddot{x} = \\frac{F + m l \\left(\\dot{\\theta}^2 \\sin\\theta -
         \\ddot{\\theta} \\cos\\theta\\right)}{M + m}
 
-    The linearized model around the upright equilibrium
-    :math:`(x=0, \\dot{x}=0, \\theta=0, \\dot{\\theta}=0)` is:
+    The linearized model is computed about an operating point supplied to
+    :meth:`get_model`, defaulting to the upright equilibrium
+    :math:`(x=0, \\dot{x}=0, \\theta=0, \\dot{\\theta}=0)` where the
+    continuous-time Jacobians are:
 
     .. math::
 
@@ -76,6 +77,7 @@ class CartPole(Plant):
         self.g = gravity
         self.dt = dt
         self.track_limits = track_limits
+        self.input_dim = 1
         self.state = self.bk.zeros(4)
         self._engine = None
 
@@ -115,21 +117,26 @@ class CartPole(Plant):
             return self.bk.array([x, x_dot, theta, theta_dot])
         return self.bk.copy(self.state)
 
-    def get_model(self):
-        """Get the linearized discrete-time state-space model.
+    def get_model(self, x0=None, u0=None, eps=1e-6):
+        """Get the linearized state-space model around an operating point.
+
+        Linearizes the continuous-time dynamics :math:`f(x, u) = \\dot{x}`
+        around ``(x0, u0)`` using central finite differences via
+        :func:`shinro.utils.linearization.linearize_plant`. When ``x0``/``u0``
+        are omitted, defaults to the upright equilibrium
+        :math:`(x=0, \\dot{x}=0, \\theta=0, \\dot{\\theta}=0)` with zero
+        control, matching the closed-form model previously returned.
+
+        Args:
+            x0: Operating point state (4,) — [x, x_dot, theta, theta_dot].
+                Defaults to zeros (upright equilibrium).
+            u0: Operating point control (1,) — [F]. Defaults to zeros.
+            eps: Step size for finite differences.
 
         Returns:
-            Tuple of (A, B) where A is (4, 4) and B is (4, 1).
+            Tuple of (A, B) where A = ∂f/∂x is (4, 4) and B = ∂f/∂u is (4, 1).
         """
-        M, m, pole_len, g, b = self.M, self.m, self.l, self.g, self.b
-        A = self.bk.array([
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, -m * g / M, 0.0],
-            [0.0, 0.0, 0.0, 1.0],
-            [0.0, 0.0, (M + m) * g / (M * pole_len), -b / (M * pole_len**2)],
-        ])
-        B = self.bk.array([[0.0], [1.0 / M], [0.0], [-1.0 / (M * pole_len)]])
-        return A, B
+        return linearize_plant(self, x0, u0, eps=eps)
 
     def _compute_accels(self, x, theta, x_dot, theta_dot, F):
         """Compute the accelerations from the equations of motion.
@@ -168,7 +175,7 @@ class CartPole(Plant):
         x, x_dot, theta, theta_dot = state[0], state[1], state[2], state[3]
         F = control[0] if hasattr(control, '__len__') else control
         x_ddot, theta_ddot = self._compute_accels(x, theta, x_dot, theta_dot, F)
-        return self.bk.array([x_dot, x_ddot, theta_dot, theta_ddot])
+        return self.bk.stack([x_dot, x_ddot, theta_dot, theta_ddot])
 
     def step(self, u):
         """Execute one control step.

@@ -170,6 +170,14 @@ class Plant(ABC):
         model = plant.get_model()
         next_state = plant.step(control_input)
     """
+    input_dim: int | None = None
+    """Control input dimension.
+
+    Plants that support linearization via ``linearize_plant`` should set
+    this in ``__init__`` so ``get_model()`` can default ``u0`` correctly.
+    ``None`` means the plant has not declared its input dimension; callers
+    of ``linearize_plant`` must then pass ``u0`` explicitly.
+    """
     @abstractmethod
     def get_state(self, *args:Any, **kwargs:Any)->Any:
         """

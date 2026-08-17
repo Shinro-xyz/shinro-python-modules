@@ -3,6 +3,7 @@
 from shinro.components import PhysicsEngine, Plant
 from shinro.factories.registry import register_plant, register_plant_detector
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend
+from shinro.utils.linearization import linearize_plant
 
 
 @register_plant("InvertedPendulum")
@@ -27,8 +28,10 @@ class InvertedPendulum(Plant):
         \\ddot{\\theta} = \\frac{g}{l} \\sin(\\theta)
         + \\frac{\\tau}{m l^2} - \\frac{b}{m l^2} \\dot{\\theta}
 
-    The linearized model around the upright equilibrium
-    :math:`(\\theta=0, \\dot{\\theta}=0)` is:
+    The linearized model is computed about an operating point supplied to
+    :meth:`get_model`, defaulting to the upright equilibrium
+    :math:`(\\theta=0, \\dot{\\theta}=0)` where the continuous-time Jacobians
+    are:
 
     .. math::
 
@@ -64,6 +67,7 @@ class InvertedPendulum(Plant):
         self.g = gravity
         self.dt = dt
         self.state_bounds = state_bounds
+        self.input_dim = 1
         self.state = self.bk.zeros(2)
         self._engine = None
 
@@ -100,16 +104,26 @@ class InvertedPendulum(Plant):
             return self.bk.array([qpos, qvel])
         return self.bk.copy(self.state)
 
-    def get_model(self):
-        """Get the linearized discrete-time state-space model.
+    def get_model(self, x0=None, u0=None, eps=1e-6):
+        """Get the linearized state-space model around an operating point.
+
+        Linearizes the continuous-time dynamics :math:`f(x, u) = \\dot{x}`
+        around ``(x0, u0)`` using central finite differences via
+        :func:`shinro.utils.linearization.linearize_plant`. When ``x0``/``u0``
+        are omitted, defaults to the upright equilibrium
+        :math:`(\\theta=0, \\dot{\\theta}=0)` with zero control, matching the
+        closed-form model previously returned.
+
+        Args:
+            x0: Operating point state (2,) — [theta, theta_dot].
+                Defaults to zeros (upright equilibrium).
+            u0: Operating point control (1,) — [tau]. Defaults to zeros.
+            eps: Step size for finite differences.
 
         Returns:
-            Tuple of (A, B) where A is (2, 2) and B is (2, 1).
+            Tuple of (A, B) where A = ∂f/∂x is (2, 2) and B = ∂f/∂u is (2, 1).
         """
-        g, pole_len, b, m = self.g, self.l, self.b, self.m
-        A = self.bk.array([[0.0, 1.0], [g / pole_len, -b / (m * pole_len**2)]])
-        B = self.bk.array([[0.0], [1.0 / (m * pole_len**2)]])
-        return A, B
+        return linearize_plant(self, x0, u0, eps=eps)
 
     def dynamics(self, state, control):
         """Continuous-time dynamics :math:`\\dot{x} = f(x, u)`.
@@ -124,7 +138,7 @@ class InvertedPendulum(Plant):
         theta, theta_dot = state[0], state[1]
         tau = control[0] if hasattr(control, '__len__') else control
         theta_ddot = (self.g / self.l) * self.bk.sin(theta) + tau / (self.m * self.l**2) - (self.b / (self.m * self.l**2)) * theta_dot
-        return self.bk.array([theta_dot, theta_ddot])
+        return self.bk.stack([theta_dot, theta_ddot])
 
     def step(self, u):
         """Execute one control step.

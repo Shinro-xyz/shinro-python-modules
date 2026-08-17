@@ -44,6 +44,7 @@ def resolve_config_path(path: str) -> Path:
     Raises:
         FileNotFoundError: If no candidate location exists.
     """
+    path = str(path)
     p = Path(path)
     if p.is_absolute():
         if not p.exists():
