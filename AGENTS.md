@@ -118,6 +118,11 @@ Each session's lab note MUST contain a semantic summary of the changes made — 
 4. **Verify** — Run tests or check the output
 5. **Document** — Write a semantic summary in `lab-notes/daily/<date>.md` covering what changed, why, and key results
 
+> **Releases:** `make release-patch/minor/major` auto-regenerates `CHANGELOG.md`
+> via `git cliff` (Conventional Commits, see `cliff.toml`) and stages it. Use
+> Conventional Commit prefixes (`feat:`, `fix:`, `chore:`, ...) so the
+> changelog stays clean — non-conforming commits land under "Other".
+
 ## Porting Numpy Scripts to the Framework
 
 See the `port-numpy-component` skill (`.opencode/skills/port-numpy-component/SKILL.md`) — it loads on-demand via the `skill` tool when porting a raw numpy implementation into the framework.

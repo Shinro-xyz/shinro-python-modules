@@ -28,6 +28,7 @@ dev = [
     "pyright>=1.1.370",
     "build>=1.2",
     "setuptools-scm[toml]>=8.0",
+    "git-cliff>=2.0",
 ]
 
 [project.scripts]

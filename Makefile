@@ -1,5 +1,5 @@
 .PHONY: test test-quick test-functional test-all test-integration lint install build \
-	release-patch release-minor release-major \
+	release-patch release-minor release-major changelog \
 	test-controllers test-estimators test-plants test-trajectories test-armrobot \
 	test-components test-array-backend test-batched-adapter test-controllability test-factories \
 	test-linearization test-adversarial test-mcp-server test-mcp-functional
@@ -14,8 +14,10 @@ build:
 
 # ---------------------------------------------------------------------------
 # Release helpers. Versioning is setuptools-scm: the released version IS the
-# git tag (v<X>.<Y>.<Z>). These targets bump the tag, push it, and let the
-# .github/workflows/release.yml build + attach the wheel to a GitHub Release.
+# git tag (v<X>.<Y>.<Z>). These targets bump the tag, regenerate CHANGELOG.md
+# via git-cliff (from Conventional Commits, see cliff.toml), stage it, and
+# create the tag. Push the changelog commit on main and the tag to origin to
+# trigger .github/workflows/release.yml (wheel build + GitHub Release).
 #
 # Semver rules:
 #   patch  — backwards-compatible bug fix          (0.1.0 -> 0.1.1)
@@ -29,6 +31,10 @@ release-minor:
 release-major:
 	@$(MAKE) _release BUMP=major
 
+# Preview/regenerate the changelog without cutting a release.
+changelog:
+	git cliff --unreleased --output CHANGELOG.md
+
 _release:
 	@current=$$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || echo "0.0.0"); \
 	IFS='.' read -r maj min pat <<< "$$current"; \
@@ -38,9 +44,14 @@ _release:
 	  major) new="$$((maj+1)).0.0" ;; \
 	esac; \
 	echo ">>> Bumping $$current -> v$$new"; \
-	echo "    Add a CHANGELOG.md entry under [$$new] before pushing."; \
-	git tag -a "v$$new" -m "Release v$$new"; \
-	echo ">>> Created tag v$$new. Push with: git push origin v$$new"
+	git cliff --tag "v$$new" --output CHANGELOG.md; \
+	git add CHANGELOG.md; \
+	echo ">>> Regenerated CHANGELOG.md and staged it."; \
+	echo "    Commit it on main, then push the tag to trigger the release:"; \
+	echo "      git commit -m \"chore: release v$$new\""; \
+	echo "      git push origin main"; \
+	echo "      git tag -a \"v$$new\" -m \"Release v$$new\""; \
+	echo "      git push origin \"v$$new\""
 
 # Run the full test suite (skips the very large horizon MPC timeout test)
 test:
