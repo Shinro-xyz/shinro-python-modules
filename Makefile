@@ -37,7 +37,10 @@ changelog:
 
 _release:
 	@current=$$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || echo "0.0.0"); \
-	IFS='.' read -r maj min pat <<< "$$current"; \
+	maj=$${current%%.*}; \
+	rest=$${current#*.}; \
+	min=$${rest%%.*}; \
+	pat=$${rest#*.}; \
 	case "$(BUMP)" in \
 	  patch) new="$$maj.$$min.$$((pat+1))" ;; \
 	  minor) new="$$maj.$$((min+1)).0" ;; \
