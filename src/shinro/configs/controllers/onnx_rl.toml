@@ -1,0 +1,29 @@
+# FILE: configs/controllers/onnx_rl.toml
+# ONNX RL policy adapter — wraps any ONNX-exported RL policy as a Controller.
+# Requires: pip install onnxruntime
+#
+# Export the actor network from your RL framework (sb3, RLlib, CleanRL,
+# custom torch, JAX, ...) to policy.onnx, then point model_path at it.
+#
+# Usage:
+#   python -m demos.demo_base_tracking --controller onnx_rl
+
+type = "onnx_rl"
+name = "ppo_policy"
+model_path = "path/to/policy.onnx"
+action_space = "continuous"            # continuous | discrete | stochastic
+deterministic = true                   # false samples from the policy distribution
+action_scale = 1.0                     # u = scale * a + bias (tanh-squashed policies)
+action_bias = 0.0
+# action_clip_low = -1.0
+# action_clip_high = 1.0
+seed = 0
+
+[observation]
+# input_name = "obs"                   # override ONNX input name if needed
+state_keys = [0, 1, 2]                 # integer indices into the plant state vector
+normalize = false                       # apply (x - mean) / std before the model
+# obs_mean = [0.0, 0.0, 0.0]
+# obs_std = [1.0, 1.0, 1.0]
+# clip = [-1.0, 1.0]                    # observation clipping
+add_batch_dim = true                    # ONNX models expect [B, obs_dim]

@@ -12,7 +12,7 @@ class TestRegistry:
     def test_controller_registry(self):
         """Controller registry contains LQR, PID, MPC_LTI, MPC_DeltaU, lerobot_diffusion."""
         from shinro.factories.registry import _CONTROLLER_REGISTRY
-        expected = {"LQR", "PID", "MPC_LTI", "MPC_DeltaU", "lerobot_diffusion"}
+        expected = {"LQR", "PID", "MPC_LTI", "MPC_DeltaU", "lerobot_diffusion", "onnx_rl"}
         assert expected.issubset(_CONTROLLER_REGISTRY.keys())
 
     def test_estimator_registry(self):

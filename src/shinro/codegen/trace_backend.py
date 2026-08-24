@@ -142,6 +142,44 @@ class TraceBackend:
         out_shape = (len(arrays),) + base
         return self._emit("stack", [a for a in arrays], out_shape)
 
+    def reshape(self, x: Tracer, *shape: int) -> Tracer:
+        # Converts the (shape,) or *shape call forms, then emits a reshape op.
+        # The reshape node stores its target shape in attrs, same as the
+        # composition pass's auto-inserted reshapes.
+        if len(shape) == 1 and isinstance(shape[0], (tuple, list)):
+            shape = tuple(shape[0])
+        out_shape = tuple(shape)
+        return self._emit("reshape", [x], out_shape, target_shape=out_shape)
+
+    # --- deterministic-policy ops (NN controllers in deterministic mode) ---
+
+    def tanh(self, x: Tracer) -> Tracer:
+        return self._emit("tanh", [x], x.shape)
+
+    def relu(self, x: Tracer) -> Tracer:
+        return self._emit("relu", [x], x.shape)
+
+    def div(self, a: Tracer, b: Tracer) -> Tracer:
+        a = _lift(self.g, a)
+        b = _lift(self.g, b)
+        return self._emit("div", [a, b], a.shape)
+
+    def exp(self, x: Tracer) -> Tracer:
+        return self._emit("exp", [x], x.shape)
+
+    def argmax(self, x: Tracer) -> Tracer:
+        # numpy argmax over the last axis collapses it to a scalar index.
+        return self._emit("argmax", [x], ())
+
+    def one_hot(self, idx: Tracer, depth: int) -> Tracer:
+        # idx is a scalar Tracer (argmax result) → one-hot (depth,) row.
+        return self._emit("one_hot", [idx], (depth,), depth=depth)
+
+    def slice_(self, x: Tracer, start: int, stop: int) -> Tracer:
+        # x[start:stop] along the first axis; start/stop are compile-time.
+        out_shape = (stop - start,) + x.shape[1:]
+        return self._emit("slice", [x], out_shape, start=start, stop=stop)
+
     # --- conversions (no-ops under tracing) ---
 
     def to_numpy(self, x: Tracer) -> Tracer:

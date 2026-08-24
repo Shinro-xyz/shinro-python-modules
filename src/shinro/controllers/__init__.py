@@ -16,6 +16,7 @@ from .lerobot_adapter import LeRobotDiffusionAdapter
 from .lqr import LQR
 from .mpc_lti import MPC_LTI_DeltaU
 from .mppi import MPPIController
+from .onnx_rl_adapter import OnnxRLAdapter
 from .pid import PIDController
 from .smc import SlidingModeController
 
@@ -25,5 +26,6 @@ __all__ = [
     "MPC_LTI_DeltaU",
     "MPPIController",
     "LeRobotDiffusionAdapter",
+    "OnnxRLAdapter",
     "SlidingModeController",
 ]

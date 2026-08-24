@@ -21,6 +21,7 @@ dependencies = [
 mujoco = ["mujoco>=3.0"]
 torch = ["torch>=2.0"]
 lerobot = ["lerobot>=0.5"]
+onnx-rl = ["onnxruntime>=1.17"]
 media = ["imageio>=2.30", "Pillow>=10.0", "matplotlib>=3.8"]
 dev = [
     "pytest>=8.0",

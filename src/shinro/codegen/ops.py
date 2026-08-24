@@ -18,7 +18,10 @@ back into ``values``.
 The initial op set covers what ``KalmanFilter.estimate`` and
 ``LQR.compute`` use (matmul, add, sub, mul, transpose, inv, const, input,
 output) plus the glue ops the composition pass inserts (reshape, clip, neg).
-PID's ``where`` and ``copy`` are included to support the swap test.
+PID's ``where`` and ``copy`` are included to support the swap test. The
+deterministic-policy ops (tanh, relu, div, exp, argmax, one_hot, slice)
+cover NN controllers run in deterministic mode (no sampling), so a learned
+policy's forward pass traces and lowers like any classical controller.
 """
 
 from __future__ import annotations
@@ -139,6 +142,52 @@ def _any(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray
     return np.asarray(np.any(values[node.inputs[0]]))
 
 
+# ─── deterministic-policy ops (NN controllers in deterministic mode) ──────
+
+
+@register_op("tanh")
+def _tanh(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
+    return np.tanh(values[node.inputs[0]])
+
+
+@register_op("relu")
+def _relu(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
+    return np.maximum(values[node.inputs[0]], 0.0)
+
+
+@register_op("div")
+def _div(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
+    return values[node.inputs[0]] / values[node.inputs[1]]
+
+
+@register_op("exp")
+def _exp(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
+    return np.exp(values[node.inputs[0]])
+
+
+@register_op("argmax")
+def _argmax(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
+    return np.asarray(np.argmax(values[node.inputs[0]]))
+
+
+@register_op("one_hot")
+def _one_hot(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
+    # one_hot(x, depth): x is a scalar index → one-hot row vector.
+    depth = node.attrs["depth"]
+    idx = int(values[node.inputs[0]].item())
+    out = np.zeros(depth, dtype=np.float64)
+    out[idx] = 1.0
+    return out
+
+
+@register_op("slice")
+def _slice(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
+    # slice(x, start, stop): x[start:stop] along the first axis.
+    start = node.attrs["start"]
+    stop = node.attrs["stop"]
+    return values[node.inputs[0]][start:stop]
+
+
 # ─── helpers exported for trace_backend.py ────────────────────────────────
 
 
@@ -160,8 +209,7 @@ def missing_op_error(name: str) -> NotImplementedError:
     signal rather than a silent failure.
     """
     return NotImplementedError(
-        f"op '{name}' is not registered. Add a handler in shinro.codegen.ops via "
-        f"@register_op('{name}'). Available ops: {available_ops()}"
+        f"op '{name}' is not registered. Add a handler in shinro.codegen.ops via @register_op('{name}'). Available ops: {available_ops()}"
     )
 
 
