@@ -50,11 +50,17 @@ pub fn inv(comptime n: usize, a: []const f64) [n * n]f64 {
     var m: [n * n]f64 = undefined;
     for (0..(n * n)) |i| m[i] = a[i];
     var out: [n * n]f64 = undefined;
-    for (0..n) |i| for (0..n) |j| out[i * n + j] = if (i == j) 1.0 else 0.0;
+    for (0..n) |i| {
+        for (0..n) |j| {
+            out[i * n + j] = if (i == j) 1.0 else 0.0;
+        }
+    }
 
     for (0..n) |k| {
         var p = k;
-        for (k + 1..n) |i| if (@abs(m[i * n + k]) > @abs(m[p * n + k])) p = i;
+        for (k + 1..n) |i| {
+            if (@abs(m[i * n + k]) > @abs(m[p * n + k])) p = i;
+        }
         if (p != k) {
             for (0..n) |j| {
                 const t = m[k * n + j];
@@ -73,14 +79,16 @@ pub fn inv(comptime n: usize, a: []const f64) [n * n]f64 {
             m[k * n + j] /= piv;
             out[k * n + j] /= piv;
         }
-        for (0..n) |i| if (i != k) {
-            const f = m[i * n + k];
-            if (f == 0.0) continue;
-            for (0..n) |j| {
-                m[i * n + j] -= f * m[k * n + j];
-                out[i * n + j] -= f * out[k * n + j];
+        for (0..n) |i| {
+            if (i != k) {
+                const f = m[i * n + k];
+                if (f == 0.0) continue;
+                for (0..n) |j| {
+                    m[i * n + j] -= f * m[k * n + j];
+                    out[i * n + j] -= f * out[k * n + j];
+                }
             }
-        };
+        }
     }
     return out;
 }
