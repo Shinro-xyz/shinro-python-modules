@@ -10,6 +10,11 @@ src/shinro/_version.py
 # C extensions
 *.so
 
+# Zig lowering: generated artifact — graph data table is regenerated on every
+# zig-build; do not check in. See shinro.codegen.lower_zig / Makefile zig-gen.
+runtime/graph_data.zig
+*.o
+
 # Distribution / packaging
 .Python
 build/

@@ -20,7 +20,7 @@ import numpy as np
 import pytest
 
 from shinro.codegen import interpret
-from shinro.codegen.gen_base import build_base_graph
+from scripts.gen_base import build_base_graph
 from shinro.codegen.lower_zig import lower_zig
 
 REPO_ROOT = Path(__file__).resolve().parents[1]

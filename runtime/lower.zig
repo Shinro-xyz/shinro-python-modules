@@ -21,6 +21,25 @@ const std = @import("std");
 const g = @import("graph_data.zig");
 const la = @import("linalg.zig");
 
+/// Run one tick of the closed-loop step through the generated node table.
+///
+/// The C-ABI entry point (exported as `shinro_step`) that the host calls once
+/// per control tick. All buffers are flat, row-major f64; their layout is
+/// known to the host from the ComposedGraph port lists:
+///
+/// - `inputs`: `y`, `x_ref`, `u_prev`, `state_x_hat` packed in `cg.inputs` order
+/// - `outputs`: packed in `cg.outputs` order
+/// - `state_out`: packed in `cg.state_outputs` order (recurrent → next tick)
+///
+/// The `inline for` over `g.nodes` unrolls the whole node table at compile
+/// time, so every node's shape is a comptime constant and every array is a
+/// fixed-size slice of the single stack buffer — no heap, no runtime dispatch.
+///
+/// Args:
+///     inputs: Flat buffer of this tick's host inputs.
+///     outputs: Flat buffer where this tick's output ports are written.
+///     state_out: Flat buffer where this tick's recurrent state outputs are
+///         written (fed back as state inputs next tick).
 export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) void {
     var buf: [g.buf_len]f64 align(16) = undefined;
 
@@ -115,6 +134,19 @@ const BinOp = enum { add, sub, mul, div };
 /// Elementwise binary op with broadcast: each operand is either the same
 /// length as the output, or a single element (0-d / size-1 broadcast).
 /// inline so the comptime-known node bounds reach the inline-for.
+/// Elementwise binary op with broadcast.
+///
+/// Each operand is either the same length as the output or a single element
+/// (0-d / size-1 broadcast), mirroring numpy's broadcasting for the shapes
+/// the tracer allows. `inline` so the comptime-known node bounds reach the
+/// `inline for`.
+///
+/// Args:
+///     nodes: The full generated node table (for shape lookup).
+///     node: The current add/sub/mul/div node.
+///     self_idx: The node's index in `nodes` (its buffer offset).
+///     buf: The shared step buffer (written at the node's offset).
+///     op: Which binary op to apply (add, sub, mul, div).
 inline fn ew2(nodes: []const g.Node, node: g.Node, self_idx: usize, buf: *[g.buf_len]f64, op: BinOp) void {
     const a = node_input_at(nodes, node.inputs[0], buf);
     const b = node_input_at(nodes, node.inputs[1], buf);
@@ -133,10 +165,28 @@ inline fn ew2(nodes: []const g.Node, node: g.Node, self_idx: usize, buf: *[g.buf
     }
 }
 
+/// Read a node's first input from the shared buffer.
+///
+/// Args:
+///     nodes: The full generated node table (for shape lookup).
+///     node: The consumer node whose first input to read.
+///     buf: The shared step buffer.
+///
+/// Returns:
+///     A fixed-length slice of `buf` covering the input node's slot.
 fn node_input(nodes: []const g.Node, node: g.Node, buf: *[g.buf_len]f64) []const f64 {
     return node_input_at(nodes, node.inputs[0], buf);
 }
 
+/// Read an arbitrary node's output slot from the buffer by node index.
+///
+/// Args:
+///     nodes: The full generated node table (for shape lookup).
+///     idx: The node index whose output to read.
+///     buf: The shared step buffer.
+///
+/// Returns:
+///     A fixed-length slice of `buf` covering node `idx`'s `rows*cols` f64s.
 fn node_input_at(nodes: []const g.Node, idx: usize, buf: *[g.buf_len]f64) []const f64 {
     return buf.*[g.offsets[idx]..][0 .. nodes[idx].rows * nodes[idx].cols];
 }

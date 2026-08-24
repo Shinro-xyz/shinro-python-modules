@@ -12,6 +12,20 @@
 //
 // Inputs are slices; the VM hands out fixed-length slices of its buffer.
 
+/// Matrix multiply: (m, k) @ (k, n) -> (m, n), row-major, flat output.
+///
+/// Mirrors numpy's 2D @ 2D convention. All dimensions are comptime so the
+/// output is a fixed-size stack array `[m * n]f64`.
+///
+/// Args:
+///     m: Rows of `a` and of the result.
+///     k: Columns of `a` / rows of `b` (the contraction axis).
+///     n: Columns of `b` and of the result.
+///     a: Flat row-major `m*k` matrix.
+///     b: Flat row-major `k*n` matrix.
+///
+/// Returns:
+///     The flat `m*n` row-major result.
 pub fn matmul(comptime m: usize, comptime k: usize, comptime n: usize, a: []const f64, b: []const f64) [m * n]f64 {
     var out: [m * n]f64 = undefined;
     for (0..m) |i| {
@@ -24,6 +38,20 @@ pub fn matmul(comptime m: usize, comptime k: usize, comptime n: usize, a: []cons
     return out;
 }
 
+/// Matrix-vector multiply: (m, k) @ (k,) -> (m,), flat output.
+///
+/// Mirrors numpy's 2D @ 1D convention, where the 1D operand is treated as a
+/// column vector. Used when the VM's matmul node has `cols == 1` and the
+/// left operand is 2D.
+///
+/// Args:
+///     m: Rows of `a` and of the result.
+///     k: Columns of `a` / length of `v` (the contraction axis).
+///     a: Flat row-major `m*k` matrix.
+///     v: Flat `k`-vector.
+///
+/// Returns:
+///     The flat `m`-vector result.
 pub fn matvec(comptime m: usize, comptime k: usize, a: []const f64, v: []const f64) [m]f64 {
     var out: [m]f64 = undefined;
     for (0..m) |i| {
@@ -34,6 +62,20 @@ pub fn matvec(comptime m: usize, comptime k: usize, a: []const f64, v: []const f
     return out;
 }
 
+/// Vector-matrix multiply: (k,) @ (k, n) -> (n,), flat output.
+///
+/// Mirrors numpy's 1D @ 2D convention, where the 1D operand is treated as a
+/// row vector. Used when the VM's matmul node has `cols == 1` and the left
+/// operand is 1D.
+///
+/// Args:
+///     k: Length of `v` / rows of `b` (the contraction axis).
+///     n: Columns of `b` and of the result.
+///     v: Flat `k`-vector.
+///     b: Flat row-major `k*n` matrix.
+///
+/// Returns:
+///     The flat `n`-vector result.
 pub fn vecmat(comptime k: usize, comptime n: usize, v: []const f64, b: []const f64) [n]f64 {
     var out: [n]f64 = undefined;
     for (0..n) |j| {
@@ -44,8 +86,24 @@ pub fn vecmat(comptime k: usize, comptime n: usize, v: []const f64, b: []const f
     return out;
 }
 
-/// Gauss-Jordan inverse with partial pivoting. Returns the inverse of the n×n
-/// row-major matrix at `a` as a flat [n*n]f64.
+/// Gauss-Jordan inverse with partial pivoting, flat output.
+///
+/// Inverts the `n`×`n` row-major matrix at `a` in place on a copy, building
+/// the inverse in a companion identity matrix. Partial pivoting (choosing the
+/// largest-magnitude pivot in each column) keeps small well-conditioned
+/// matrices — the 2×2–4×4 innovation covariances in the control graphs —
+/// accurate to well inside the oracle's `atol=1e-12`, so LAPACK is
+/// unnecessary here.
+///
+/// Args:
+///     n: The matrix dimension (rows == cols).
+///     a: Flat row-major `n*n` matrix.
+///
+/// Returns:
+///     The flat `n*n` row-major inverse.
+///
+/// Panics:
+///     If a pivot is exactly zero (singular matrix).
 pub fn inv(comptime n: usize, a: []const f64) [n * n]f64 {
     var m: [n * n]f64 = undefined;
     for (0..(n * n)) |i| m[i] = a[i];

@@ -139,6 +139,29 @@ def _node_line(
     outputs: list[str],
     state_outputs: list[str],
 ) -> str:
+    """Render one Python graph node as a Zig ``Node`` struct literal.
+
+    Translates the Python op/aux mapping into the Zig VM's op enum: ``const``
+    → ``cst`` (aux = index into ``const_blob``), ``input`` → ``inp`` (aux =
+    offset into the packed input buffer), ``output`` → ``out`` (aux = index
+    into ``outputs`` or, for state outputs, ``len(outputs) + index`` so the
+    VM can split the two C-ABI buffers), ``where`` → ``where_op``, ``clip``
+    → ``clip`` (aux = index into ``clip_lo``/``clip_hi``).
+
+    Args:
+        g: The composed graph being serialized.
+        i: Node index in ``g.nodes`` (kept for symmetry with the table).
+        node: The Python node to render.
+        const_offsets: Maps const node index → offset into ``const_blob``.
+        clip_offsets: Maps clip node index → offset into ``clip_lo``/``hi``.
+        input_offsets: Maps input port name → offset into the packed input
+            buffer.
+        outputs: Names of the graph's non-state output ports.
+        state_outputs: Names of the graph's state output ports.
+
+    Returns:
+        A Zig struct literal like ``.{{ .op = .matmul, .inputs = &.{{6, 3}}, ... }}``.
+    """
     rows, cols = _rows_cols(node.shape)
     inputs = "&.{" + ", ".join(str(x) for x in node.inputs) + "}"
     op = node.op
@@ -168,6 +191,18 @@ def _node_line(
 
 
 def _input_size(g: Graph, name: str) -> int:
+    """Return the flat element count of the ``input`` port named ``name``.
+
+    Args:
+        g: The graph being serialized.
+        name: The input port name.
+
+    Returns:
+        The number of f64s the port occupies in the packed input buffer.
+
+    Raises:
+        KeyError: If no ``input`` node with that name exists in the graph.
+    """
     for node in g.nodes:
         if node.op == "input" and node.attrs["name"] == name:
             return _size(node.shape)
@@ -175,6 +210,19 @@ def _input_size(g: Graph, name: str) -> int:
 
 
 def _output_size(g: Graph, name: str) -> int:
+    """Return the number of f64s an ``output`` port occupies in its C-ABI buffer.
+
+    Args:
+        g: The graph being serialized.
+        name: The output port name.
+
+    Returns:
+        The element count the port takes in the packed ``outputs`` or
+        ``state_out`` buffer.
+
+    Raises:
+        KeyError: If no output node with that name exists in the graph.
+    """
     for node in g.nodes:
         if node.op == "output" and node.attrs["name"] == name:
             return _size(node.shape)
@@ -182,6 +230,7 @@ def _output_size(g: Graph, name: str) -> int:
 
 
 def _size(shape: tuple[int, ...]) -> int:
+    """Return the total element count for a shape (empty shape counts as 1)."""
     if not shape:
         return 1
     out = 1
@@ -191,6 +240,7 @@ def _size(shape: tuple[int, ...]) -> int:
 
 
 def _rows_cols(shape: tuple[int, ...]) -> tuple[int, int]:
+    """Map a graph shape to Zig VM ``rows``/``cols`` (2D → as-is, 1D → (n, 1), else (1, 1))."""
     if len(shape) == 2:
         return shape[0], shape[1]
     if len(shape) == 1:
@@ -199,8 +249,14 @@ def _rows_cols(shape: tuple[int, ...]) -> tuple[int, int]:
 
 
 def _zig_float(x: float) -> str:
+    """Format an f64 as a Zig hex float literal (bit-exact round-trip).
+
+    ``float.hex()`` emits the exact binary representation numpy stored, so
+    the "fixed at compile time" property holds across the language boundary.
+    """
     return float(x).hex()
 
 
 def _zig_floats(vals: list[float]) -> str:
+    """Format a list of f64s as a comma-separated Zig hex-float literal."""
     return ", ".join(_zig_float(x) for x in vals)

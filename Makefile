@@ -84,7 +84,7 @@ test-integration:
 # ───────────────────────────────────────────────────────────────────────────
 zig-gen:
 	mkdir -p build
-	python3 -m shinro.codegen.gen_base
+	python3 scripts/gen_base.py
 
 zig-build: zig-gen
 	zig build-lib runtime/lower.zig -dynamic -lc -femit-bin=build/base.so -I runtime
