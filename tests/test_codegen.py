@@ -40,13 +40,12 @@ from shinro.codegen.tracing import (
     _lift,
     _matmul_out_shape,
 )
+from shinro.components import Controller
 from shinro.controllers.lqr import LQR
 from shinro.estimators.kalman_filter import KalmanFilter
 from shinro.factories.controller_factory import ControllerFactory
 from shinro.factories.estimator_factory import EstimatorFactory
-from shinro.utils.array_backend import NumpyBackend
-
-# ─── helpers ───────────────────────────────────────────────────────────────
+from shinro.utils.array_backend import NumpyBackend  # ─── helpers ───────────────────────────────────────────────────────────────
 
 
 def _load_kalman() -> KalmanFilter:
@@ -113,9 +112,7 @@ class TestTraceKalman:
             # Primary output is "out" (the return value); state is "state_x_hat".
             got = traced.get("out", traced.get("state_x_hat"))
             assert got is not None, f"trial {trial}: no output. got {list(traced)}"
-            assert np.allclose(got, expected, atol=1e-12), (
-                f"trial {trial}: KF trace diverged. max err = {np.max(np.abs(got - expected))}"
-            )
+            assert np.allclose(got, expected, atol=1e-12), f"trial {trial}: KF trace diverged. max err = {np.max(np.abs(got - expected))}"
 
     def test_graph_has_matmul_and_inv_nodes(self):
         """The captured KF graph contains matmul and inv ops (predict + update)."""
@@ -139,9 +136,7 @@ class TestTraceKalman:
             input_shapes={"measurement": (3, 1), "control_input": (3, 1)},
             state_shapes={"x_hat": (3, 1)},
         )
-        assert "x_hat" in node_graph.state_attrs, (
-            f"x_hat not detected as state; detected = {node_graph.state_attrs}"
-        )
+        assert "x_hat" in node_graph.state_attrs, f"x_hat not detected as state; detected = {node_graph.state_attrs}"
 
 
 # ─── Test 2: trace LQR alone ───────────────────────────────────────────────
@@ -175,9 +170,7 @@ class TestTraceLQR:
 
             got = traced.get("out")
             assert got is not None, f"trial {trial}: no output. got {list(traced)}"
-            assert np.allclose(got, expected, atol=1e-12), (
-                f"trial {trial}: LQR trace diverged. max err = {np.max(np.abs(got - expected))}"
-            )
+            assert np.allclose(got, expected, atol=1e-12), f"trial {trial}: LQR trace diverged. max err = {np.max(np.abs(got - expected))}"
 
     def test_graph_is_a_single_matmul(self):
         """LQR lowers to K @ (x_ref - x): one sub, one matmul, no inv."""
@@ -197,14 +190,76 @@ class TestTraceLQR:
             lqr,
             input_shapes={"current_state": (3,), "target_state": (3,)},
         )
-        assert node_graph.state_attrs == [], (
-            f"LQR should be stateless; detected = {node_graph.state_attrs}"
+        assert node_graph.state_attrs == [], f"LQR should be stateless; detected = {node_graph.state_attrs}"
+
+
+# ─── Test 3: trace a deterministic MLP policy ──────────────────────────────
+
+
+class _NumpyMLPPolicy(Controller):
+    """Deterministic 2-layer MLP policy (tanh hidden, tanh output).
+
+    Mirrors how a deterministic learned policy would be written against the
+    ArrayBackend surface so it traces and lowers like a classical controller.
+    """
+
+    def __init__(self, W1, b1, W2, b2, backend=None):
+        self.bk = backend or NumpyBackend()
+        self.W1 = self.bk.array(W1)
+        self.b1 = self.bk.array(b1)
+        self.W2 = self.bk.array(W2)
+        self.b2 = self.bk.array(b2)
+
+    def compute(self, state, target=None):
+        h = self.bk.tanh(state @ self.W1 + self.b1)
+        u = self.bk.tanh(h @ self.W2 + self.b2)
+        return u
+
+    def reset(self):
+        pass
+
+
+class TestTraceMLPPolicy:
+    """Tracing a deterministic MLP policy captures activations + matmuls."""
+
+    def test_trace_matches_numpy_20_inputs(self, rng):
+        """Interpreted MLP graph == NumpyBackend MLP on 20 random inputs."""
+        W1 = rng.normal(size=(3, 16))
+        b1 = rng.normal(size=(16,))
+        W2 = rng.normal(size=(16, 2))
+        b2 = rng.normal(size=(2,))
+        policy_np = _NumpyMLPPolicy(W1, b1, W2, b2, backend=NumpyBackend())
+        policy_tr = _NumpyMLPPolicy(W1, b1, W2, b2, backend=NumpyBackend())
+
+        input_shapes = {"state": (3,), "target": (3,)}
+
+        for trial in range(20):
+            x = rng.normal(0.0, 0.1, (3,))
+            expected = policy_np.compute(x)
+
+            node_graph = trace_node(policy_tr, input_shapes=input_shapes)
+            traced = interpret(node_graph.graph, {"state": x, "target": np.zeros((3,))})
+            got = traced.get("out")
+            assert got is not None, f"trial {trial}: no output. got {list(traced)}"
+            assert np.allclose(got, expected, atol=1e-12), f"trial {trial}: MLP trace diverged. max err = {np.max(np.abs(got - expected))}"
+
+    def test_graph_has_tanh_and_multiple_matmul(self):
+        """The MLP graph contains tanh nodes and one matmul per layer."""
+        rng = np.random.default_rng(0)
+        policy = _NumpyMLPPolicy(
+            rng.normal(size=(3, 16)),
+            rng.normal(size=(16,)),
+            rng.normal(size=(16, 2)),
+            rng.normal(size=(2,)),
+            backend=NumpyBackend(),
         )
+        node_graph = trace_node(policy, input_shapes={"state": (3,), "target": (3,)})
+        ops = [n.op for n in node_graph.graph.nodes]
+        assert "tanh" in ops, f"MLP graph missing tanh; ops = {ops}"
+        assert ops.count("matmul") == 2, f"expected 2 matmuls (one per layer); got {ops}"
 
 
 # ─── sanity: the tracer primitives themselves ──────────────────────────────
-
-
 class TestTracerPrimitives:
     """Direct unit tests for the Tracer operator overloads."""
 
@@ -531,6 +586,48 @@ class TestTraceBackend:
         bk = self._bk()
         with pytest.raises(NotImplementedError, match="register_op"):
             bk.some_unknown_op()
+
+    def test_reshape_records_reshape_op(self):
+        bk = self._bk()
+        ta = _lift(bk.g, np.ones((3, 1)))
+        tr = bk.reshape(ta, (3,))  # type: ignore[arg-type]
+        assert tr.shape == (3,)
+        node = bk.g.nodes[tr.node]
+        assert node.op == "reshape"
+        assert node.attrs["target_shape"] == (3,)
+
+    def test_policy_elementwise_ops(self):
+        bk = self._bk()
+        ta = _lift(bk.g, np.ones((4,)))
+        assert bk.g.nodes[bk.tanh(ta).node].op == "tanh"
+        assert bk.g.nodes[bk.relu(ta).node].op == "relu"
+        assert bk.g.nodes[bk.exp(ta).node].op == "exp"
+        tb = _lift(bk.g, np.full((4,), 2.0))
+        td = bk.div(ta, tb)
+        assert bk.g.nodes[td.node].op == "div"
+        assert td.shape == (4,)
+
+    def test_policy_discrete_ops(self):
+        bk = self._bk()
+        ta = _lift(bk.g, np.array([0.1, 0.5, 0.9, 0.3]))
+        targ = bk.argmax(ta)
+        assert targ.shape == ()
+        assert bk.g.nodes[targ.node].op == "argmax"
+        toh = bk.one_hot(targ, 4)
+        assert toh.shape == (4,)
+        node = bk.g.nodes[toh.node]
+        assert node.op == "one_hot"
+        assert node.attrs["depth"] == 4
+
+    def test_slice_records_slice_op(self):
+        bk = self._bk()
+        ta = _lift(bk.g, np.arange(6.0).reshape(2, 3))
+        ts = bk.slice_(ta, 0, 1)
+        assert ts.shape == (1, 3)
+        node = bk.g.nodes[ts.node]
+        assert node.op == "slice"
+        assert node.attrs["start"] == 0
+        assert node.attrs["stop"] == 1
 
 
 # ─── op registry and handlers ───────────────────────────────────────────────
