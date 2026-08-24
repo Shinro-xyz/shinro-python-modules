@@ -123,7 +123,6 @@ def snapshot_instance_attrs(component: Any) -> dict[str, int]:
         A dict mapping attribute name → ``id(value)`` for every array-valued
         instance attr.
     """
-    from shinro.codegen.tracing import Tracer  # delayed to avoid cycles
 
     snap: dict[str, int] = {}
     # Walk the instance __dict__ (not the class) — we only care about per-
@@ -157,7 +156,6 @@ def detect_state(component: Any, before: dict[str, int]) -> list[str]:
     Returns:
         A list of attribute names that were reassigned during the call.
     """
-    from shinro.codegen.tracing import Tracer  # delayed to avoid cycles
 
     state: list[str] = []
     for name, id_before in before.items():

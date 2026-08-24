@@ -23,7 +23,8 @@ PID's ``where`` and ``copy`` are included to support the swap test.
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 
@@ -109,7 +110,10 @@ def _inv(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray
 
 @register_op("reshape")
 def _reshape(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
-    return values[node.inputs[0]].reshape(node.attrs["shape"])
+    target = node.attrs.get("target_shape")
+    if target is None:
+        target = node.attrs.get("shape")
+    return values[node.inputs[0]].reshape(target)
 
 
 @register_op("clip")
