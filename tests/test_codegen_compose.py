@@ -13,9 +13,17 @@ reused without re-tracing.
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from shinro.codegen import interpret, trace_node
-from shinro.codegen.compose import compose
+from shinro.codegen.compose import (
+    ComposedGraph,
+    _ensure_shape,
+    _is_reshape_possible,
+    _lookup_input_shape,
+    compose,
+)
+from shinro.codegen.tracing import Graph, ShapeMismatchError
 from shinro.controllers.lqr import LQR
 from shinro.controllers.pid import PIDController
 from shinro.estimators.kalman_filter import KalmanFilter
@@ -348,3 +356,161 @@ class TestSwapBoth:
                 f"trial {trial}: Luenberger+PID u diverged. "
                 f"max err = {np.max(np.abs(traced['u'] - u_np))}"
             )
+
+
+# ─── Test 8: compose without clip limits ───────────────────────────────────
+
+
+class TestComposeNoClip:
+    """Compose with input_limits=None — no clip node, un-clipped u."""
+
+    def test_no_clip_node_when_limits_none(self):
+        kf = _load_kalman()
+        lqr = _load_lqr()
+        est_ng = trace_node(
+            kf,
+            input_shapes={"measurement": (3, 1), "control_input": (3, 1)},
+            state_shapes={"x_hat": (3, 1)},
+        )
+        ctrl_ng = trace_node(
+            lqr,
+            input_shapes={"current_state": (3,), "target_state": (3,)},
+        )
+        composed = compose(est_ng, ctrl_ng, plant_dims=_BASE_DIMS, input_limits=None)
+        ops = [n.op for n in composed.graph.nodes]
+        assert "clip" not in ops, f"no clip expected; ops = {ops}"
+
+    def test_u_matches_unclipped_numpy(self, rng):
+        kf = _load_kalman()
+        lqr = _load_lqr()
+        est_ng = trace_node(
+            kf,
+            input_shapes={"measurement": (3, 1), "control_input": (3, 1)},
+            state_shapes={"x_hat": (3, 1)},
+        )
+        ctrl_ng = trace_node(
+            lqr,
+            input_shapes={"current_state": (3,), "target_state": (3,)},
+        )
+        composed = compose(est_ng, ctrl_ng, plant_dims=_BASE_DIMS, input_limits=None)
+
+        initial_P = kf.P.copy()
+        for trial in range(50):
+            y = rng.normal(0.0, 0.1, (3,))
+            x_ref = rng.normal(0.0, 0.1, (3,))
+            x_hat_init = rng.normal(0.0, 0.1, (3, 1))
+            u_prev = rng.normal(0.0, 0.1, (3,))
+
+            kf.P = initial_P.copy()
+            kf.x_hat = x_hat_init.copy()
+            x_hat_np = kf.estimate(y.reshape(-1, 1), u_prev.reshape(-1, 1))
+            u_np = lqr.compute(x_hat_np.ravel(), x_ref)  # no clip
+
+            traced = interpret(
+                composed.graph,
+                {"y": y, "x_ref": x_ref, "u_prev": u_prev, "state_x_hat": x_hat_init},
+            )
+            assert np.allclose(traced["u"], u_np, atol=1e-12), (
+                f"trial {trial}: un-clipped u diverged. "
+                f"max err = {np.max(np.abs(traced['u'] - u_np))}"
+            )
+
+
+# ─── Test 9: compose port metadata ─────────────────────────────────────────
+
+
+class TestComposePortMeta:
+    """The ComposedGraph I/O port lists match the fixed ABC dataflow."""
+
+    def test_port_lists(self):
+        kf = _load_kalman()
+        lqr = _load_lqr()
+        est_ng = trace_node(
+            kf,
+            input_shapes={"measurement": (3, 1), "control_input": (3, 1)},
+            state_shapes={"x_hat": (3, 1)},
+        )
+        ctrl_ng = trace_node(
+            lqr,
+            input_shapes={"current_state": (3,), "target_state": (3,)},
+        )
+        composed = compose(est_ng, ctrl_ng, plant_dims=_BASE_DIMS, input_limits=_BASE_LIMITS)
+        assert isinstance(composed, ComposedGraph)
+        assert composed.inputs == ["y", "x_ref", "u_prev", "state_x_hat"]
+        assert composed.outputs == ["u"]
+        assert composed.state_inputs == ["state_x_hat", "u_prev"]
+        assert composed.state_outputs == ["state_x_hat", "state_u_prev"]
+
+
+# ─── Test 10: compose error paths ──────────────────────────────────────────
+
+
+class TestComposeErrors:
+    """Error paths in the composition pass."""
+
+    def test_estimator_with_no_output_raises(self):
+        from shinro.codegen.trace_node import NodeGraph
+
+        g = Graph()
+        g.input("measurement", (3, 1))
+        estimator = NodeGraph(
+            graph=g,
+            contract=None,  # type: ignore[arg-type]
+            input_nodes={},
+            output_nodes={},
+            state_attrs=[],
+        )
+        ctrl_g = Graph()
+        ctrl_in = ctrl_g.input("current_state", (3,))
+        ctrl_g.input("target_state", (3,))
+        ctrl_g.output("out", ctrl_in)
+        ctrl_out_key = next(n.attrs["name"] for n in ctrl_g.nodes if n.op == "output")
+        controller = NodeGraph(
+            graph=ctrl_g,
+            contract=None,  # type: ignore[arg-type]
+            input_nodes={"current_state": ctrl_in},
+            output_nodes={ctrl_out_key: ctrl_in},
+            state_attrs=[],
+        )
+        with pytest.raises(ValueError, match="no output node"):
+            compose(estimator, controller, plant_dims=_BASE_DIMS, input_limits=None)
+
+
+# ─── Test 11: reshape helpers ───────────────────────────────────────────────
+
+
+class TestComposeReshape:
+    """Direct unit tests for the auto-reshape helpers."""
+
+    def test_ensure_shape_passthrough_when_equal(self):
+        g = Graph()
+        src = g.input("x", (3,))
+        out = _ensure_shape(g, src, (3,), (3,))
+        assert out == src
+        assert all(n.op != "reshape" for n in g.nodes)
+
+    def test_ensure_shape_inserts_reshape(self):
+        g = Graph()
+        src = g.input("x", (3, 1))
+        out = _ensure_shape(g, src, (3, 1), (3,))
+        node = g.nodes[out]
+        assert node.op == "reshape"
+        assert node.attrs["target_shape"] == (3,)
+        assert node.inputs == [src]
+
+    def test_ensure_shape_incompatible_raises(self):
+        g = Graph()
+        src = g.input("x", (4,))
+        with pytest.raises(ShapeMismatchError):
+            _ensure_shape(g, src, (4,), (3,))
+
+    def test_is_reshape_possible(self):
+        assert _is_reshape_possible((2, 3), (6,))
+        assert _is_reshape_possible((3, 1), (3,))
+        assert not _is_reshape_possible((2, 3), (7,))
+
+    def test_lookup_input_shape(self):
+        g = Graph()
+        g.input("y", (3,))
+        assert _lookup_input_shape(g, "y", default=(1,)) == (3,)
+        assert _lookup_input_shape(g, "missing", default=(1,)) == (1,)
