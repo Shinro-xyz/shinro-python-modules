@@ -21,7 +21,7 @@ See ``lab-notes/daily/`` for the design narrative.
 """
 
 from shinro.codegen.interpreter import interpret, interpret_step
-from shinro.codegen.ops import register_op, available_ops, has_op
+from shinro.codegen.ops import available_ops, has_op, register_op
 from shinro.codegen.trace_backend import TraceBackend
 from shinro.codegen.trace_node import NodeGraph, trace_node, trace_node_with_state
 from shinro.codegen.tracing import Graph, Node, ShapeMismatchError, Tracer

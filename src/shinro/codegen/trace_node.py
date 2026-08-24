@@ -103,6 +103,18 @@ def trace_node(
                 f"has no shape in input_shapes={list(input_shapes)}"
             )
 
+    # Snapshot EVERY array-like instance attr's real value, so we can restore
+    # it after the trace. Without this, a traced call leaves the component
+    # polluted with Tracers (e.g. the KF's self.P becomes a Tracer when
+    # K_gain is a Tracer and (I - K_gain @ C) @ P propagates Tracer-ness).
+    # On the next trace those stale Tracers would reference dead node ids.
+    from shinro.codegen.infer_contract import _is_array_like
+
+    original_attrs: dict[str, Any] = {}
+    for name, value in list(vars(component).items()):
+        if _is_array_like(value):
+            original_attrs[name] = value
+
     # Create Tracer inputs and emit input nodes.
     tracers: dict[str, Tracer] = {}
     for name in contract.input_names:
@@ -116,43 +128,56 @@ def trace_node(
         node = graph.input(f"state_{name}", shape)
         setattr(component, name, Tracer(graph, shape, node))
 
-    # Snapshot instance attrs to detect state mutations after the call.
+    # Snapshot instance attr ids to detect state mutations after the call.
+    # (Compared against the post-call attrs; a changed id means reassignment.)
     before = snapshot_instance_attrs(component)
 
-    # Swap backend, call the method, restore backend.
+    # Swap backend, call the method, restore backend + all array attrs.
     original_bk = getattr(component, "bk", None)
     component.bk = bk
     try:
         args = [tracers[n] for n in contract.input_names]
         result = getattr(component, contract.method_name)(*args)
-    finally:
-        component.bk = original_bk
 
-    # Detect state mutations (attrs reassigned during the call).
-    state_attrs = detect_state(component, before)
+        # Detect state mutations (attrs reassigned during the call).
+        state_attrs = detect_state(component, before)
+
+        # Capture outputs BEFORE restoring attrs. The primary output is the
+        # return value; any mutated state attrs are recurrent edges.
+        if result is not None:
+            result_tracer = _lift(graph, result)
+            graph.output("out", result_tracer.node)
+        for name in state_attrs:
+            value = getattr(component, name)
+            value_tracer = _lift(graph, value)
+            graph.output(f"state_{name}", value_tracer.node)
+    finally:
+        # Restore the original backend and all array attrs, so the component
+        # is left in a real (non-traced) state for the next trace or for
+        # live numpy use. This is critical: without it, a Tracer assigned to
+        # self.P / self.x_hat by the traced call would leak into the next
+        # trace and reference dead node ids from this graph.
+        component.bk = original_bk
+        for name, value in original_attrs.items():
+            setattr(component, name, value)
+
     node_graph = NodeGraph(
         graph=graph,
         contract=contract,
         input_nodes={n: t.node for n, t in tracers.items()},
+        output_nodes={n: node for n, node in _collect_output_nodes(graph).items()},
         state_attrs=state_attrs,
     )
-
-    # Capture outputs. The primary output is the method's return value;
-    # any mutated state attrs are also emitted as outputs (recurrent edges).
-    if result is not None:
-        result_tracer = _lift(graph, result)
-        # Use the first output slot name, or a generic "out" if none declared.
-        out_name = "out"
-        graph.output(out_name, result_tracer.node)
-        node_graph.output_nodes[out_name] = result_tracer.node
-
-    for name in state_attrs:
-        value = getattr(component, name)
-        value_tracer = _lift(graph, value)
-        graph.output(f"state_{name}", value_tracer.node)
-        node_graph.output_nodes[f"state_{name}"] = value_tracer.node
-
     return node_graph
+
+
+def _collect_output_nodes(graph: Graph) -> dict[str, int]:
+    """Map each output port name → the upstream node id it references."""
+    outputs: dict[str, int] = {}
+    for node in graph.nodes:
+        if node.op == "output":
+            outputs[node.attrs["name"]] = node.inputs[0]
+    return outputs
 
 
 def trace_node_with_state(

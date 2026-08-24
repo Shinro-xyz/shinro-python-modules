@@ -112,15 +112,13 @@ class Tracer:
 
     def __matmul__(self, other: Any) -> Tracer:
         other = _lift(self._g, other)
-        _check_matmul_shapes(self.shape, other.shape)
-        out_shape = (self.shape[0], other.shape[1])
+        out_shape = _matmul_out_shape(self.shape, other.shape)
         node = self._g.emit("matmul", [self.node, other.node], out_shape)
         return Tracer(self._g, out_shape, node)
 
     def __rmatmul__(self, other: Any) -> Tracer:
         other = _lift(self._g, other)
-        _check_matmul_shapes(other.shape, self.shape)
-        out_shape = (other.shape[0], self.shape[1])
+        out_shape = _matmul_out_shape(other.shape, self.shape)
         node = self._g.emit("matmul", [other.node, self.node], out_shape)
         return Tracer(self._g, out_shape, node)
 
@@ -218,6 +216,32 @@ def _check_matmul_shapes(a: tuple[int, ...], b: tuple[int, ...]) -> None:
         raise ShapeMismatchError(f"matmul requires 2D inputs, got {a} @ {b}")
     if a[1] != b[0]:
         raise ShapeMismatchError(f"matmul shape mismatch: {a} @ {b}")
+
+
+def _matmul_out_shape(a: tuple[int, ...], b: tuple[int, ...]) -> tuple[int, ...]:
+    """Compute the output shape of a matmul, following numpy's conventions.
+
+    Numpy's ``@`` supports three shape combinations:
+
+    - ``(m, k) @ (k, n)`` → ``(m, n)``  (standard 2D @ 2D)
+    - ``(m, k) @ (k,)``   → ``(m,)``    (2D @ 1D; 1D treated as column vec)
+    - ``(k,) @ (k, n)``   → ``(n,)``    (1D @ 2D; 1D treated as row vec)
+
+    Any other shape combination raises :class:`ShapeMismatchError`.
+    """
+    if len(a) == 2 and len(b) == 2:
+        if a[1] != b[0]:
+            raise ShapeMismatchError(f"matmul shape mismatch: {a} @ {b}")
+        return (a[0], b[1])
+    if len(a) == 2 and len(b) == 1:
+        if a[1] != b[0]:
+            raise ShapeMismatchError(f"matmul shape mismatch: {a} @ {b}")
+        return (a[0],)
+    if len(a) == 1 and len(b) == 2:
+        if a[0] != b[0]:
+            raise ShapeMismatchError(f"matmul shape mismatch: {a} @ {b}")
+        return (b[1],)
+    raise ShapeMismatchError(f"matmul requires 1D or 2D inputs, got {a} @ {b}")
 
 
 def _broadcast_shape(a: tuple[int, ...], b: tuple[int, ...]) -> tuple[int, ...]:

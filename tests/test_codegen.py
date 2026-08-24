@@ -12,16 +12,14 @@ and exercise the composition pass.
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
-from shinro.codegen import TraceBackend, interpret, trace_node
+from shinro.codegen import interpret, trace_node
 from shinro.codegen.tracing import Graph, Tracer, _lift
-from shinro.estimators.kalman_filter import KalmanFilter
-from shinro.factories.estimator_factory import EstimatorFactory
-from shinro.factories.controller_factory import ControllerFactory
 from shinro.controllers.lqr import LQR
+from shinro.estimators.kalman_filter import KalmanFilter
+from shinro.factories.controller_factory import ControllerFactory
+from shinro.factories.estimator_factory import EstimatorFactory
 from shinro.utils.array_backend import NumpyBackend
-
 
 # ─── helpers ───────────────────────────────────────────────────────────────
 
@@ -49,16 +47,26 @@ class TestTraceKalman:
         # Both are (n_x, 1) column vectors; n_x = 3 for the base config.
         input_shapes = {"measurement": (3, 1), "control_input": (3, 1)}
 
+        # Snapshot the initial state so each trial starts from the same P and
+        # x_hat. The KF carries both across calls; if we don't reset them, the
+        # numpy reference accumulates while the traced KF (which restores
+        # attrs after each trace) doesn't, causing a spurious divergence.
+        initial_P = kf_np.P.copy()
+
         for trial in range(50):
             y = rng.normal(0.0, 0.1, (3, 1))
             u = rng.normal(0.0, 0.1, (3, 1))
             x_hat_init = rng.normal(0.0, 0.1, (3, 1))
 
-            # Ground truth: run the live numpy KF from this initial state.
+            # Ground truth: run the live numpy KF from a fresh state.
+            kf_np.P = initial_P.copy()
             kf_np.x_hat = x_hat_init.copy()
             expected = kf_np.estimate(y, u)
 
-            # Trace: inject the same initial x_hat as a state tracer.
+            # Trace: inject the same initial x_hat and let P be the frozen
+            # const value (the traced KF's P is restored to initial_P after
+            # each trace, matching the numpy reference's reset above).
+            kf_trace.P = initial_P.copy()
             kf_trace.x_hat = x_hat_init.copy()
             node_graph = trace_node(
                 kf_trace,
