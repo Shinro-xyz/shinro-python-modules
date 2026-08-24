@@ -1,0 +1,7 @@
+.{
+    .name = .shinro_runtime,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.16.0",
+    .fingerprint = 0x11b62472175f35dc,
+    .paths = .{ "build.zig", "build.zig.zon", "lower.zig", "linalg.zig", "tests" },
+}

@@ -78,18 +78,20 @@ test-integration:
 
 # ───────────────────────────────────────────────────────────────────────────
 # Zig lowering (slice b): serialize the base_tracking composed graph to
-# runtime/graph_data.zig, compile the comptime VM into build/base.so, then
-# cross-check the .so against the Python interpreter (ctypes oracle).
-# Requires `zig` on PATH (see runtime/README.md). build/ is gitignored.
+# runtime/graph_data.zig, compile the comptime VM via runtime/build.zig into
+# build/lib/libbase.so, then cross-check the .so against the Python
+# interpreter (ctypes oracle). Requires `zig` on PATH (see runtime/README.md).
+# build/ is gitignored.
 # ───────────────────────────────────────────────────────────────────────────
 zig-gen:
 	mkdir -p build
 	python3 scripts/gen_base.py
 
 zig-build: zig-gen
-	zig build-lib runtime/lower.zig -dynamic -lc -femit-bin=build/base.so -I runtime
+	zig build --build-file runtime/build.zig --prefix build/
 
 test-zig: zig-build
+	zig build test --build-file runtime/build.zig
 	python3 -m pytest tests/test_zig_lowering.py -v --tb=short
 
 # Run linter and type checker

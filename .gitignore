@@ -15,6 +15,11 @@ src/shinro/_version.py
 runtime/graph_data.zig
 *.o
 
+# Zig build cache and install output (zig build writes .zig-cache/ into the
+# build root; artifacts go to build/ which is ignored above).
+.zig-cache/
+zig-out/
+
 # Distribution / packaging
 .Python
 build/

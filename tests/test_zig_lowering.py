@@ -2,9 +2,9 @@
 
 The MVP acceptance test for slice b. It generates ``runtime/graph_data.zig``
 from the base_tracking composed graph (KF + LQR, input-clipped), compiles the
-comptime VM with ``zig build-lib``, loads ``base.so`` via ctypes, and asserts
-the C-ABI ``shinro_step`` output equals ``interpret()`` to float-exactness
-across 50 seeded random inputs.
+comptime VM with ``zig build`` (runtime/build.zig), loads ``libbase.so`` via
+ctypes, and asserts the C-ABI ``shinro_step`` output equals ``interpret()`` to
+float-exactness across 50 seeded random inputs.
 
 Requires ``zig`` on PATH. Skipped cleanly if it's unavailable.
 """
@@ -19,8 +19,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from shinro.codegen import interpret
 from scripts.gen_base import build_base_graph
+from shinro.codegen import interpret
 from shinro.codegen.lower_zig import lower_zig
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -38,20 +38,24 @@ def base_so(tmp_path_factory):
     out_zig = RUNTIME / "graph_data.zig"
     lower_zig(composed, str(out_zig))
 
-    so_path = tmp_path_factory.mktemp("zig") / "base.so"
+    # Build with the standard build system, then load libbase.so from the
+    # install prefix. Use a temp prefix so the repo's build/ isn't touched.
+    build_dir = tmp_path_factory.mktemp("zig-build")
     cmd = [
         "zig",
-        "build-lib",
-        str(RUNTIME / "lower.zig"),
-        "-dynamic",
-        "-lc",
-        f"-femit-bin={so_path}",
-        "-I",
-        str(RUNTIME),
+        "build",
+        "--build-file",
+        str(RUNTIME / "build.zig"),
+        "--prefix",
+        str(build_dir),
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        pytest.skip(f"zig build-lib failed: {result.stderr.strip()[:400]}")
+        pytest.skip(f"zig build failed: {result.stderr.strip()[:400]}")
+
+    so_path = build_dir / "lib" / "libbase.so"
+    if not so_path.exists():
+        pytest.skip(f"zig build produced no libbase.so; stderr: {result.stderr.strip()[:400]}")
 
     lib = ctypes.CDLL(str(so_path))
     lib.shinro_step.argtypes = [
