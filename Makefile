@@ -76,6 +76,22 @@ test-all:
 test-integration:
 	python3 -m pytest tests/integration/ -v --tb=short --override-ini="addopts="
 
+# ───────────────────────────────────────────────────────────────────────────
+# Zig lowering (slice b): serialize the base_tracking composed graph to
+# runtime/graph_data.zig, compile the comptime VM into build/base.so, then
+# cross-check the .so against the Python interpreter (ctypes oracle).
+# Requires `zig` on PATH (see runtime/README.md). build/ is gitignored.
+# ───────────────────────────────────────────────────────────────────────────
+zig-gen:
+	mkdir -p build
+	python3 -m shinro.codegen.gen_base
+
+zig-build: zig-gen
+	zig build-lib runtime/lower.zig -dynamic -lc -femit-bin=build/base.so -I runtime
+
+test-zig: zig-build
+	python3 -m pytest tests/test_zig_lowering.py -v --tb=short
+
 # Run linter and type checker
 lint:
 	ruff check .
