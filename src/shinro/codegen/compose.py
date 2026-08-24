@@ -210,6 +210,12 @@ def _merge_and_rewire(
         if node.op == "input":
             # Placeholder — not copied. Consumers will use source_ids[name].
             continue
+        if node.op == "output":
+            # Subgraph outputs are markers only — compose() declares the
+            # combined graph's outputs itself. Skip them so output names
+            # don't duplicate. output_nodes already holds the SOURCE node
+            # id (not the output node's id), so no remap entry is needed.
+            continue
         # Remap inputs: placeholders → source ids, others → already-copied ids.
         new_inputs: list[int] = []
         for inp in node.inputs:
