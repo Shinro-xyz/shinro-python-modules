@@ -31,7 +31,9 @@ pub fn matmul(comptime m: usize, comptime k: usize, comptime n: usize, a: []cons
     for (0..m) |i| {
         for (0..n) |j| {
             var s: f64 = 0.0;
-            for (0..k) |p| s += a[i * k + p] * b[p * n + j];
+            for (0..k) |p| {
+                s += a[i * k + p] * b[p * n + j];
+            }
             out[i * n + j] = s;
         }
     }
@@ -56,7 +58,9 @@ pub fn matvec(comptime m: usize, comptime k: usize, a: []const f64, v: []const f
     var out: [m]f64 = undefined;
     for (0..m) |i| {
         var s: f64 = 0.0;
-        for (0..k) |p| s += a[i * k + p] * v[p];
+        for (0..k) |p| {
+            s += a[i * k + p] * v[p];
+        }
         out[i] = s;
     }
     return out;
@@ -80,7 +84,9 @@ pub fn vecmat(comptime k: usize, comptime n: usize, v: []const f64, b: []const f
     var out: [n]f64 = undefined;
     for (0..n) |j| {
         var s: f64 = 0.0;
-        for (0..k) |p| s += v[p] * b[p * n + j];
+        for (0..k) |p| {
+            s += v[p] * b[p * n + j];
+        }
         out[j] = s;
     }
     return out;
