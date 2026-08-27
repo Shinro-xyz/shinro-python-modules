@@ -1,17 +1,22 @@
-"""shinro — Whole-body control framework for the lekiwi robot.
+"""shinro — Whole-body control framework for modular robotics.
 
-A modular robotics control stack with four abstract base classes and
-concrete implementations for trajectory generation, control, state
-estimation, and plant dynamics.
+A modular robotics control stack built on five abstract base classes —
+Controller, Plant, StateEstimator, TrajectoryGenerator, and PhysicsEngine —
+with concrete implementations for trajectory generation, control, state
+estimation, and plant dynamics. Components are assembled from TOML config
+via registry-based factories and can run on numpy or torch backends.
 
 Subpackages:
-    shinro.trajectories — Reference path generators (CubicPolynomial, QuinticPolynomial)
-    shinro.controllers  — Control algorithms (LQR, PID, MPC)
-    shinro.plants       — Robot models (ArmRobot, HolonomicMobileRobot)
-    shinro.estimators   — State estimation (KalmanFilter, LuenbergerObserver)
-    shinro.factories    — Registry-based component factories (TOML config driven)
-    shinro.simulation   — Generic robot simulation factory
-    shinro.mcp          — Model Context Protocol server exposing the control suite
+    shinro.trajectories  — Reference path generators (CubicPolynomial, QuinticPolynomial)
+    shinro.controllers   — Control algorithms (LQR, PID, MPC, MPPI, SMC)
+    shinro.plants        — Robot models (ArmRobot, HolonomicMobileRobot)
+    shinro.estimators    — State estimation (KalmanFilter, LuenbergerObserver)
+    shinro.physics_engine — Physics engine adapters (MuJoCo)
+    shinro.factories     — Registry-based component factories (TOML config driven)
+    shinro.simulation    — Generic robot simulation factory
+    shinro.mcp           — Model Context Protocol server exposing the control suite
+    shinro.codegen       — Trace → compose → interpret → lower pipeline
+    shinro.utils         — Array backend, linearization, controllability analysis
 """
 
 from shinro.components import Controller, PhysicsEngine, Plant, StateEstimator, TrajectoryGenerator

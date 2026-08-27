@@ -95,7 +95,7 @@ There is a factory per category (`ControllerFactory`, `EstimatorFactory`,
 `TrajectoryFactory`, `PlantFactory`), all with the same shape. Configs live in
 `src/shinro/configs/`, packaged with the library.
 
-## 2: Simulation — putting the loop together
+## Layer 2: Simulation — putting the loop together
 
 `src/shinro/simulation/robotsim.py` assembles a whole scenario from a single
 scenario TOML (e.g. `tests/integration/scenarios/base_tracking.toml`). A
@@ -115,7 +115,7 @@ analytical `step()` for a fast in-memory simulation.
 The key design point: a *scenario* is data, not code. You can swap the
 controller from `LQR` to `MPC` by editing one line of a TOML file.
 
-## 3: Backend-agnostic math (`ArrayBackend`)
+## Layer 3: Backend-agnostic math (`ArrayBackend`)
 
 Controllers and plants never import `numpy` or `torch` directly — they go
 through `ArrayBackend` (`src/shinro/utils/array_backend.py`). This is a thin
@@ -125,11 +125,12 @@ suite against both (`conftest.py`). The same controller code runs on either
 backend with zero changes — and this same seam is what makes tracing possible
 (see the codec pipeline below).
 
-## 4: The codegen pipeline (compiling the loop)
+## Layer 4: The codegen pipeline (compiling the loop)
 
 The most distinctive piece is `src/shinro/codegen/`. Its goal: turn a
-closed-loop step into a **static computation graph** that can be compiled to
-native code (a `.so`) that provably matches the Python math.
+closed-loop step into a **static computation graph** that is compiled to a
+native `.so` (via a Zig comptime-unrolled VM in `runtime/`) that provably
+matches the Python math.
 
 The mechanism is **tracing** (JAX/XLA style). See [`codegen.md`](./codegen.md)
 for the full walkthrough. The short version:
@@ -141,8 +142,11 @@ for the full walkthrough. The short version:
    closed-loop tick, auto-inserting `reshape` nodes where shapes differ.
 3. **Interpret** — replay the graph on real numpy inputs. If the replay
    matches the live numpy loop to `1e-12`, the trace is proven correct.
-4. **Lower** (slice b, in progress) — emit the graph as Zig/C, compile to
-   `base.so`.
+4. **Lower** — emit the graph as Zig compile-time constants
+   (`runtime/graph_data.zig`) and run it through the comptime VM
+   (`runtime/lower.zig`) to produce `base.so`. The VM is fixed at compile time:
+   shapes and constants are baked, no heap allocation, no runtime dispatch.
+   See [`codegen.md`](./codegen.md) and [`runtime/README.md`](../runtime/README.md).
 
 Because the graph *is* a transcription of the Python execution, the only thing
 that can go wrong at deployment is the small set of primitive operations —
@@ -151,7 +155,7 @@ each verified once against `NumpyBackend` and reused for every component.
 This is the deployment path: run and verify the control law in Python, then
 compile the exact same math into a small, fast, dependency-free native library.
 
-## 5: The MCP server (remote control)
+## Layer 5: The MCP server (remote control)
 
 `src/shinro/mcp/` exposes the entire library as a Model Context Protocol
 server (`shinro-mcp`). An MCP client (Claude Desktop, Cline, custom hosts) can

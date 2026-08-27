@@ -4,8 +4,13 @@ A Model Context Protocol (MCP) server exposing the shinro control library as cal
 
 ## Quick Start
 
+The server ships as the `shinro-mcp` console script (installed with the package; entry point
+`shinro.mcp.server:main` in `pyproject.toml`):
+
 ```bash
-python shinro_mcp_server.py
+shinro-mcp
+# or, if the console script is not on PATH:
+python -m shinro.mcp.server
 ```
 
 The server listens on `stdio` and registers all tools below. Connect via an MCP client that supports the stdio transport.
@@ -28,8 +33,7 @@ Add to `claude_desktop_config.json`:
 {
   "mcpServers": {
     "shinro": {
-      "command": "python",
-      "args": ["/absolute/path/to/shinro-python-modules/shinro_mcp_server.py"]
+      "command": "shinro-mcp"
     }
   }
 }
@@ -44,7 +48,7 @@ Add to `opencode.json`:
   "mcp": {
     "shinro": {
       "type": "local",
-      "command": ["python", "shinro_mcp_server.py"]
+      "command": ["shinro-mcp"]
     }
   }
 }
@@ -56,8 +60,21 @@ Add to `opencode.json`:
 {
   "mcpServers": {
     "shinro": {
+      "command": "shinro-mcp"
+    }
+  }
+}
+```
+
+If the `shinro-mcp` script isn't on `PATH` (e.g. an active virtualenv), point the
+command at the module form instead:
+
+```json
+{
+  "mcpServers": {
+    "shinro": {
       "command": "python",
-      "args": ["/path/to/shinro_mcp_server.py"]
+      "args": ["-m", "shinro.mcp.server"]
     }
   }
 }

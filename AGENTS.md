@@ -34,13 +34,16 @@ For lab notes, read `lab-notes/daily/` directly (see below).
 
 ### Current Components
 
-| Category | Linear | Nonlinear (planned) |
-|----------|--------|---------------------|
-| **Controllers** | LQR, PID, MPC (LTI), LeRobot diffusion | NMPC, iLQR, MPPI, computed torque, sliding mode, adaptive |
-| **Plants** | HolonomicMobileRobot, ArmRobot (double integrator), InvertedPendulum, CartPole | Quadrotor, unicycle, double pendulum |
-| **Estimators** | Kalman filter, Luenberger observer | EKF, UKF, particle filter |
-| **Trajectories** | Cubic, Quintic, waypoint/phase schedules | B-spline, Lissajous, minimum-snap |
+| Category | Shipped | Planned / experimental |
+|----------|---------|------------------------|
+| **Controllers** | LQR, PID, MPC_LTI, MPC_DeltaU, MPPI, SMC, OnnxRL, LeRobotDiffusion | NMPC, iLQR, computed torque, adaptive |
+| **Plants** | HolonomicMobileRobot, ArmRobot (6-DOF), InvertedPendulum, CartPole, DoublePendulum, Quadrotor (placeholder) | Unicycle, freeflyer |
+| **Estimators** | KalmanFilter, LuenbergerObserver | EKF, UKF, particle filter |
+| **Trajectories** | CubicPolynomial, QuinticPolynomial, waypoints, phase_list | B-spline, Lissajous, minimum-snap |
 | **Physics Engines** | MuJoCo | Isaac Lab, PyBullet, Drake, null (no sim) |
+
+> For the full per-component catalog (registered names, config files), see
+> [`docs/components.md`](./docs/components.md).
 
 ### Key Files
 
@@ -50,16 +53,24 @@ For lab notes, read `lab-notes/daily/` directly (see below).
 | `src/shinro/controllers/mpc_lti.py` | MPC with OSQP QP solver — trajectory optimization |
 | `src/shinro/controllers/lqr.py` | LQR with DARE solve — regulation/stabilization |
 | `src/shinro/controllers/pid.py` | PID with anti-windup — joint-space position servo |
+| `src/shinro/controllers/mppi.py` | Sampling-based Model Predictive Path Integral |
+| `src/shinro/controllers/smc.py` | Sliding Mode Control — robust nonlinear |
+| `src/shinro/controllers/onnx_rl_adapter.py` | ONNX neural-net policy adapter |
 | `src/shinro/controllers/lerobot_adapter.py` | Learned policy adapter (diffusion, ACT, pi0) |
 | `src/shinro/plants/holonomicmobilerobot.py` | 3-DOF base with omni-wheel kinematics |
 | `src/shinro/plants/armrobot.py` | 6-DOF arm: FK, Jacobian, IK, Cartesian step |
 | `src/shinro/plants/inverted_pendulum.py` | 2D inverted pendulum with analytical dynamics |
 | `src/shinro/plants/cartpole.py` | 4D cart-pole with coupled dynamics |
+| `src/shinro/plants/double_pendulum.py` | 4D planar double pendulum |
 | `src/shinro/plants/quadrotor.py` | 12D quadrotor placeholder |
 | `src/shinro/estimators/kalman_filter.py` | Discrete Kalman filter — predict-update cycle |
 | `src/shinro/estimators/luenberger_observer.py` | Observer dynamics — x̂ = Ax̂ + Bu + L(y − Cx̂) |
 | `src/shinro/trajectories/cubic_polynomial.py` | 3rd-order, position + velocity continuity |
 | `src/shinro/trajectories/quintic_polynomial.py` | 5th-order, position + velocity + acceleration continuity |
+| `src/shinro/codegen/` | Trace → compose → interpret → lower (tracing pipeline) |
+| `src/shinro/codegen/lower_zig.py` | Serialize a composed graph to `runtime/graph_data.zig` |
+| `runtime/` | Zig comptime VM + linalg kernels + generated graph (see `runtime/README.md`) |
+| `scripts/gen_base.py` | Regenerate the `base_tracking` graph in `runtime/graph_data.zig` |
 | `src/shinro/physics_engine/mujoco.py` | MuJoCo engine adapter |
 | `src/shinro/simulation/robotsim.py` | Generic robot simulation factory (config-driven) |
 | `lekiwi_sim.py` | Legacy LeKiwi simulation wrapper (not packaged) |

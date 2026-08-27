@@ -1,8 +1,7 @@
 {
   "mcpServers": {
     "shinro": {
-      "command": "python",
-      "args": ["${CLAUDE_PROJECT_DIR}/shinro_mcp_server.py"]
+      "command": "shinro-mcp"
     }
   }
 }

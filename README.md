@@ -19,6 +19,15 @@ Conceptual and operational documentation lives in
 - **[Control Architecture](https://docs.shinro.xyz/control-architecture/)** — why the five ABCs exist, how they compose, sim/hardware parity
 - **[Python Modules](https://docs.shinro.xyz/python-modules/)** — the operational guide: install, run, extend, component catalog
 
+The same guides live in-repo under [`docs/`](./docs/) (no internet required):
+
+- **[`docs/quickstart.md`](./docs/quickstart.md)** — install → build a controller from TOML → run a scenario → trace/lower. Start here.
+- **[`docs/how-it-works.md`](./docs/how-it-works.md)** — the five ABCs, the dataflow, and each layer (factories, sim, backends, codegen, MCP).
+- **[`docs/components.md`](./docs/components.md)** — catalog of every registered component (class, registered name, file, config).
+- **[`docs/codegen.md`](./docs/codegen.md)** — tracing → composition → interpretation → Zig lowering to a `.so`.
+- **[`docs/mcp_server.md`](./docs/mcp_server.md)** — running the `shinro-mcp` server and its tool reference.
+- **[`docs/testing.md`](./docs/testing.md)** — how the suite is organized and run.
+
 This README stays limited to repo-local setup and contributor pointers.
 
 ## Install
@@ -105,9 +114,21 @@ python scripts/generate_robot_config.py lekiwi-sim/mjcf_lcmm_robot.xml > robot_c
 
 ## Repo structure
 
-See [Python Modules](https://docs.shinro.xyz/python-modules/) for the annotated
-architecture and component catalog. For the raw file tree, browse the repo on
-GitHub rather than reading it out of this README — it drifts.
+- `src/shinro/` — the package. `components.py` holds the five ABCs; subpackages
+  implement them (`controllers/`, `plants/`, `estimators/`, `trajectories/`),
+  plus `factories/` (registry + config-driven construction), `simulation/`,
+  `physics_engine/`, `mcp/`, `utils/`, and `codegen/` (trace → lower pipeline).
+  The full annotated catalog is in [`docs/components.md`](./docs/components.md).
+- `runtime/` — the Zig comptime VM that executes lowered graphs
+  (see [`runtime/README.md`](./runtime/README.md)).
+- `demos/` — runnable example scenarios (`python -m demos.demo_*`).
+- `tests/` — pytest suite (see [`docs/testing.md`](./docs/testing.md)).
+- `lab-notes/daily/` — dated engineering notes and design narrative.
+- `scripts/` — codegen and config-generation helpers (`scripts/gen_base.py`,
+  `scripts/generate_robot_config.py`).
+
+For the raw file tree, browse the repo on GitHub rather than reading it out of
+this README — it drifts.
 
 ## Contributing / agent instructions
 

@@ -1,8 +1,9 @@
 # Codegen: Compiling the Control Loop to a Native Library
 
 The `codegen` pipeline turns a closed-loop control step (estimator + controller
-on a plant) into a static computation graph that can be verified to
-float-exactness against numpy and, in a future slice, lowered to native code.
+on a plant) into a static computation graph that is verified to float-exactness
+against numpy and then lowered to a native library (`.so`) via a Zig
+comptime-unrolled VM.
 
 The motivation is deployment: the shipped `.so` must *provably* agree with the
 Python loop. Rather than reimplementing the control math by hand in a compiled
@@ -13,9 +14,10 @@ lowerings, which are verified once and reused for every component.
 This is an XLA/JAX-style tracing model. Components run once with abstract
 `Tracer` values instead of real arrays; every operation they perform is
 captured as a node in a `Graph`. The graph is then replayed on real inputs by
-the interpreter (the correctness oracle) or, in slice (b), lowered to Zig.
+the interpreter (the correctness oracle) or lowered to Zig by `lower_zig`.
 
-The pipeline lives in `src/shinro/codegen/`. The design narrative is in
+The pipeline lives in `src/shinro/codegen/`; the Zig VM lives in `runtime/`
+(see [`runtime/README.md`](../runtime/README.md)). The design narrative is in
 `lab-notes/daily/2026-08-24.md`.
 
 ## Pipeline overview
@@ -26,7 +28,7 @@ The pipeline lives in `src/shinro/codegen/`. The design narrative is in
   component ───────▶│ trace_node()   ──▶ NodeGraph (per component)│
                     │ compose()      ──▶ ComposedGraph (one tick) │
                     │ interpret()    ──▶ numpy arrays             │
-                    │ lower_zig()    ──▶ Zig → base.so  (slice b) │
+                    │ lower_zig()    ──▶ Zig → base.so  (shipped) │
                     └─────────────────────────────────────────────┘
 ```
 
@@ -44,8 +46,11 @@ The pipeline lives in `src/shinro/codegen/`. The design narrative is in
 3. **Interpret** (`interpret`). Replay the graph on real numpy inputs as a
    correctness oracle. If the interpreter's output matches a live
    `NumpyBackend` run to float-exactness, the tracer is sound.
-4. **Lower** (slice b, future). Walk the graph and emit a Zig module exposing
-   a `shinro_step` C-ABI function with baked constants, compiled to a `.so`.
+4. **Lower** (`lower_zig`). Walk the graph and emit Zig — a `runtime/`
+   module exposing a `shinro_step` C-ABI function with baked constants,
+   compiled to a `.so`. The generated graph is written to
+   `runtime/graph_data.zig`; the comptime VM that executes it is
+   `runtime/lower.zig`.
 
 ## Module map
 
@@ -58,7 +63,10 @@ The pipeline lives in `src/shinro/codegen/`. The design narrative is in
 | `codegen/ops.py` | Op-handler registry (`OP_HANDLERS`). The data-driven "switch" — adding a new op is one `@register_op` decorator. |
 | `codegen/interpreter.py` | `interpret` / `interpret_step` — replay a graph on real numpy inputs. |
 | `codegen/compose.py` | `compose` — merge per-component graphs into one closed-loop step graph, auto-inserting `reshape`/`clip`. |
+| `codegen/lower_zig.py` | Emit `runtime/graph_data.zig` (the graph as Zig constants) from a composed graph. |
 | `demo_codegen.py` (repo root) | Runnable demo: traces KF+LQR for the base and cartpole plants, composes, and verifies each stage against a live numpy loop. |
+| `runtime/` (Zig) | `build.zig` (build script), `lower.zig` (comptime-unrolled VM), `linalg.zig` (shared linear-algebra kernels), `graph_data.zig` (generated graph). |
+| `scripts/gen_base.py` | Serializes the `base_tracking` composed graph to `runtime/graph_data.zig` (the `make zig-gen` target). |
 
 ## The tracing model
 
@@ -168,10 +176,69 @@ def _matmul(node, values, inputs):
 ```
 
 An unsupported op raises `NotImplementedError` naming the op to add and
-listing available ops. The current set:
+listing available ops. The current set (from `ops.py`):
 
 `const`, `input`, `output`, `matmul`, `add`, `sub`, `mul`, `neg`, `transpose`,
-`inv`, `reshape`, `clip`, `where`, `copy`, `any`, `solve`, `diag`, `stack`.
+`inv`, `reshape`, `clip`, `where`, `copy`, `any`, `tanh`, `relu`, `div`,
+`exp`, `argmax`, `one_hot`, `slice`.
+
+## Lowering to Zig (shipped)
+
+The lowerer (`codegen/lower_zig.py`) walks a composed graph and serializes it
+to `runtime/graph_data.zig` — the nodes, const blob, and per-node shapes become
+Zig compile-time constants. The runtime VM (`runtime/lower.zig`) is a
+comptime-unrolled interpreter: one `inline for` over the graph nodes with a
+`switch (node.op)` dispatch, where each node's `rows`/`cols` are comptime loop
+bounds. This mirrors the XLA model of the Python tracer:
+
+- **Fixed at compile time** — shapes, constants, and the op set are baked;
+  there is no heap allocation and no runtime dispatch. Each node's work is
+  statically unrolled.
+- **Static buffers** — a single stack array sized from the graph's total buffer
+  footprint (`buf_len`) is sliced per-node via offsets; no per-op allocation.
+- **Pure dataflow** — inputs arrive via an `inp` slice, outputs are written to
+  an `out` slice, and there are no side effects.
+
+One deliberate nuance: the *no-heap* property means "no per-op allocation and no
+op dispatch at runtime", **not** "no numeric iteration inside an op". Ops such
+as `inv` already do runtime LU iteration inside their comptime-shaped buffer —
+the same way XLA lowers `tf.linalg.inv` or `Select` to runtime loops. This is
+what keeps the deployment provably correct: the graph shape is known at compile
+time, even when the numeric work inside an op is data-dependent. (Adding a
+convergence-iterative op such as `solve_qp`/OSQP would follow the same pattern
+— a comptime-bounded workspace — but is not yet implemented.)
+
+The generated `.so` exposes a `shinro_step` C-ABI function; `tests/test_zig_lowering.py`
+loads it with `ctypes` and cross-checks its output against the Python
+interpreter to float-exactness.
+
+### Building and testing the Zig layer
+
+Requires `zig` on `PATH`:
+
+```bash
+make test-zig    # zig-gen → zig-build → zig test → pytest tests/test_zig_lowering.py
+```
+
+The individual steps are `make zig-gen` (serialize the `base_tracking` graph to
+`runtime/graph_data.zig`) and `make zig-build` (compile `runtime/build.zig` into
+`build/lib/libbase.so`). The `.so` lands in `build/` (gitignored).
+
+### Zig coverage of the op set
+
+`runtime/lower.zig` handles a subset of the interpreter's ops — the ops
+actually emitted by the shipped `base_tracking` graph (names follow the Zig
+enum in `graph_data.zig`; `cst`/`inp`/`out`/`where_op` are the Zig spellings of
+`const`/`input`/`output`/`where`):
+
+`const`, `input`, `output`, `matmul`, `add`, `sub`, `mul`, `div`, `neg`,
+`transpose`, `inv`, `reshape`, `clip`, `where`, `any`.
+
+The remaining interpreter ops are host-side only for now (`copy`, `tanh`,
+`relu`, `exp`, `argmax`, `one_hot`, `slice`) — they are interpreted in Python
+and simply don't appear in the lowered graphs yet. Adding one to the VM is a
+new `switch` case in `runtime/lower.zig`; adding a *new* interpreter op is a
+handler in `ops.py` plus that switch case.
 
 ## Graph invariants
 
@@ -215,11 +282,9 @@ Each stage prints `PASS` / `FAIL` based on the max abs error vs a live
   assertions, tracer primitive unit tests.
 - `tests/test_codegen_compose.py` — composition, KF+LQR composed step vs numpy
   loop, estimator/controller swap tests.
+- `tests/test_zig_lowering.py` — serializes a composed graph to Zig, builds the
+  `.so`, and cross-checks its `shinro_step` output against the Python
+  interpreter to float-exactness.
 
-## Slice (b) — lowering to Zig (future work)
-
-The next vertical slice: `lower_zig.py` walks the captured graph and emits a
-Zig module (a `shinro_step` C-ABI function with baked constants), `zig
-build-lib` produces `base.so`, and a `ctypes` cross-check asserts the `.so`'s
-output matches the interpreter to float-exactness. The tracer is proven sound;
-the lowering is the remaining deployment half.
+The full lowering path (graph → `.so` → cross-check) runs with `make test-zig`;
+see [Building and testing the Zig layer](#building-and-testing-the-zig-layer).
