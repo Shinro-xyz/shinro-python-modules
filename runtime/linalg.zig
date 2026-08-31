@@ -11,6 +11,9 @@
 // oracle's atol=1e-12, so LAPACK is unnecessary here.
 //
 // Inputs are slices; the VM hands out fixed-length slices of its buffer.
+// 
+
+const std= @import("std");
 
 /// Matrix multiply: (m, k) @ (k, n) -> (m, n), row-major, flat output.
 ///
@@ -155,4 +158,21 @@ pub fn inv(comptime n: usize, a: []const f64) [n * n]f64 {
         }
     }
     return out;
+}
+
+
+// sine for an array of values
+
+pub fn sin_vec (comptime m: usize, a:[]const f64) [m]f64{
+    var out: [m]f64= undefined;
+    for (0..m) |i| {
+        out[i]=std.math.sin(a[i]);
+    }
+    return out;
+}
+
+//cosine for an array of values
+
+pub fn cos_vec(comptime m: usize, a:[]const f64) [m]f64{
+    
 }
