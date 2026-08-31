@@ -123,6 +123,7 @@ Each session's lab note MUST contain a semantic summary of the changes made — 
 
 ## Workflow
 
+0. **Check tickets** — Review open GitHub issues (`gh issue list`) before starting; pick up or close anything relevant
 1. **Understand** — Read the source directly (`src/shinro/**`) and `lab-notes/daily/` for relevant context
 2. **Plan** — Describe the change and which files to modify
 3. **Implement** — Use OpenCode or direct editing
