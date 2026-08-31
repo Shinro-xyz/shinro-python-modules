@@ -174,5 +174,6 @@ pub fn sin_vec (comptime m: usize, a:[]const f64) [m]f64{
 //cosine for an array of values
 
 pub fn cos_vec(comptime m: usize, a:[]const f64) [m]f64{
+    var out: [m]f64 = undefined;
     
 }
