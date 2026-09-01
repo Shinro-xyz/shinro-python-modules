@@ -23,7 +23,10 @@ from scripts.gen_base import build_base_graph
 from shinro.codegen import interpret
 from shinro.codegen.compose import ComposedGraph
 from shinro.codegen.lower_zig import lower_zig
+from shinro.codegen.trace_node import trace_node
 from shinro.codegen.tracing import Graph
+from shinro.factories.controller_factory import ControllerFactory
+from shinro.utils.array_backend import NumpyBackend
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RUNTIME = REPO_ROOT / "runtime"
@@ -112,6 +115,27 @@ def _build_lowered_ops_graph():
     )
 
 
+def _build_mpc_graph():
+    """Trace the base MPC_LTI and wrap it as a single-input step graph.
+
+    The traced compute() is: x0 → q = Fᵀ x0 (matmul) → solve_qp → u[:3]
+    (slice). The ``solve_qp`` node drives the codegen static solver baked into
+    libbase.so (runtime/codegen/emosqp/), whose problem must match the
+    ``mpc_lti_base.toml`` bake (n_vars=30).
+    """
+    ctrl = ControllerFactory(
+        str(REPO_ROOT / "src/shinro/configs/controllers/mpc_lti_base.toml")
+    ).create(backend=NumpyBackend())
+    ng = trace_node(ctrl, input_shapes={"x0": (3,)})
+    return ComposedGraph(
+        graph=ng.graph,
+        inputs=["x0"],
+        outputs=["out"],
+        state_inputs=[],
+        state_outputs=[],
+    )
+
+
 @pytest.fixture(scope="session")
 def base_so(tmp_path_factory):
     """Build the .so from the base_tracking composed graph once per session."""
@@ -122,6 +146,12 @@ def base_so(tmp_path_factory):
 def lowered_ops_so(tmp_path_factory):
     """Build the .so from the lowered-ops graph once per session."""
     return _build_so(_build_lowered_ops_graph(), tmp_path_factory.mktemp("zig-build-ops"))
+
+
+@pytest.fixture(scope="session")
+def mpc_so(tmp_path_factory):
+    """Build the .so from the traced MPC graph (exercises the .solve_qp op)."""
+    return _build_so(_build_mpc_graph(), tmp_path_factory.mktemp("zig-build-mpc"))
 
 
 def _output_split(cg):
@@ -257,3 +287,33 @@ class TestLoweredOpsOracle:
                     assert np.array_equal(got, expected), (
                         f"op {name} diverged: got {got}, expected {expected}"
                     )
+
+
+class TestSolveQpOracle:
+    """The .solve_qp VM op (codegen static solver) matches the interpreter.
+
+    The .so's shinro_step drives the statically-allocated OSQP solver baked
+    from ``mpc_lti_base.toml`` (eps=1e-6); the interpreter's solve_qp handler
+    solves the same problem with the same tolerance via the Python osqp.
+    Both are the same ADMM algorithm, so u[:3] agrees within tolerance (the
+    flat terminal-control region only affects the discarded u[29]).
+    """
+
+    def test_mpc_solve_matches_interpreter(self, mpc_so):
+        lib, cg = mpc_so
+        rng = np.random.default_rng(3)
+        n_out, n_state = _output_split(cg)
+        assert n_state == 0
+        assert n_out == 3
+
+        max_err = 0.0
+        for _ in range(10):
+            x0 = rng.normal(0.0, 0.1, (3,))
+            inputs = _pack_arrays(cg, {"x0": x0})
+            out, _ = _step(lib, cg, inputs, n_out, n_state)
+
+            traced = interpret(cg.graph, {"x0": x0})["out"]
+            max_err = max(max_err, float(np.max(np.abs(out - np.asarray(traced).ravel()))))
+
+        assert max_err < 1e-3, f"Zig .so solve_qp diverged from interpreter: max abs err = {max_err:.3e}"
+

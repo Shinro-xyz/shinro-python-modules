@@ -112,23 +112,23 @@ def _inv(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray
 
 @register_op("solve_qp")
 def _solve_qp(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
-    """Solve ``min ½ uᵀ H u + qᵀ u`` s.t. ``l ≤ A u ≤ u``.
+    """Solve ``min ½ uᵀ H u + qᵀ u`` s.t. ``lb ≤ A u ≤ ub``.
 
-    ``q`` is the node's sole input (``q = Fᵀ x₀`` for MPC); H/A/l/u are baked
-    into the node's attrs at trace time (the Zig VM instead uses the codegen
-    static ``solver`` global, so this handler must match its eps=1e-6).
-    Returns the full solution; MPC slices ``u[:m]`` downstream.
+    ``q`` is the node's sole input (``q = Fᵀ x₀`` for MPC); H/A/lb/ub are
+    baked into the node's attrs at trace time (the Zig VM instead uses the
+    codegen static ``solver`` global, so this handler must match its
+    eps=1e-6). Returns the full solution; MPC slices ``u[:m]`` downstream.
     """
     q = np.asarray(values[node.inputs[0]]).ravel()
-    l = np.asarray(node.attrs["l"]).ravel()
-    u = np.asarray(node.attrs["u"]).ravel()
+    lb = np.asarray(node.attrs["lb"]).ravel()
+    ub = np.asarray(node.attrs["ub"]).ravel()
     prob = osqp.OSQP()
     prob.setup(
         sparse.csc_matrix(np.asarray(node.attrs["H"], dtype=np.float64)),
         q,
         node.attrs["A"],
-        l,
-        u,
+        lb,
+        ub,
         warm_starting=True,
         verbose=False,
     )

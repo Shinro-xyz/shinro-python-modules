@@ -18,7 +18,7 @@
           "analysis": {
             "typeCheckingMode": "basic",
             "autoSearchPaths": true,
-            "useLibraryCodeForTypes": true
+            "useLibraryCodeForTypes": false
           }
         }
       }

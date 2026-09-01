@@ -58,12 +58,12 @@ class ArrayBackend(ABC):
     def solve(self, A, b) -> Any: ...
 
     @abstractmethod
-    def solve_qp(self, q, H, A, l, u) -> Any:
-        """Solve a convex QP ``min ½ uᵀ H u + qᵀ u`` s.t. ``l ≤ A u ≤ u``.
+    def solve_qp(self, q, H, A, lb, ub) -> Any:
+        """Solve a convex QP ``min ½ uᵀ H u + qᵀ u`` s.t. ``lb ≤ A u ≤ ub``.
 
         The solver is C-based (OSQP) and always runs on numpy, so this is the
         per-step bridge for MPC: ``q`` is the state-dependent linear cost,
-        ``H``/``l``/``u`` are backend arrays, and ``A`` is a scipy sparse
+        ``H``/``lb``/``ub`` are backend arrays, and ``A`` is a scipy sparse
         constraint matrix (from ``MPC_LTI.constraints``). Returns the full
         solution ``u*`` (length = ``q`` length); MPC slices out the first
         ``m`` controls.
@@ -244,7 +244,7 @@ class NumpyBackend(ArrayBackend):
     def solve(self, A, b):
         return np.linalg.solve(A, b)
 
-    def solve_qp(self, q, H, A, l, u):
+    def solve_qp(self, q, H, A, lb, ub):
         """Solve the MPC QP with OSQP (numpy-native at the C boundary).
 
         Uses ``eps=1e-6`` to match the codegen-baked static solver the Zig VM
@@ -256,8 +256,8 @@ class NumpyBackend(ArrayBackend):
         from scipy import sparse
 
         q_np = np.asarray(q).ravel()
-        l_np = np.asarray(l).ravel()
-        u_np = np.asarray(u).ravel()
+        l_np = np.asarray(lb).ravel()
+        u_np = np.asarray(ub).ravel()
         prob = osqp.OSQP()
         prob.setup(
             sparse.csc_matrix(np.asarray(H, dtype=np.float64)),
@@ -477,10 +477,10 @@ class TorchBackend(ArrayBackend):
             b = self.torch.stack(b)
         return self.torch.linalg.solve(A, b)
 
-    def solve_qp(self, q, H, A, l, u):
+    def solve_qp(self, q, H, A, lb, ub):
         """Solve the MPC QP with OSQP, converting across the tensor boundary.
 
-        q/H/l/u may be torch tensors (from the config-baked matrices); A is a
+        q/H/lb/ub may be torch tensors (from the config-baked matrices); A is a
         scipy sparse matrix. Converts to numpy, solves with eps=1e-6 (matching
         the codegen static solver), and returns the solution as a tensor.
         """
@@ -493,8 +493,8 @@ class TorchBackend(ArrayBackend):
             return np.asarray(x)
 
         q_np = _np(q).ravel()
-        l_np = _np(l).ravel()
-        u_np = _np(u).ravel()
+        l_np = _np(lb).ravel()
+        u_np = _np(ub).ravel()
         prob = osqp.OSQP()
         prob.setup(
             sparse.csc_matrix(np.asarray(_np(H), dtype=np.float64)),
