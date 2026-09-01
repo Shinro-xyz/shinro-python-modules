@@ -202,4 +202,23 @@ pub fn elementwise_exponential (comptime m:usize,a:[]const f64) [m]f64{
 }
 
 /// matrix exponential-> only allows for nxn square matrices
-pub fn matrix_power (comptime n:usize, )
+pub fn matrix_power (comptime n:usize, a:[]const f64, comptime p: usize) [n*n]f64{
+    var result: [n*n]f64 = undefined;
+
+    // making the identuity matrix to make the matmul operations work
+
+    for (0..n) |i| {
+        for (0..n) |j| {
+            if (i==j) {
+                result[i*n+j]=1.0;
+            } else {
+                result[i*n+j]=0.0;
+            }
+        }
+    }
+
+    // completing the matrix power mults
+    for (0..p) |_| {
+        result= matmul(n, n,n, a: []const f64, b: []const f64)
+    }
+}
