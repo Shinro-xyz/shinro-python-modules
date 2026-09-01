@@ -30,6 +30,8 @@ from collections.abc import Callable
 from typing import Any
 
 import numpy as np
+import osqp
+from scipy import sparse
 
 from shinro.codegen.tracing import Node
 
@@ -106,6 +108,32 @@ def _transpose(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.n
 @register_op("inv")
 def _inv(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     return np.linalg.inv(values[node.inputs[0]])
+
+
+@register_op("solve_qp")
+def _solve_qp(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
+    """Solve ``min ½ uᵀ H u + qᵀ u`` s.t. ``l ≤ A u ≤ u``.
+
+    ``q`` is the node's sole input (``q = Fᵀ x₀`` for MPC); H/A/l/u are baked
+    into the node's attrs at trace time (the Zig VM instead uses the codegen
+    static ``solver`` global, so this handler must match its eps=1e-6).
+    Returns the full solution; MPC slices ``u[:m]`` downstream.
+    """
+    q = np.asarray(values[node.inputs[0]]).ravel()
+    l = np.asarray(node.attrs["l"]).ravel()
+    u = np.asarray(node.attrs["u"]).ravel()
+    prob = osqp.OSQP()
+    prob.setup(
+        sparse.csc_matrix(np.asarray(node.attrs["H"], dtype=np.float64)),
+        q,
+        node.attrs["A"],
+        l,
+        u,
+        warm_starting=True,
+        verbose=False,
+    )
+    prob.update_settings(eps_abs=1e-6, eps_rel=1e-6)
+    return prob.solve().x
 
 
 # ─── shape / selection glue ops (used by compose.py and PID) ──────────────

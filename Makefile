@@ -64,9 +64,10 @@ test:
 test-quick:
 	python3 -m pytest tests/test_mcp_server.py tests/test_controllers.py tests/test_estimators.py tests/test_trajectories.py tests/test_plants.py tests/test_factories.py tests/test_components.py tests/test_array_backend.py tests/test_batched_adapter.py tests/test_controllability_checker.py -v --tb=short
 
-# Run only functional tests (spawns real server)
+# Run only functional tests (spawns real server; opt-in — cleared addopts so
+# the default `-m 'not ... and not mcp'` doesn't skip the mcp marker)
 test-functional:
-	python3 -m pytest tests/test_mcp_server_functional.py -v --tb=short
+	python3 -m pytest tests/test_mcp_server_functional.py -v --tb=short --override-ini="addopts="
 
 # Run all tests including the slow horizon test
 test-all:
@@ -140,4 +141,4 @@ test-mcp-server:
 	python3 -m pytest tests/test_mcp_server.py -v --tb=short
 
 test-mcp-functional:
-	python3 -m pytest tests/test_mcp_server_functional.py -v --tb=short
+	python3 -m pytest tests/test_mcp_server_functional.py -v --tb=short --override-ini="addopts="

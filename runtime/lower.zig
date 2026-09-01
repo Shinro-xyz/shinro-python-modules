@@ -20,6 +20,7 @@
 const std = @import("std");
 const g = @import("graph_data.zig");
 const la = @import("linalg.zig");
+const qp = @import("qp.zig");
 
 /// Run one tick of the closed-loop step through the generated node table.
 ///
@@ -185,6 +186,18 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
                     const in_len = g.nodes[inp_idx].rows * g.nodes[inp_idx].cols;
                     inline for (0..in_len) |j| out[row * in_len + j] = src[j];
                 }
+            },
+            // .solve_qp — the convergence-iterative MPC op. The problem data
+            // (P, A, l, u) and the pre-factorized KKT matrix are baked into the
+            // statically-allocated `solver` global by the codegen C
+            // (runtime/codegen/emosqp/). Only the linear cost q changes per
+            // tick: it is read from the node's input slot and written in via
+            // osqp_update_data_vec, then the full solution lands in this
+            // node's output slot (u[:m] is sliced out by a downstream op).
+            // The node's output size must match the baked problem's n_vars.
+            .solve_qp => {
+                const q_vec = node_input(g.nodes[0..], node, &buf);
+                qp.solve_qp(q_vec, out);
             },
         }
     }

@@ -12,6 +12,10 @@ import pytest
 
 SERVER_PATH = "shinro.mcp.server"
 
+# Opt-in marker (like integration): excluded from the default `pytest` run via
+# pyproject `addopts`; run explicitly with `make test-mcp`.
+pytestmark = [pytest.mark.mcp]
+
 
 @pytest.fixture
 def server():

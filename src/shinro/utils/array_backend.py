@@ -58,6 +58,22 @@ class ArrayBackend(ABC):
     def solve(self, A, b) -> Any: ...
 
     @abstractmethod
+    def solve_qp(self, q, H, A, l, u) -> Any:
+        """Solve a convex QP ``min ½ uᵀ H u + qᵀ u`` s.t. ``l ≤ A u ≤ u``.
+
+        The solver is C-based (OSQP) and always runs on numpy, so this is the
+        per-step bridge for MPC: ``q`` is the state-dependent linear cost,
+        ``H``/``l``/``u`` are backend arrays, and ``A`` is a scipy sparse
+        constraint matrix (from ``MPC_LTI.constraints``). Returns the full
+        solution ``u*`` (length = ``q`` length); MPC slices out the first
+        ``m`` controls.
+
+        Returns:
+            The full QP solution vector, in the backend's native type.
+        """
+        ...
+
+    @abstractmethod
     def norm(self, x, axis=None) -> Any: ...
 
     @abstractmethod
@@ -227,6 +243,36 @@ class NumpyBackend(ArrayBackend):
 
     def solve(self, A, b):
         return np.linalg.solve(A, b)
+
+    def solve_qp(self, q, H, A, l, u):
+        """Solve the MPC QP with OSQP (numpy-native at the C boundary).
+
+        Uses ``eps=1e-6`` to match the codegen-baked static solver the Zig VM
+        drives (scripts/gen_emosqp_test.py), so the live numpy path agrees
+        with the shipped ``.so``. On a non-solved status, returns zeros
+        (preserving MPC's original fallback).
+        """
+        import osqp
+        from scipy import sparse
+
+        q_np = np.asarray(q).ravel()
+        l_np = np.asarray(l).ravel()
+        u_np = np.asarray(u).ravel()
+        prob = osqp.OSQP()
+        prob.setup(
+            sparse.csc_matrix(np.asarray(H, dtype=np.float64)),
+            q_np,
+            A,
+            l_np,
+            u_np,
+            warm_starting=True,
+            verbose=False,
+        )
+        prob.update_settings(eps_abs=1e-6, eps_rel=1e-6)
+        res = prob.solve()
+        if res.info.status != "solved":
+            return np.zeros(q_np.size)
+        return res.x
 
     def norm(self, x, axis=None):
         return np.linalg.norm(x, axis=axis)
@@ -430,6 +476,40 @@ class TorchBackend(ArrayBackend):
         if isinstance(b, list):
             b = self.torch.stack(b)
         return self.torch.linalg.solve(A, b)
+
+    def solve_qp(self, q, H, A, l, u):
+        """Solve the MPC QP with OSQP, converting across the tensor boundary.
+
+        q/H/l/u may be torch tensors (from the config-baked matrices); A is a
+        scipy sparse matrix. Converts to numpy, solves with eps=1e-6 (matching
+        the codegen static solver), and returns the solution as a tensor.
+        """
+        import osqp
+        from scipy import sparse
+
+        def _np(x):
+            if isinstance(x, self.torch.Tensor):
+                return x.detach().cpu().numpy()
+            return np.asarray(x)
+
+        q_np = _np(q).ravel()
+        l_np = _np(l).ravel()
+        u_np = _np(u).ravel()
+        prob = osqp.OSQP()
+        prob.setup(
+            sparse.csc_matrix(np.asarray(_np(H), dtype=np.float64)),
+            q_np,
+            A,
+            l_np,
+            u_np,
+            warm_starting=True,
+            verbose=False,
+        )
+        prob.update_settings(eps_abs=1e-6, eps_rel=1e-6)
+        res = prob.solve()
+        if res.info.status != "solved":
+            return self.torch.zeros(q_np.size, device=self.device, dtype=self.torch.float64)
+        return self.torch.tensor(res.x, device=self.device, dtype=self.torch.float64)
 
     def norm(self, x, axis=None):
         return self.torch.linalg.norm(x, dim=axis)

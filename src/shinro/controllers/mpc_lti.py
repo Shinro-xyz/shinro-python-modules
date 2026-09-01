@@ -1,6 +1,5 @@
 from typing import Any
 
-import osqp
 from scipy import sparse
 
 from shinro.components import Controller
@@ -30,8 +29,8 @@ class MPC_LTI(Controller):
     first control action.
 
     The lifted matrix construction uses ``bk.xxx`` calls and is backend-agnostic.
-    The OSQP solver itself is C-based and always uses numpy — the per-step
-    ``compute()`` converts via ``bk.to_numpy`` / ``bk.from_numpy``.
+    The OSQP solver itself is C-based; per-step ``compute()`` routes through
+    ``bk.solve_qp`` (numpy/torch solve via OSQP, or a graph node under tracing).
 
     Args:
         horizon: Prediction horizon length N.
@@ -148,8 +147,9 @@ class MPC_LTI(Controller):
     def compute(self, x0):
         """Solve the MPC QP for a given initial state.
 
-        Converts x0 to numpy, runs OSQP, converts the result back to the
-        backend's native type.
+        Computes the linear cost ``q = Fᵀ x0`` and routes the QP solve
+        through ``self.bk.solve_qp`` (OSQP for numpy/torch; a graph node under
+        tracing), then slices out the first control action.
 
         Args:
             x0: Initial state vector (n_x,).
@@ -157,25 +157,9 @@ class MPC_LTI(Controller):
         Returns:
             Optimal first control action (n_u,).
         """
-        x0_np = self.bk.to_numpy(x0)
-        F_np = self.bk.to_numpy(self.F)
-        q = F_np.T @ x0_np
-        prob = osqp.OSQP()
-        prob.setup(
-            sparse.csc_matrix(self.bk.to_numpy(self.H)), q.flatten(),
-            self.A_constraints, self.bk.to_numpy(self.lcons), self.bk.to_numpy(self.ucons),
-            warm_starting=True, verbose=False,
-        )
-        res = prob.solve()
-
-        if res.info.status == "solved":
-            z_optimal = res.x
-            ctrl = self.bk.from_numpy(z_optimal[:self.m])
-        else:
-            print("osqp could not find a solution")
-            ctrl = self.bk.zeros(self.m)
-
-        return ctrl
+        q = self.F.T @ x0
+        z_opt = self.bk.solve_qp(q, self.H, self.A_constraints, self.lcons, self.ucons)
+        return self.bk.slice_(z_opt, 0, self.m)
 
 
 @register_controller("MPC_DeltaU")

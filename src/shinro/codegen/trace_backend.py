@@ -116,6 +116,14 @@ class TraceBackend:
             out_shape = (A.shape[1],)
         return self._emit("solve", [A, b], out_shape)
 
+    def solve_qp(self, q: Tracer, H, A, l, u) -> Tracer:
+        # H/A/l/u are concrete (config-baked at construction) — fold them into
+        # attrs for the interpreter oracle. The Zig VM ignores them: it drives
+        # the codegen static solver global, which has the same problem baked
+        # in. The node's output is the full QP solution, same length as q;
+        # MPC slices out u[:m] with a downstream slice op.
+        return self._emit("solve_qp", [q], q.shape, H=H, A=A, l=l, u=u)
+
     # --- elementwise / selection ---
 
     def clip(self, x: Tracer, lo: Any, hi: Any) -> Tracer:

@@ -49,9 +49,10 @@ fallback_version = "0.0.0"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 pythonpath = ["src"]
-addopts = "-m 'not integration'"
+addopts = "-m 'not integration and not mcp'"
 markers = [
     "integration: full-loop physics-backed tests (slow, requires MuJoCo; run via `make test-integration`)",
+    "mcp: MCP server subprocess protocol tests (spawns a real server; run via `make test-mcp`)",
 ]
 
 [tool.ruff]
