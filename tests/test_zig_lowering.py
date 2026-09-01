@@ -89,6 +89,7 @@ def _build_lowered_ops_graph():
     one_hot_id = g.emit("one_hot", [argmax_id], (4,), depth=4)
     sin_id = g.emit("sin", [x], (4,))
     cos_id = g.emit("cos", [x], (4,))
+    stack_id = g.emit("stack", [x, x], (2, 4))
     for name, src in (
         ("tanh", tanh_id),
         ("relu", relu_id),
@@ -99,12 +100,13 @@ def _build_lowered_ops_graph():
         ("one_hot", one_hot_id),
         ("sin", sin_id),
         ("cos", cos_id),
+        ("stack", stack_id),
     ):
         g.output(name, src)
     return ComposedGraph(
         graph=g,
         inputs=["x"],
-        outputs=["tanh", "relu", "exp", "copy", "slice", "argmax", "one_hot", "sin", "cos"],
+        outputs=["tanh", "relu", "exp", "copy", "slice", "argmax", "one_hot", "sin", "cos", "stack"],
         state_inputs=[],
         state_outputs=[],
     )
@@ -219,12 +221,12 @@ def test_lower_zig_emits_valid_data_table():
 
 
 class TestLoweredOpsOracle:
-    """The newly-lowered ops match the interpreter (issue #13 + sin/cos).
+    """The newly-lowered ops match the interpreter (issue #13 + sin/cos/stack).
 
-    copy/slice/relu/argmax/one_hot are exact (pure data movement or integer
-    indices). exp/tanh/sin/cos are transcendental — both sides wrap the
-    platform libm, so they must agree to within 1 ulp rather than
-    bit-for-bit.
+    copy/slice/relu/argmax/one_hot/stack are exact (pure data movement,
+    integer indices, or concatenation). exp/tanh/sin/cos are transcendental —
+    both sides wrap the platform libm, so they must agree to within 1 ulp
+    rather than bit-for-bit.
     """
 
     def test_lowered_ops_match_interpreter(self, lowered_ops_so):
@@ -233,7 +235,7 @@ class TestLoweredOpsOracle:
         n_out, n_state = _output_split(cg)
         assert n_state == 0
 
-        exact_ops = {"copy", "slice", "relu", "argmax", "one_hot"}
+        exact_ops = {"copy", "slice", "relu", "argmax", "one_hot", "stack"}
         transcendental = {"exp", "tanh", "sin", "cos"}
 
         for _ in range(20):

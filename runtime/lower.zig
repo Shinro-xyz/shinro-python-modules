@@ -175,6 +175,17 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
                 const s = node_input(g.nodes[0..], node, &buf);
                 inline for (0..node.rows * node.cols) |j| out[j] = s[node.aux + j];
             },
+            // stack([a, b, ...]) along a new leading axis (numpy axis=0). Each
+            // input contributes its flat length to consecutive output rows; all
+            // inputs share the same shape (enforced at trace time), so the
+            // output flat length is n_inputs * in_len == node.rows * node.cols.
+            .stack => {
+                inline for (node.inputs, 0..) |inp_idx, row| {
+                    const src = node_input_at(g.nodes[0..], inp_idx, &buf);
+                    const in_len = g.nodes[inp_idx].rows * g.nodes[inp_idx].cols;
+                    inline for (0..in_len) |j| out[row * in_len + j] = src[j];
+                }
+            },
         }
     }
 }

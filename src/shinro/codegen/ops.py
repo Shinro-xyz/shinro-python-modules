@@ -142,6 +142,13 @@ def _any(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray
     return np.asarray(np.any(values[node.inputs[0]]))
 
 
+@register_op("stack")
+def _stack(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
+    # stack([a, b, ...]) along a new leading axis (numpy's default axis=0).
+    # All inputs share the same shape; output is (len(inputs),) + that shape.
+    return np.stack([values[n] for n in node.inputs])
+
+
 # ─── deterministic-policy ops (NN controllers in deterministic mode) ──────
 
 
