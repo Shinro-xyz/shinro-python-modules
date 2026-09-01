@@ -226,5 +226,37 @@ pub fn matrix_power (comptime n:usize, a:[]const f64, comptime p: usize) [n*n]f6
 
 pub fn tanh (comptime m: usize, a: []const f64) [m]f64 {
     var result: [m]f64= undefined;
-    
+
+    for (0..m) |i| {
+        result[i]= std.math.tanh(a[i]);
+    }
+    return result;
 }
+
+//argmax--> what arg is the highest value
+
+pub fn argmax (comptime m: usize, a:[]const f64) usize {
+    var best: usize = 0;
+    for (0..m) |i| {
+        if (a[i]>a[best]) {
+            best=i;
+        }
+    }
+    return best;
+}
+
+//one hot
+pub fn onehot (comptime depth: usize, idx:usize) [depth]f64{
+     var out: [depth]f64= undefined;
+
+     for (0..depth) |i| {
+         if (i==idx) {
+             out[i]=1.0;
+         } else {
+             out[i]=0.0;
+         }
+     }
+     return out;
+ }
+
+pub fn slice 
