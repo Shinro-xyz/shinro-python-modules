@@ -175,5 +175,9 @@ pub fn sin_vec (comptime m: usize, a:[]const f64) [m]f64{
 
 pub fn cos_vec(comptime m: usize, a:[]const f64) [m]f64{
     var out: [m]f64 = undefined;
-    
+    for (0..m) |i| {
+        out[i]=std.math.cos(a[i]);
+    }
 }
+
+// ReLU fix 
