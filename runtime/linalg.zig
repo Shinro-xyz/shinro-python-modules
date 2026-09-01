@@ -219,6 +219,12 @@ pub fn matrix_power (comptime n:usize, a:[]const f64, comptime p: usize) [n*n]f6
 
     // completing the matrix power mults
     for (0..p) |_| {
-        result= matmul(n, n,n, a: []const f64, b: []const f64)
+        result= matmul(n, n, n, &result, a);
     }
+    return result;
+}
+
+pub fn tanh (comptime m: usize, a: []const f64) [m]f64 {
+    var result: [m]f64= undefined;
+    
 }
