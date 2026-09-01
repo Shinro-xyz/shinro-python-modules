@@ -72,6 +72,39 @@ pub fn build(b: *std.Build) void {
     const mpc_qp_tests = b.addTest(.{ .root_module = mpc_qp_test_mod });
     const run_mpc_qp_tests = b.addRunArtifact(mpc_qp_tests);
 
+    // OSQP codegen static solver test — compiles the generated C
+    // (runtime/codegen/emosqp/) into the test and drives the static solver.
+    const emosqp_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/emosqp.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    emosqp_test_mod.addIncludePath(b.path("codegen/emosqp/inc/public"));
+    emosqp_test_mod.addIncludePath(b.path("codegen/emosqp/inc/private"));
+    emosqp_test_mod.addIncludePath(b.path("codegen/emosqp"));
+    emosqp_test_mod.addCSourceFiles(.{
+        .files = &.{
+            "codegen/emosqp/workspace.c",
+            "codegen/emosqp/src/algebra_libs.c",
+            "codegen/emosqp/src/auxil.c",
+            "codegen/emosqp/src/csc_math.c",
+            "codegen/emosqp/src/csc_utils.c",
+            "codegen/emosqp/src/error.c",
+            "codegen/emosqp/src/kkt.c",
+            "codegen/emosqp/src/matrix.c",
+            "codegen/emosqp/src/osqp_api.c",
+            "codegen/emosqp/src/qdldl.c",
+            "codegen/emosqp/src/qdldl_interface.c",
+            "codegen/emosqp/src/scaling.c",
+            "codegen/emosqp/src/util.c",
+            "codegen/emosqp/src/vector.c",
+        },
+        .flags = &.{},
+    });
+    const emosqp_tests = b.addTest(.{ .root_module = emosqp_test_mod });
+    const run_emosqp_tests = b.addRunArtifact(emosqp_tests);
+
     // OSQP benchmark — a standalone executable (not a test) so its stdout
     // doesn't corrupt the `zig build test` --listen protocol.
     const osqp_bench_mod = b.createModule(.{
@@ -92,4 +125,5 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_tests.step);
     test_step.dependOn(&run_osqp_tests.step);
     test_step.dependOn(&run_mpc_qp_tests.step);
+    test_step.dependOn(&run_emosqp_tests.step);
 }
