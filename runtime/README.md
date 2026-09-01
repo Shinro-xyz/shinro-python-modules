@@ -20,7 +20,8 @@ and the XLA-fidelity model.
 | `graph_data.zig` | **Generated** — the graph as Zig constants (op enum, node table, offsets, `const_blob`). Produced by `scripts/gen_base.py` / `shinro.codegen.lower_zig`. Not hand-edited. |
 | `codegen/emosqp/` | **Generated** — the statically-allocated OSQP solver for the base MPC problem (no malloc, no libosqp). Emitted by `scripts/gen_emosqp_test.py`. |
 | `tests/linalg.zig` | Zig unit tests for the linear-algebra kernels. |
-| `tests/emosqp.zig` | Zig test driving the codegen static solver, compared against the Python oracle. |
+| `tests/emosqp.zig` | Handwritten Zig test driving the codegen static solver, compared against the Python oracle. |
+| `tests/emosqp_data.zig` | **Generated** — the oracle test vectors (sample `q` + expected solution, hex floats). Emitted by `scripts/gen_emosqp_test.py`. |
 
 ## The "fixed at compile time" guarantee
 
