@@ -62,3 +62,56 @@ test "inv round-trips 3x3: inv(A) @ A == I" {
         }
     }
 }
+
+test "relu clips negatives to 0" {
+    const a = [_]f64{ -1, 0, 0.5, 2 };
+    const r = la.relu(4, &a);
+    try std.testing.expectEqual([_]f64{ 0, 0, 0.5, 2 }, r);
+}
+
+test "exp matches e^x on 0, 1, -1" {
+    const a = [_]f64{ 0, 1, -1 };
+    const r = la.elementwise_exponential(3, &a);
+    try std.testing.expectApproxEqAbs(1.0, r[0], 1e-12);
+    try std.testing.expectApproxEqAbs(2.718281828459045, r[1], 1e-12);
+    try std.testing.expectApproxEqAbs(0.36787944117144233, r[2], 1e-12);
+}
+
+test "tanh saturates at +-1" {
+    const a = [_]f64{ 0, 1, -1 };
+    const r = la.tanh(3, &a);
+    try std.testing.expectApproxEqAbs(0.0, r[0], 1e-12);
+    try std.testing.expectApproxEqAbs(0.7615941559557649, r[1], 1e-12);
+    try std.testing.expectApproxEqAbs(-0.7615941559557649, r[2], 1e-12);
+}
+
+test "argmax returns index of max" {
+    const a = [_]f64{ 0.2, 0.7, 0.1 };
+    try std.testing.expectEqual(@as(usize, 1), la.argmax(3, &a));
+}
+
+test "argmax breaks ties to first occurrence" {
+    const a = [_]f64{ 1.5, 1.5, 0.3 };
+    try std.testing.expectEqual(@as(usize, 0), la.argmax(3, &a));
+}
+
+test "onehot places 1.0 at idx" {
+    const r = la.onehot(5, 2);
+    try std.testing.expectEqual([_]f64{ 0, 0, 1, 0, 0 }, r);
+}
+
+test "sin_vec matches sin of known angles" {
+    const a = [_]f64{ 0, 1.5707963267948966, 3.141592653589793 };
+    const r = la.sin_vec(3, &a);
+    try std.testing.expectApproxEqAbs(0.0, r[0], 1e-12);
+    try std.testing.expectApproxEqAbs(1.0, r[1], 1e-12);
+    try std.testing.expectApproxEqAbs(0.0, r[2], 1e-12);
+}
+
+test "cos_vec matches cos of known angles" {
+    const a = [_]f64{ 0, 1.5707963267948966, 3.141592653589793 };
+    const r = la.cos_vec(3, &a);
+    try std.testing.expectApproxEqAbs(1.0, r[0], 1e-12);
+    try std.testing.expectApproxEqAbs(0.0, r[1], 1e-12);
+    try std.testing.expectApproxEqAbs(-1.0, r[2], 1e-12);
+}

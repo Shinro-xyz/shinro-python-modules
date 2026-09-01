@@ -123,6 +123,58 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
                 }
                 out[0] = if (found) 1.0 else 0.0;
             },
+            // deterministic-policy ops (issue #13): elementwise maps, a
+            // reduction (argmax), an expansion (one_hot), and shape glue
+            // (copy / slice). None allocate — all iterate comptime-known
+            // flat buffers. tanh/relu/exp preserve shape; argmax collapses
+            // to a scalar (stored as f64 in the buffer); one_hot expands a
+            // scalar index to a depth-row; copy/slice are flat copies with
+            // slice's `aux` holding the input offset.
+            .copy => {
+                const s = node_input(g.nodes[0..], node, &buf);
+                inline for (0..node.rows * node.cols) |j| out[j] = s[j];
+            },
+            .tanh => {
+                const s = node_input(g.nodes[0..], node, &buf);
+                const r = la.tanh(node.rows * node.cols, s);
+                inline for (0..node.rows * node.cols) |j| out[j] = r[j];
+            },
+            .relu => {
+                const s = node_input(g.nodes[0..], node, &buf);
+                const r = la.relu(node.rows * node.cols, s);
+                inline for (0..node.rows * node.cols) |j| out[j] = r[j];
+            },
+            .exp => {
+                const s = node_input(g.nodes[0..], node, &buf);
+                const r = la.elementwise_exponential(node.rows * node.cols, s);
+                inline for (0..node.rows * node.cols) |j| out[j] = r[j];
+            },
+            .sin => {
+                const s = node_input(g.nodes[0..], node, &buf);
+                const r = la.sin_vec(node.rows * node.cols, s);
+                inline for (0..node.rows * node.cols) |j| out[j] = r[j];
+            },
+            .cos => {
+                const s = node_input(g.nodes[0..], node, &buf);
+                const r = la.cos_vec(node.rows * node.cols, s);
+                inline for (0..node.rows * node.cols) |j| out[j] = r[j];
+            },
+            .argmax => {
+                const s = node_input(g.nodes[0..], node, &buf);
+                const n_in = g.nodes[node.inputs[0]].rows * g.nodes[node.inputs[0]].cols;
+                const idx = la.argmax(n_in, s);
+                out[0] = @floatFromInt(idx);
+            },
+            .one_hot => {
+                const s = node_input(g.nodes[0..], node, &buf);
+                const idx: usize = @intFromFloat(s[0]);
+                const r = la.onehot(node.rows, idx);
+                inline for (0..node.rows * node.cols) |j| out[j] = r[j];
+            },
+            .slice => {
+                const s = node_input(g.nodes[0..], node, &buf);
+                inline for (0..node.rows * node.cols) |j| out[j] = s[node.aux + j];
+            },
         }
     }
 }

@@ -156,6 +156,12 @@ class TraceBackend:
     def tanh(self, x: Tracer) -> Tracer:
         return self._emit("tanh", [x], x.shape)
 
+    def sin(self, x: Tracer) -> Tracer:
+        return self._emit("sin", [x], x.shape)
+
+    def cos(self, x: Tracer) -> Tracer:
+        return self._emit("cos", [x], x.shape)
+
     def relu(self, x: Tracer) -> Tracer:
         return self._emit("relu", [x], x.shape)
 

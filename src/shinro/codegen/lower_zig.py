@@ -89,6 +89,8 @@ def lower_zig(cg: ComposedGraph, out_path: str = "runtime/graph_data.zig") -> No
     lines.append("pub const Op = enum {")
     lines.append("    cst, inp, out, matmul, add, sub, mul, div, neg,")
     lines.append("    transpose, inv, reshape, clip, where_op, any,")
+    lines.append("    copy, tanh, relu, exp, argmax, one_hot, slice,")
+    lines.append("    sin, cos,")
     lines.append("};")
     lines.append("")
     lines.append("pub const Node = struct {")
@@ -112,7 +114,8 @@ def lower_zig(cg: ComposedGraph, out_path: str = "runtime/graph_data.zig") -> No
     lines.append("};")
     lines.append("")
     lines.append("pub const const_blob = [_]f64{")
-    lines.append("    " + _zig_floats(const_blob) + ",")
+    if const_blob:
+        lines.append("    " + _zig_floats(const_blob) + ",")
     lines.append("};")
     lines.append("")
     lines.append("pub const clip_lo = [_]f64{" + _zig_floats(clip_lo) + "};")
@@ -186,6 +189,11 @@ def _node_line(
     elif node.op == "clip":
         op = "clip"
         aux = clip_offsets[i]
+    elif node.op == "slice":
+        # slice(x, start, stop): start is the input offset (stop is implicit —
+        # the node's rows*cols is stop - start).
+        op = "slice"
+        aux = node.attrs["start"]
 
     return f".{{ .op = .{op}, .inputs = {inputs}, .rows = {rows}, .cols = {cols}, .aux = {aux} }}"
 

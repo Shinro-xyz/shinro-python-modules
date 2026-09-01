@@ -150,6 +150,16 @@ def _tanh(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarra
     return np.tanh(values[node.inputs[0]])
 
 
+@register_op("sin")
+def _sin(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
+    return np.sin(values[node.inputs[0]])
+
+
+@register_op("cos")
+def _cos(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
+    return np.cos(values[node.inputs[0]])
+
+
 @register_op("relu")
 def _relu(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     return np.maximum(values[node.inputs[0]], 0.0)

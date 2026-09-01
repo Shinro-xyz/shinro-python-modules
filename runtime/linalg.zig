@@ -258,5 +258,3 @@ pub fn onehot (comptime depth: usize, idx:usize) [depth]f64{
      }
      return out;
  }
-
-pub fn slice 

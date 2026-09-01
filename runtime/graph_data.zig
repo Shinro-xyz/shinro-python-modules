@@ -4,6 +4,8 @@
 pub const Op = enum {
     cst, inp, out, matmul, add, sub, mul, div, neg,
     transpose, inv, reshape, clip, where_op, any,
+    copy, tanh, relu, exp, argmax, one_hot, slice,
+    sin, cos,
 };
 
 pub const Node = struct {
