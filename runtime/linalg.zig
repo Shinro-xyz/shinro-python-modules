@@ -171,13 +171,35 @@ pub fn sin_vec (comptime m: usize, a:[]const f64) [m]f64{
     return out;
 }
 
-//cosine for an array of values
+///cosine for an array of values
 
 pub fn cos_vec(comptime m: usize, a:[]const f64) [m]f64{
     var out: [m]f64 = undefined;
     for (0..m) |i| {
         out[i]=std.math.cos(a[i]);
     }
+    return out;
 }
 
-// ReLU fix 
+/// ReLU
+
+pub fn relu(comptime m:usize, a:[]const f64) [m]f64{
+    var out: [m]f64=undefined;
+    for (0..m) |i| {
+        out[i]= @max(0.0,a[i]);
+    }
+    return out;
+}
+
+/// elementwise exponential
+pub fn elementwise_exponential (comptime m:usize,a:[]const f64) [m]f64{
+    var out: [m]f64=undefined;
+
+    for (0..m) |i| {
+        out[i]= std.math.exp(a[i]);
+    }
+    return out;
+}
+
+/// matrix exponential-> only allows for nxn square matrices
+pub fn matrix_power (comptime n:usize, )
