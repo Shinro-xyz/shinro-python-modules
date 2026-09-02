@@ -66,9 +66,38 @@ against the Python interpreter lives in `tests/test_zig_lowering.py` (the
 `.solve_qp` op is exercised by the MPC graph fixture, which traces
 `MPC_LTI` and compares `shinro_step` against `interpret()`).
 
-`runtime/graph_data.zig` is a generated artifact. To regenerate after a
-codegen change, run `make zig-gen`. Treat it like a checked-in build output:
-it exists so the VM can be compiled without a Python environment, but it is
-regenerated from `scripts/gen_base.py`. Note: running
-`tests/test_zig_lowering.py` rewrites `graph_data.zig` from its fixtures, so
-re-run `make zig-gen` afterward to restore the shipped base graph.
+## Generated artifacts — shared paths, last build wins
+
+Three paths feed `zig build`, and all of them are **generated, single-instance,
+and mutually exclusive** — every generator overwrites the same file, so the
+shipped content is always "whichever generator ran last":
+
+| Artifact | Written by | Restore shipped default |
+|---|---|---|
+| `runtime/graph_data.zig` | `scripts/gen_base.py` (KF+LQR), `scripts/gen_mpc.py` (KF+MPC_LTI), and the pytest fixtures in `tests/test_zig_lowering.py` | `make zig-gen` |
+| `runtime/codegen/emosqp/` | `scripts/gen_emosqp_test.py` — bakes the whole static solver tree for one MPC problem | re-run the script (default: `mpc_lti_base.toml`) |
+| `runtime/tests/emosqp_data.zig` | `scripts/gen_emosqp_test.py` (oracle vectors for the same bake) | re-run the script |
+
+The committed default is the shipped bring-up pair: **KF + LQR graph +
+`mpc_lti_base.toml` bake (n_vars=30)**.
+
+Coupling rule: **a graph containing a `.solve_qp` node must be built against a
+bake from the same MPC problem** — the solver's n_vars is baked into fixed-size
+C arrays, and `runtime/qp.zig` requires the node's output size to match.
+Baking for a different MPC config (e.g. `mpc_base.toml`'s MPC_DeltaU,
+n_vars=45) breaks every `mpc_lti_base.toml`-built graph/test until the bake is
+restored. Non-MPC graphs (e.g. the base graph) compile the bake in but never
+call it.
+
+Two deliberate notes:
+
+- The pytest fixtures lower each graph into `graph_data.zig` and build into
+  per-fixture prefixes (`tmp_path`), so compiled `.so`s never collide — but
+  the *source* table is last-fixture-wins. Re-run `make zig-gen` after the
+  test suite to restore the shipped base graph.
+- One robot = one controller = one binary, so a single shared path per
+  artifact is acceptable: per-scenario bundle directories (and/or multiple
+  baked solvers in one `.so`) were considered and deliberately deferred.
+  Potential future hardening, also deferred: a comptime check that a graph
+  containing `.solve_qp` matches the bake's n_vars (would catch mismatches at
+  build time instead of silently linking a shape-mismatched solver).

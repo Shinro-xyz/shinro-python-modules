@@ -83,6 +83,12 @@ test-integration:
 # build/lib/libbase.so, then cross-check the .so against the Python
 # interpreter (ctypes oracle). Requires `zig` on PATH (see runtime/README.md).
 # build/ is gitignored.
+#
+# Shared generated paths, last build wins: graph_data.zig and
+# runtime/codegen/emosqp/ are overwritten by whichever generator ran last
+# (gen_base.py / gen_mpc.py / the pytest fixtures / gen_emosqp_test.py).
+# Restore the shipped default (KF+LQR graph, mpc_lti_base.toml bake) with
+# `make zig-gen` + re-running gen_emosqp_test.py — see runtime/README.md.
 # ───────────────────────────────────────────────────────────────────────────
 zig-gen:
 	mkdir -p build

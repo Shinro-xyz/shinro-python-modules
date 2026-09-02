@@ -13,6 +13,11 @@ holonomic base, with the scenario's input clip), serializes it via
 
 This is the MVP bring-up target: one fixed graph, proven bit-exact against the
 interpreter. Swap the graph here to build any other ComposedGraph.
+
+Note: ``runtime/graph_data.zig`` is a shared generated path — this script,
+``scripts/gen_mpc.py``, and the pytest fixtures in ``tests/test_zig_lowering.py``
+all overwrite it, so the shipped graph is whichever ran last. Re-run this
+script (or ``make zig-gen``) to restore the shipped KF + LQR base graph.
 """
 
 from __future__ import annotations

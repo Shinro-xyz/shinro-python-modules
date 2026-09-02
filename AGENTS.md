@@ -70,7 +70,7 @@ For lab notes, read `lab-notes/daily/` directly (see below).
 | `src/shinro/codegen/` | Trace → compose → interpret → lower (tracing pipeline) |
 | `src/shinro/codegen/lower_zig.py` | Serialize a composed graph to `runtime/graph_data.zig` |
 | `runtime/` | Zig comptime VM + linalg kernels + generated graph (see `runtime/README.md`) |
-| `scripts/gen_base.py` | Regenerate the `base_tracking` graph in `runtime/graph_data.zig` |
+| `scripts/gen_base.py` | Regenerate the `base_tracking` graph in `runtime/graph_data.zig` (shared path with `gen_mpc.py` + pytest fixtures — last build wins; `runtime/codegen/emosqp/` likewise holds one MPC bake, see `runtime/README.md`) |
 | `src/shinro/physics_engine/mujoco.py` | MuJoCo engine adapter |
 | `src/shinro/simulation/robotsim.py` | Generic robot simulation factory (config-driven) |
 | `lekiwi_sim.py` | Legacy LeKiwi simulation wrapper (not packaged) |

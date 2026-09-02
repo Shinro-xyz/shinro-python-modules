@@ -16,6 +16,16 @@ For MPC only the linear cost q changes per tick, so ``parameters="vectors"``
 (embedded_mode=1) is used. Both the codegen and the oracle use eps=1e-6 so
 they converge to the same point.
 
+Warning — shared path, last build wins: this script overwrites the ENTIRE
+``runtime/codegen/emosqp/`` tree (and ``runtime/tests/emosqp_data.zig``) for
+ONE MPC problem. The bake's n_vars is compiled into fixed-size C arrays, so
+after regenerating for a different MPC config, every graph containing a
+``.solve_qp`` node from the previous config is shape-mismatched
+(``runtime/qp.zig`` requires the node's output size to match the baked
+n_vars) until the script is re-run for the original config. The shipped
+default bakes ``src/shinro/configs/controllers/mpc_lti_base.toml``
+(n_vars=30).
+
 Run: ``python3 scripts/gen_emosqp_test.py``
 """
 
