@@ -13,7 +13,8 @@
 // C ABI (all flat, row-major f64 buffers; layout known to the host from the
 // ComposedGraph port lists):
 //   shinro_step(inputs, outputs, state_out)
-//   - inputs:    y, x_ref, u_prev, state_x_hat packed in cg.inputs order
+//   - inputs:    host inputs packed in cg.inputs order (e.g. y, x_ref, u_prev
+//                followed by the estimator's state_* recurrent ports)
 //   - outputs:   packed in cg.outputs order
 //   - state_out: packed in cg.state_outputs order (recurrent → next tick)
 
@@ -28,7 +29,8 @@ const qp = @import("qp.zig");
 /// per control tick. All buffers are flat, row-major f64; their layout is
 /// known to the host from the ComposedGraph port lists:
 ///
-/// - `inputs`: `y`, `x_ref`, `u_prev`, `state_x_hat` packed in `cg.inputs` order
+/// - `inputs`: host inputs packed in `cg.inputs` order (e.g. `y`, `x_ref`,
+///   `u_prev` followed by the estimator's `state_*` recurrent ports)
 /// - `outputs`: packed in `cg.outputs` order
 /// - `state_out`: packed in `cg.state_outputs` order (recurrent → next tick)
 ///

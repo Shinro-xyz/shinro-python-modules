@@ -33,8 +33,12 @@ def build_base_graph():
     Instantiates the Kalman filter and LQR from their TOML configs with a
     :class:`NumpyBackend`, seeds the KF's covariance and state, traces both
     components, and composes them into the closed-loop graph for the 3-DOF
-    holonomic base (with the scenario's input clip). This is the MVP bring-up
-    target graph that ``runtime/graph_data.zig`` is generated from.
+    holonomic base (with the scenario's input clip). The KF's covariance P is
+    pre-injected as a recurrent state port, so the deployed graph runs the
+    full live predict-update Riccati recursion (not a frozen gain) — the
+    host seeds P0 = 0.1*I at tick 0 and feeds state_P back each tick. This
+    is the MVP bring-up target graph that ``runtime/graph_data.zig`` is
+    generated from.
 
     Returns:
         A :class:`~shinro.codegen.compose.ComposedGraph` for the base_tracking
@@ -43,12 +47,15 @@ def build_base_graph():
     kf = EstimatorFactory("configs/estimators/kalman_base.toml").create(backend=NumpyBackend())
     lqr = ControllerFactory("configs/controllers/lqr_base.toml").create(backend=NumpyBackend())
 
+    # Seed for live numpy use only — in the traced graph both x_hat and P are
+    # pre-injected tracers (recurrent ports); the host supplies their initial
+    # values at tick 0 (P0 = 0.1*I matches KalmanFilter.reset()).
     kf.P = np.eye(3) * 0.1
     kf.x_hat = np.zeros((3, 1))
     kf_graph = trace_node(
         kf,
         input_shapes={"measurement": (3, 1), "control_input": (3, 1)},
-        state_shapes={"x_hat": (3, 1)},
+        state_shapes={"x_hat": (3, 1), "P": (3, 3)},
     )
     lqr_graph = trace_node(
         lqr,

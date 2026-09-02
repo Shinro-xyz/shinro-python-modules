@@ -135,7 +135,7 @@ class TestComposeBaseTracking:
         est_ng = trace_node(
             kf,
             input_shapes={"measurement": (3, 1), "control_input": (3, 1)},
-            state_shapes={"x_hat": (3, 1)},
+            state_shapes={"x_hat": (3, 1), "P": (3, 3)},
         )
         ctrl_ng = trace_node(
             lqr,
@@ -168,6 +168,7 @@ class TestComposeBaseTracking:
                     "x_ref": x_ref,
                     "u_prev": u_prev,
                     "state_x_hat": x_hat_init,
+                    "state_P": initial_P,
                 },
             )
 
@@ -259,7 +260,7 @@ class TestSwapController:
         est_ng = trace_node(
             kf,
             input_shapes={"measurement": (3, 1), "control_input": (3, 1)},
-            state_shapes={"x_hat": (3, 1)},
+            state_shapes={"x_hat": (3, 1), "P": (3, 3)},
         )
         ctrl_ng = trace_node(
             pid,
@@ -290,7 +291,13 @@ class TestSwapController:
 
             traced = interpret(
                 composed.graph,
-                {"y": y, "x_ref": x_ref, "u_prev": u_prev, "state_x_hat": x_hat_init},
+                {
+                    "y": y,
+                    "x_ref": x_ref,
+                    "u_prev": u_prev,
+                    "state_x_hat": x_hat_init,
+                    "state_P": initial_P,
+                },
             )
 
             assert "u" in traced, f"trial {trial}: no u. got {list(traced)}"
@@ -370,7 +377,7 @@ class TestComposeNoClip:
         est_ng = trace_node(
             kf,
             input_shapes={"measurement": (3, 1), "control_input": (3, 1)},
-            state_shapes={"x_hat": (3, 1)},
+            state_shapes={"x_hat": (3, 1), "P": (3, 3)},
         )
         ctrl_ng = trace_node(
             lqr,
@@ -386,7 +393,7 @@ class TestComposeNoClip:
         est_ng = trace_node(
             kf,
             input_shapes={"measurement": (3, 1), "control_input": (3, 1)},
-            state_shapes={"x_hat": (3, 1)},
+            state_shapes={"x_hat": (3, 1), "P": (3, 3)},
         )
         ctrl_ng = trace_node(
             lqr,
@@ -408,7 +415,13 @@ class TestComposeNoClip:
 
             traced = interpret(
                 composed.graph,
-                {"y": y, "x_ref": x_ref, "u_prev": u_prev, "state_x_hat": x_hat_init},
+                {
+                    "y": y,
+                    "x_ref": x_ref,
+                    "u_prev": u_prev,
+                    "state_x_hat": x_hat_init,
+                    "state_P": initial_P,
+                },
             )
             assert np.allclose(traced["u"], u_np, atol=1e-12), (
                 f"trial {trial}: un-clipped u diverged. "
@@ -428,7 +441,7 @@ class TestComposePortMeta:
         est_ng = trace_node(
             kf,
             input_shapes={"measurement": (3, 1), "control_input": (3, 1)},
-            state_shapes={"x_hat": (3, 1)},
+            state_shapes={"x_hat": (3, 1), "P": (3, 3)},
         )
         ctrl_ng = trace_node(
             lqr,
@@ -436,10 +449,10 @@ class TestComposePortMeta:
         )
         composed = compose(est_ng, ctrl_ng, plant_dims=_BASE_DIMS, input_limits=_BASE_LIMITS)
         assert isinstance(composed, ComposedGraph)
-        assert composed.inputs == ["y", "x_ref", "u_prev", "state_x_hat"]
+        assert composed.inputs == ["y", "x_ref", "u_prev", "state_x_hat", "state_P"]
         assert composed.outputs == ["u"]
-        assert composed.state_inputs == ["state_x_hat", "u_prev"]
-        assert composed.state_outputs == ["state_x_hat", "state_u_prev"]
+        assert composed.state_inputs == ["state_x_hat", "state_P", "u_prev"]
+        assert composed.state_outputs == ["state_x_hat", "state_P", "state_u_prev"]
 
 
 # ─── Test 10: compose error paths ──────────────────────────────────────────
@@ -474,6 +487,29 @@ class TestComposeErrors:
         )
         with pytest.raises(ValueError, match="no output node"):
             compose(estimator, controller, plant_dims=_BASE_DIMS, input_limits=None)
+
+    def test_mutated_state_without_placeholder_raises(self):
+        """A mutated state attr with no pre-injected placeholder raises.
+
+        The Kalman filter mutates P every estimate() call. If the trace site
+        forgot to pre-inject it via state_shapes, the covariance recursion
+        would collapse to trace-time constants (a frozen one-step gain) in
+        the deployed graph — compose() must refuse instead of silently
+        baking the freeze.
+        """
+        kf = _load_kalman()
+        lqr = _load_lqr()
+        est_ng = trace_node(
+            kf,
+            input_shapes={"measurement": (3, 1), "control_input": (3, 1)},
+            state_shapes={"x_hat": (3, 1)},  # P deliberately omitted
+        )
+        ctrl_ng = trace_node(
+            lqr,
+            input_shapes={"current_state": (3,), "target_state": (3,)},
+        )
+        with pytest.raises(ValueError, match="silently frozen"):
+            compose(est_ng, ctrl_ng, plant_dims=_BASE_DIMS, input_limits=None)
 
 
 # ─── Test 11: reshape helpers ───────────────────────────────────────────────

@@ -26,6 +26,7 @@ from shinro.codegen.lower_zig import lower_zig
 from shinro.codegen.trace_node import trace_node
 from shinro.codegen.tracing import Graph
 from shinro.factories.controller_factory import ControllerFactory
+from shinro.factories.estimator_factory import EstimatorFactory
 from shinro.utils.array_backend import NumpyBackend
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -165,9 +166,26 @@ def _output_split(cg):
     return n_out, n_state
 
 
-def _pack_inputs(cg, y, x_ref, u_prev, x_hat_init):
+def _state_slices(cg):
+    """Map each state output port name to its (start, stop) in the flat state buffer."""
+    slices = {}
+    off = 0
+    for name in cg.state_outputs:
+        size = next(int(np.prod(n.shape)) for n in cg.graph.nodes if n.op == "output" and n.attrs["name"] == name)
+        slices[name] = (off, off + size)
+        off += size
+    return slices
+
+
+def _pack_inputs(cg, y, x_ref, u_prev, x_hat_init, P_init):
     """Pack host inputs into the flat C-ABI buffer, in cg.inputs order."""
-    port_arrays = {"y": y, "x_ref": x_ref, "u_prev": u_prev, "state_x_hat": x_hat_init.ravel()}
+    port_arrays = {
+        "y": y,
+        "x_ref": x_ref,
+        "u_prev": u_prev,
+        "state_x_hat": x_hat_init.ravel(),
+        "state_P": P_init.ravel(),
+    }
     return _pack_arrays(cg, port_arrays)
 
 
@@ -194,6 +212,7 @@ class TestZigLowering:
         lib, cg = base_so
         rng = np.random.default_rng(42)
         n_out, n_state = _output_split(cg)
+        sl = _state_slices(cg)
 
         max_err = 0.0
         for _ in range(50):
@@ -201,41 +220,110 @@ class TestZigLowering:
             x_ref = rng.normal(0.0, 0.1, (3,))
             u_prev = rng.normal(0.0, 0.1, (3,))
             x_hat_init = rng.normal(0.0, 0.1, (3, 1))
+            # Well-conditioned SPD covariance: S = C P_pred C^T + R must stay
+            # invertible for both the Zig LU and numpy's LAPACK inv.
+            P_init = rng.normal(0.0, 0.1, (3, 3))
+            P_init = P_init @ P_init.T + 0.1 * np.eye(3)
 
-            inputs = _pack_inputs(cg, y, x_ref, u_prev, x_hat_init)
+            inputs = _pack_inputs(cg, y, x_ref, u_prev, x_hat_init, P_init)
             out, state = _step(lib, cg, inputs, n_out, n_state)
 
             traced = interpret(
                 cg.graph,
-                {"y": y, "x_ref": x_ref, "u_prev": u_prev, "state_x_hat": x_hat_init},
+                {
+                    "y": y,
+                    "x_ref": x_ref,
+                    "u_prev": u_prev,
+                    "state_x_hat": x_hat_init,
+                    "state_P": P_init,
+                },
             )
-            # u output
-            max_err = max(max_err, float(np.max(np.abs(out - np.asarray(traced["u"]).ravel()))))
-            # recurrent state outputs (state_x_hat, state_u_prev)
-            max_err = max(max_err, float(np.max(np.abs(state[:3] - np.asarray(traced["state_x_hat"]).ravel()))))
-            max_err = max(max_err, float(np.max(np.abs(state[3:] - np.asarray(traced["state_u_prev"]).ravel()))))
+            # Compare every output and state port by name.
+            off = 0
+            for name in cg.outputs:
+                expected = np.asarray(traced[name]).ravel()
+                max_err = max(max_err, float(np.max(np.abs(out[off : off + expected.size] - expected))))
+                off += expected.size
+            for name in cg.state_outputs:
+                expected = np.asarray(traced[name]).ravel()
+                start, stop = sl[name]
+                max_err = max(max_err, float(np.max(np.abs(state[start:stop] - expected))))
 
-        assert max_err == 0.0, f"Zig .so diverged from interpreter: max abs err = {max_err:.3e}"
+        # Tolerance, not bit-exact: the live .inv now runs on dynamic data and
+        # the Zig LU differs from numpy's LAPACK in the last ulps (same
+        # precedent as the 1-ulp transcendental carve-out).
+        assert max_err < 1e-12, f"Zig .so diverged from interpreter: max abs err = {max_err:.3e}"
 
     def test_so_state_feedback_roundtrip(self, base_so):
         """state outputs feed back as next-tick state inputs (recurrent edges)."""
         lib, cg = base_so
         rng = np.random.default_rng(1)
         n_out, n_state = _output_split(cg)
+        sl = _state_slices(cg)
 
         y = rng.normal(0.0, 0.1, (3,))
         x_ref = rng.normal(0.0, 0.1, (3,))
         u = rng.normal(0.0, 0.1, (3,))
         x_hat = rng.normal(0.0, 0.1, (3, 1))
+        P = np.eye(3) * 0.1
 
         # Run the .so for three ticks, threading state out -> next-tick state in.
         for _ in range(3):
-            inputs = _pack_inputs(cg, y, x_ref, u, x_hat)
+            inputs = _pack_inputs(cg, y, x_ref, u, x_hat, P)
             out, state = _step(lib, cg, inputs, n_out, n_state)
             u = out
-            x_hat = state[:3].reshape(3, 1)
+            x_hat = state[sl["state_x_hat"][0] : sl["state_x_hat"][1]].reshape(3, 1)
+            P = state[sl["state_P"][0] : sl["state_P"][1]].reshape(3, 3)
 
         assert np.all(np.isfinite(u)), "Zig step produced non-finite control"
+
+    def test_so_matches_live_kf_multitick(self, base_so):
+        """100-tick .so closed loop equals a live numpy KalmanFilter loop.
+
+        The regression test for recurrent covariance: the deployed graph must
+        run the live P recursion (state_P port feeding back each tick), not a
+        frozen one-step gain baked from the trace-time seed. The oracle is
+        the real KalmanFilter.estimate() on the numpy backend, driven in
+        parallel through the same measurement/reference sequence.
+        """
+        lib, cg = base_so
+        rng = np.random.default_rng(11)
+        n_out, n_state = _output_split(cg)
+        sl = _state_slices(cg)
+
+        kf = EstimatorFactory("configs/estimators/kalman_base.toml").create(backend=NumpyBackend())
+        lqr = ControllerFactory("configs/controllers/lqr_base.toml").create(backend=NumpyBackend())
+        limits = (np.array([-0.5, -0.5, -1.0]), np.array([0.5, 0.5, 1.0]))
+
+        P = np.eye(3) * 0.1
+        x_hat = np.zeros((3, 1))
+        u_prev_so = np.zeros(3)
+        u_prev_np = np.zeros(3)
+
+        max_err = 0.0
+        for _ in range(100):
+            y = rng.normal(0.0, 0.1, (3,))
+            x_ref = rng.normal(0.0, 0.05, (3,))
+
+            # Live numpy oracle: the same predict-update the graph encodes,
+            # with P evolving per tick (each loop evolves its own u_prev).
+            kf.P = P.copy()
+            kf.x_hat = x_hat.copy()
+            x_hat_np = kf.estimate(y.reshape(-1, 1), u_prev_np.reshape(-1, 1))
+            u_np = np.clip(lqr.compute(x_hat_np.ravel(), x_ref), limits[0], limits[1])
+
+            inputs = _pack_inputs(cg, y, x_ref, u_prev_so, x_hat, P)
+            out, state = _step(lib, cg, inputs, n_out, n_state)
+            max_err = max(max_err, float(np.max(np.abs(out - u_np))))
+
+            x_hat = state[sl["state_x_hat"][0] : sl["state_x_hat"][1]].reshape(3, 1)
+            P = state[sl["state_P"][0] : sl["state_P"][1]].reshape(3, 3)
+            u_prev_so = out
+            u_prev_np = u_np
+
+        assert max_err < 1e-10, (
+            f".so diverged from live KalmanFilter over 100 ticks: max abs err = {max_err:.3e}"
+        )
 
 
 def test_lower_zig_emits_valid_data_table():

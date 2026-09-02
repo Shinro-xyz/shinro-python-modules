@@ -20,10 +20,14 @@ mismatches in a graph are resolved by explicit reshape ops, auto-inserted by
 the compiler. The alternative (standardizing all components to flat
 vectors) is deferred to a future refactor.
 
-Recurrent state (the estimator's ``x_hat``, the previous control ``u_prev``)
-is identified and emitted as state outputs that feed back as state inputs on
-the next tick — these become the ``.so``'s internal ``var`` state in a
-future slice.
+Recurrent state is identified and emitted as state outputs that feed back as
+state inputs on the next tick (packed into the ``.so``'s ``state_out`` C-ABI
+buffer; the host feeds it back as inputs). Every ``state_*`` input placeholder
+the traced estimator declares becomes a recurrent port — ``x_hat`` specially
+(feeds the controller), everything else (e.g. the Kalman filter's covariance
+``P``) transparently. A state attribute the estimator mutated during the trace
+*without* a matching pre-injected placeholder raises: that recursion would be
+silently frozen in the deployed graph.
 """
 
 from __future__ import annotations
@@ -71,9 +75,14 @@ def compose(
         x_ref ───────────────────────────────▶ Controller
         state_x_hat (recurrent) ─▶ Estimator
 
-    State (estimator's ``x_hat``) and the previous control (``u_prev``, fed
+    State (the estimator's recurrent attributes — ``x_hat``, the Kalman
+    filter's covariance ``P``, ...) and the previous control (``u_prev``, fed
     to the estimator) are recurrent edges — emitted as state outputs that
-    feed back as state inputs next tick.
+    feed back as state inputs next tick. The recurrent ports are derived from
+    the estimator's traced graph: every ``state_*`` input placeholder it
+    declares is wired, and every state attribute ``trace_node`` detected
+    (attr-diff) must have one — otherwise the recursion would be silently
+    frozen at its trace-time value and this raises instead.
 
     Args:
         estimator: The traced estimator node graph.
@@ -98,17 +107,47 @@ def compose(
     x_ref_id = combined.input("x_ref", (n_x,))
     u_prev_id = combined.input("u_prev", (n_u,))
 
-    # The estimator's state_x_hat input — recurrent edge.
-    state_x_hat_shape = _lookup_input_shape(estimator.graph, "state_x_hat", default=(n_x, 1))
-    state_x_hat_id = combined.input("state_x_hat", state_x_hat_shape)
+    # The estimator's recurrent state inputs — every "state_*" input
+    # placeholder the traced graph declares (pre-injected via trace_node's
+    # state_shapes). Each becomes a combined-graph input port fed from the
+    # previous tick's state output. Emission order of the placeholders fixes
+    # the port order (deterministic: contract inputs first, then
+    # state_shapes iteration order).
+    state_ports = [
+        node.attrs["name"]
+        for node in estimator.graph.nodes
+        if node.op == "input" and str(node.attrs.get("name", "")).startswith("state_")
+    ]
+
+    # Guard rail: a state attribute the estimator mutated during the traced
+    # call (detected by trace_node's attr-diff) MUST have a pre-injected
+    # placeholder. Without one its recursion is computed from trace-time
+    # constants and silently frozen in the deployed graph — e.g. the KF's
+    # covariance P, which would bake a one-step gain instead of running the
+    # live Riccati recursion.
+    for attr in estimator.state_attrs:
+        port = f"state_{attr}"
+        if port not in state_ports:
+            raise ValueError(
+                f"estimator mutated attribute '{attr}' during the traced call "
+                f"but '{port}' was not pre-injected via "
+                f"trace_node(state_shapes=...); its recursion would be "
+                f"silently frozen in the deployed graph. Add "
+                f"'{attr}' to state_shapes at the trace site."
+            )
+
+    state_port_ids: dict[str, int] = {}
+    for port in state_ports:
+        shape = _lookup_input_shape(estimator.graph, port, default=(n_x, 1))
+        state_port_ids[port] = combined.input(port, shape)
 
     # --- merge the estimator ---
-    # Estimator inputs: measurement (y), control_input (u_prev), state_x_hat.
+    # Estimator inputs: measurement (y), control_input (u_prev), state ports.
     # The KF expects (n,1) column vectors; y and u_prev are (n,) flat → reshape.
     est_input_map = {
         "measurement": y_id,
         "control_input": u_prev_id,
-        "state_x_hat": state_x_hat_id,
+        **state_port_ids,
     }
     est_remap, est_source_ids = _merge_and_rewire(combined, estimator.graph, est_input_map)
 
@@ -126,7 +165,9 @@ def compose(
         est_out_id = est_source_ids[est_out_src_node.attrs["name"]]
     else:
         est_out_id = est_remap[est_out_key]
-    x_hat_flat_id = _ensure_shape(combined, est_out_id, state_x_hat_shape, (n_x,))
+    x_hat_flat_id = _ensure_shape(
+        combined, est_out_id, _lookup_input_shape(estimator.graph, "state_x_hat", default=(n_x, 1)), (n_x,)
+    )
 
     # --- merge the controller ---
     # Controller inputs: current_state (x_hat), target_state (x_ref).
@@ -156,16 +197,39 @@ def compose(
 
     # --- declare combined-graph outputs ---
     combined.output("u", u_id)
-    # State outputs (recurrent): the new x_hat, and u (which becomes u_prev next tick).
-    combined.output("state_x_hat", est_out_id)
+    # State outputs (recurrent): each wired state port's new value, plus u
+    # (which becomes u_prev next tick). x_hat reuses the estimator's output
+    # value; every other port (e.g. state_P) reads the estimator's own
+    # state_<attr> output node.
+    emitted_state_ports: list[str] = []
+    for port in state_ports:
+        if port == "state_x_hat":
+            combined.output("state_x_hat", est_out_id)
+            emitted_state_ports.append(port)
+            continue
+        attr = port[len("state_"):]
+        if attr not in estimator.state_attrs:
+            # Placeholder fed but the trace detected no mutation — nothing
+            # recurs; the port only feeds the estimator's computation.
+            continue
+        state_out_key = estimator.output_nodes.get(port)
+        if state_out_key is None:
+            raise ValueError(f"estimator has no {port} output node; have {list(estimator.output_nodes)}")
+        state_out_src_node = estimator.graph.nodes[state_out_key]
+        if state_out_src_node.op == "input":
+            state_out_id = est_source_ids[state_out_src_node.attrs["name"]]
+        else:
+            state_out_id = est_remap[state_out_key]
+        combined.output(port, state_out_id)
+        emitted_state_ports.append(port)
     combined.output("state_u_prev", u_id)
 
     return ComposedGraph(
         graph=combined,
-        inputs=["y", "x_ref", "u_prev", "state_x_hat"],
+        inputs=["y", "x_ref", "u_prev"] + state_ports,
         outputs=["u"],
-        state_inputs=["state_x_hat", "u_prev"],
-        state_outputs=["state_x_hat", "state_u_prev"],
+        state_inputs=emitted_state_ports + ["u_prev"],
+        state_outputs=emitted_state_ports + ["state_u_prev"],
     )
 
 

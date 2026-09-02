@@ -132,11 +132,16 @@ dataflow:
 y (measurement) ──▶ Estimator ──x_hat──▶ Controller ──u──▶ [clip] ──▶ output
 x_ref ──────────────────────────────▶ Controller
 state_x_hat (recurrent) ─▶ Estimator
+state_P (recurrent) ─────▶ Estimator   (any state_* port the trace declares)
 ```
 
-- **Input ports:** `y`, `x_ref`, `u_prev`, and the recurrent `state_x_hat`.
-- **Output ports:** `u`, plus the recurrent state outputs `state_x_hat` and
-  `state_u_prev` (fed back as inputs next tick).
+- **Input ports:** `y`, `x_ref`, `u_prev`, and every `state_*` placeholder the
+  traced estimator declares (for the KF: `state_x_hat` and `state_P`).
+- **Output ports:** `u`, plus the recurrent state outputs (`state_x_hat`,
+  `state_P`, `state_u_prev` — fed back as inputs next tick). A state attr the
+  trace detected as mutated without a matching pre-injected placeholder raises:
+  that recursion would be silently frozen at its trace-time value (e.g. the
+  KF's covariance collapsing to a one-step gain).
 - **`clip`**: if `input_limits` is provided (from `[scenario.input_limits]`),
   a `clip` node is inserted on the controller output.
 - **Auto-reshape:** where shapes mismatch (KF `(n,1)` → LQR `(n,)`), `reshape`
