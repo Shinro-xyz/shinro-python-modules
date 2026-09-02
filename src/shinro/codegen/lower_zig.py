@@ -87,7 +87,7 @@ def lower_zig(cg: ComposedGraph, out_path: str = "runtime/graph_data.zig") -> No
     lines.append("// A ComposedGraph serialized as a comptime data table.")
     lines.append("")
     lines.append("pub const Op = enum {")
-    lines.append("    cst, inp, out, matmul, add, sub, mul, div, neg,")
+    lines.append("    cst, inp, out, matmul, add, sub, mul, div, ne, neg,")
     lines.append("    transpose, inv, reshape, clip, where_op, any,")
     lines.append("    copy, tanh, relu, exp, argmax, one_hot, slice,")
     lines.append("    sin, cos, stack, solve_qp,")

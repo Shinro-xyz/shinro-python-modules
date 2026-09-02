@@ -279,7 +279,7 @@ class TestPID:
         pid.reset()
         assert np.allclose(_to_np(pid._integral, bk), 0.0)
         assert np.allclose(_to_np(pid._prev_error, bk), 0.0)
-        assert not pid.has_run
+        assert np.allclose(_to_np(pid._has_run, bk), 0.0)
 
     def test_pid_from_config(self, bk):
         """from_config creates a valid PID controller."""

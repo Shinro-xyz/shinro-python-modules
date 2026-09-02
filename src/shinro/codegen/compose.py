@@ -38,7 +38,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from shinro.codegen.trace_node import NodeGraph
+from shinro.codegen.trace_node import NodeGraph, _state_port_name
 from shinro.codegen.tracing import Graph, ShapeMismatchError
 
 
@@ -85,14 +85,14 @@ def compose(
     ``u_prev`` routes the shared previous-control port into controllers that
     declare it (MPC_DeltaU).
 
-    State (the estimator's recurrent attributes — ``x_hat``, the Kalman
-    filter's covariance ``P``, ...) and the previous control (``u_prev``, fed
-    to the estimator) are recurrent edges — emitted as state outputs that
-    feed back as state inputs next tick. The recurrent ports are derived from
-    the estimator's traced graph: every ``state_*`` input placeholder it
-    declares is wired, and every state attribute ``trace_node`` detected
-    (attr-diff) must have one — otherwise the recursion would be silently
-    frozen at its trace-time value and this raises instead.
+    State (recurrent attributes on both sides — the estimator's ``x_hat`` and
+    covariance ``P``, the controller's integral state, ...) and the previous
+    control (``u_prev``, fed to the estimator) are recurrent edges — emitted
+    as state outputs that feed back as state inputs next tick. The recurrent
+    ports are derived from each traced graph: every ``state_*`` input
+    placeholder it declares is wired, and every state attribute ``trace_node``
+    detected (attr-diff) must have one — otherwise the recursion would be
+    silently frozen at its trace-time value and this raises instead.
 
     Args:
         estimator: The traced estimator node graph.
@@ -135,8 +135,9 @@ def compose(
     # constants and silently frozen in the deployed graph — e.g. the KF's
     # covariance P, which would bake a one-step gain instead of running the
     # live Riccati recursion.
+    est_port_to_attr = {_state_port_name(a): a for a in estimator.state_attrs}
     for attr in estimator.state_attrs:
-        port = f"state_{attr}"
+        port = _state_port_name(attr)
         if port not in state_ports:
             raise ValueError(
                 f"estimator mutated attribute '{attr}' during the traced call "
@@ -197,6 +198,9 @@ def compose(
         if node.op != "input":
             continue
         name = node.attrs["name"]
+        if str(name).startswith("state_"):
+            # Recurrent controller state — wired separately below.
+            continue
         role = _CONTROLLER_INPUT_ROLES.get(name)
         if role == "reference":
             controller_takes_reference = True
@@ -218,7 +222,33 @@ def compose(
         state_feed_id = combined.emit("sub", [x_hat_flat_id, x_ref_id], (n_x,))
     for name in state_role_names:
         ctrl_input_map[name] = state_feed_id
-    ctrl_remap, _ = _merge_and_rewire(combined, controller.graph, ctrl_input_map)
+
+    # Controller recurrent state — the same mechanism as the estimator's
+    # state ports: every "state_*" input placeholder the traced controller
+    # declares (e.g. PID's _integral/_prev_error/_has_run) becomes a
+    # combined input port fed from the previous tick's state output, with
+    # the same mutated-without-placeholder guard rail.
+    ctrl_state_ports = [
+        node.attrs["name"]
+        for node in controller.graph.nodes
+        if node.op == "input" and str(node.attrs.get("name", "")).startswith("state_")
+    ]
+    ctrl_port_to_attr = {_state_port_name(a): a for a in controller.state_attrs}
+    for attr in controller.state_attrs:
+        port = _state_port_name(attr)
+        if port not in ctrl_state_ports:
+            raise ValueError(
+                f"controller mutated attribute '{attr}' during the traced call "
+                f"but '{port}' was not pre-injected via "
+                f"trace_node(state_shapes=...); its recursion would be "
+                f"silently frozen in the deployed graph. Add "
+                f"'{attr}' to state_shapes at the trace site."
+            )
+    for port in ctrl_state_ports:
+        shape = _lookup_input_shape(controller.graph, port, default=(n_u,))
+        ctrl_input_map[port] = combined.input(port, shape)
+
+    ctrl_remap, ctrl_source_ids = _merge_and_rewire(combined, controller.graph, ctrl_input_map)
 
     # The controller's output (u) — clip if input_limits provided, then emit.
     ctrl_out_src_node = controller.graph.nodes[controller.output_nodes["out"]]
@@ -250,8 +280,8 @@ def compose(
             combined.output("state_x_hat", est_out_id)
             emitted_state_ports.append(port)
             continue
-        attr = port[len("state_"):]
-        if attr not in estimator.state_attrs:
+        attr = est_port_to_attr.get(port)
+        if attr is None:
             # Placeholder fed but the trace detected no mutation — nothing
             # recurs; the port only feeds the estimator's computation.
             continue
@@ -265,14 +295,35 @@ def compose(
             state_out_id = est_remap[state_out_key]
         combined.output(port, state_out_id)
         emitted_state_ports.append(port)
+
+    # --- declare combined-graph outputs ---
+    combined.output("u", u_id)
+    # Controller state outputs (recurrent): each mutated controller attr's
+    # new value (e.g. PID's integral), read from the controller's own
+    # state_<attr> output node.
+    emitted_ctrl_state_ports: list[str] = []
+    for port in ctrl_state_ports:
+        if ctrl_port_to_attr.get(port) is None:
+            # Placeholder fed but the trace detected no mutation.
+            continue
+        state_out_key = controller.output_nodes.get(port)
+        if state_out_key is None:
+            raise ValueError(f"controller has no {port} output node; have {list(controller.output_nodes)}")
+        state_out_src_node = controller.graph.nodes[state_out_key]
+        if state_out_src_node.op == "input":
+            state_out_id = ctrl_source_ids[state_out_src_node.attrs["name"]]
+        else:
+            state_out_id = ctrl_remap[state_out_key]
+        combined.output(port, state_out_id)
+        emitted_ctrl_state_ports.append(port)
     combined.output("state_u_prev", u_id)
 
     return ComposedGraph(
         graph=combined,
-        inputs=["y", "x_ref", "u_prev"] + state_ports,
+        inputs=["y", "x_ref", "u_prev"] + state_ports + ctrl_state_ports,
         outputs=["u"],
-        state_inputs=emitted_state_ports + ["u_prev"],
-        state_outputs=emitted_state_ports + ["state_u_prev"],
+        state_inputs=emitted_state_ports + emitted_ctrl_state_ports + ["u_prev"],
+        state_outputs=emitted_state_ports + emitted_ctrl_state_ports + ["state_u_prev"],
     )
 
 

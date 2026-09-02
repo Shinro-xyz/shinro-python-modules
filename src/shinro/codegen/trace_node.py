@@ -62,6 +62,18 @@ class NodeGraph:
     state_attrs: list[str] = field(default_factory=list)
 
 
+def _state_port_name(attr: str) -> str:
+    """Recurrent-state C-ABI port name for a component attribute.
+
+    Strips leading underscores so private attrs (e.g. PID's ``_integral``)
+    produce clean port names (``state_integral``, not ``state__integral``).
+    Used for both the pre-injected input placeholder and the state output;
+    :mod:`shinro.codegen.compose` derives the same names when wiring the
+    recurrent edges.
+    """
+    return f"state_{attr.lstrip('_')}"
+
+
 def trace_node(
     component: Any,
     input_shapes: dict[str, tuple[int, ...]],
@@ -125,7 +137,7 @@ def trace_node(
     # Pre-inject state tracers if shapes were provided (re-trace case).
     state_shapes = state_shapes or {}
     for name, shape in state_shapes.items():
-        node = graph.input(f"state_{name}", shape)
+        node = graph.input(_state_port_name(name), shape)
         setattr(component, name, Tracer(graph, shape, node))
 
     # Snapshot instance attr ids to detect state mutations after the call.
@@ -150,7 +162,7 @@ def trace_node(
         for name in state_attrs:
             value = getattr(component, name)
             value_tracer = _lift(graph, value)
-            graph.output(f"state_{name}", value_tracer.node)
+            graph.output(_state_port_name(name), value_tracer.node)
     finally:
         # Restore the original backend and all array attrs, so the component
         # is left in a real (non-traced) state for the next trace or for

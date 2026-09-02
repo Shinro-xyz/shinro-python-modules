@@ -21,10 +21,11 @@ import pytest
 
 from scripts.gen_base import build_base_graph
 from shinro.codegen import interpret
-from shinro.codegen.compose import ComposedGraph
+from shinro.codegen.compose import ComposedGraph, compose
 from shinro.codegen.lower_zig import lower_zig
 from shinro.codegen.trace_node import trace_node
 from shinro.codegen.tracing import Graph
+from shinro.controllers.pid import PIDController
 from shinro.factories.controller_factory import ControllerFactory
 from shinro.factories.estimator_factory import EstimatorFactory
 from shinro.utils.array_backend import NumpyBackend
@@ -94,6 +95,9 @@ def _build_lowered_ops_graph():
     sin_id = g.emit("sin", [x], (4,))
     cos_id = g.emit("cos", [x], (4,))
     stack_id = g.emit("stack", [x, x], (2, 4))
+    zero_id = g.const(np.zeros(4))
+    ne_zero_id = g.emit("ne", [x, x], (4,))  # x != x → all flags 0
+    ne_one_id = g.emit("ne", [x, zero_id], (4,))  # x != 0 → all flags set
     for name, src in (
         ("tanh", tanh_id),
         ("relu", relu_id),
@@ -105,12 +109,17 @@ def _build_lowered_ops_graph():
         ("sin", sin_id),
         ("cos", cos_id),
         ("stack", stack_id),
+        ("ne_zero", ne_zero_id),
+        ("ne_one", ne_one_id),
     ):
         g.output(name, src)
     return ComposedGraph(
         graph=g,
         inputs=["x"],
-        outputs=["tanh", "relu", "exp", "copy", "slice", "argmax", "one_hot", "sin", "cos", "stack"],
+        outputs=[
+            "tanh", "relu", "exp", "copy", "slice", "argmax", "one_hot",
+            "sin", "cos", "stack", "ne_zero", "ne_one",
+        ],
         state_inputs=[],
         state_outputs=[],
     )
@@ -137,6 +146,39 @@ def _build_mpc_graph():
     )
 
 
+def _build_pid_composed_graph():
+    """KF + PID (with output_limits) composed graph.
+
+    Exercises the controller recurrent-state path end to end: PID's
+    _integral/_prev_error/_has_run thread as state ports, the D-term is
+    multiply-gated, and output_limits forces the branch-free anti-windup
+    (ne mask + where back-calculation) into the graph.
+    """
+    kf = EstimatorFactory("configs/estimators/kalman_base.toml").create(backend=NumpyBackend())
+    pid = PIDController(
+        kp=np.array([2.0, 2.0, 2.0]),
+        ki=np.array([0.5, 0.5, 0.5]),
+        kd=np.array([0.5, 0.5, 0.5]),
+        dt=0.02,
+        output_limits=(np.array([-0.3, -0.3, -0.6]), np.array([0.3, 0.3, 0.6])),
+        backend=NumpyBackend(),
+    )
+    kf.P = np.eye(3) * 0.1
+    kf.x_hat = np.zeros((3, 1))
+    kf_graph = trace_node(
+        kf,
+        input_shapes={"measurement": (3, 1), "control_input": (3, 1)},
+        state_shapes={"x_hat": (3, 1), "P": (3, 3)},
+    )
+    pid_graph = trace_node(
+        pid,
+        input_shapes={"current_state": (3,), "target_state": (3,)},
+        state_shapes={"_integral": (3,), "_prev_error": (3,), "_has_run": (3,)},
+    )
+    limits = (np.array([-0.5, -0.5, -1.0]), np.array([0.5, 0.5, 1.0]))
+    return compose(kf_graph, pid_graph, plant_dims={"n_x": 3, "n_u": 3}, input_limits=limits)
+
+
 @pytest.fixture(scope="session")
 def base_so(tmp_path_factory):
     """Build the .so from the base_tracking composed graph once per session."""
@@ -161,6 +203,12 @@ def mpc_composed_so(tmp_path_factory):
     from scripts.gen_mpc import build_mpc_composed_graph
 
     return _build_so(build_mpc_composed_graph(), tmp_path_factory.mktemp("zig-build-mpc-composed"))
+
+
+@pytest.fixture(scope="session")
+def pid_composed_so(tmp_path_factory):
+    """Build the .so from the composed KF + PID graph (recurrent integral + anti-windup)."""
+    return _build_so(_build_pid_composed_graph(), tmp_path_factory.mktemp("zig-build-pid-composed"))
 
 
 def _output_split(cg):
@@ -361,7 +409,7 @@ class TestLoweredOpsOracle:
         n_out, n_state = _output_split(cg)
         assert n_state == 0
 
-        exact_ops = {"copy", "slice", "relu", "argmax", "one_hot", "stack"}
+        exact_ops = {"copy", "slice", "relu", "argmax", "one_hot", "stack", "ne_zero", "ne_one"}
         transcendental = {"exp", "tanh", "sin", "cos"}
 
         for _ in range(20):
@@ -466,5 +514,96 @@ class TestMpcComposedOracle:
 
         assert max_err < 1e-4, (
             f".so diverged from live KF+MPC over 100 ticks: max abs err = {max_err:.3e}"
+        )
+
+
+class TestPidComposedOracle:
+    """The composed KF + PID .so matches a live numpy closed loop.
+
+    The regression test for controller recurrent state: PID's integral must
+    accumulate across ticks (the old composed graph froze it at zero), the
+    D-term gate must open after tick 0 (the old graph baked the first-tick
+    branch forever), and the anti-windup back-calculation must fire only on
+    saturated channels. output_limits forces saturation so the ne/where
+    anti-windup path is genuinely exercised.
+    """
+
+    def test_so_matches_live_kf_pid(self, pid_composed_so):
+        lib, cg = pid_composed_so
+        rng = np.random.default_rng(31)
+        n_out, n_state = _output_split(cg)
+        sl = _state_slices(cg)
+
+        kf = EstimatorFactory("configs/estimators/kalman_base.toml").create(backend=NumpyBackend())
+        pid = PIDController(
+            kp=np.array([2.0, 2.0, 2.0]),
+            ki=np.array([0.5, 0.5, 0.5]),
+            kd=np.array([0.5, 0.5, 0.5]),
+            dt=0.02,
+            output_limits=(np.array([-0.3, -0.3, -0.6]), np.array([0.3, 0.3, 0.6])),
+            backend=NumpyBackend(),
+        )
+        limits = (np.array([-0.5, -0.5, -1.0]), np.array([0.5, 0.5, 1.0]))
+
+        P = np.eye(3) * 0.1
+        x_hat = np.zeros((3, 1))
+        integral_so = np.zeros(3)
+        prev_error_so = np.zeros(3)
+        has_run_so = np.zeros(3)
+        integral_live = np.zeros(3)
+        prev_error_live = np.zeros(3)
+        has_run_live = np.zeros(3)
+        u_prev_so = np.zeros(3)
+        u_prev_np = np.zeros(3)
+        saw_saturation = False
+
+        max_err = 0.0
+        for _ in range(100):
+            y = rng.normal(0.0, 0.1, (3,))
+            x_ref = rng.normal(0.0, 0.05, (3,))
+
+            # Live numpy oracle: KF step, then PID with its own state.
+            kf.P = P.copy()
+            kf.x_hat = x_hat.copy()
+            pid._integral = integral_live.copy()
+            pid._prev_error = prev_error_live.copy()
+            pid._has_run = has_run_live.copy()
+            x_hat_np = kf.estimate(y.reshape(-1, 1), u_prev_np.reshape(-1, 1))
+            u_np = np.clip(pid.compute(x_hat_np.ravel(), x_ref), limits[0], limits[1])
+            integral_live = pid._integral.copy()
+            prev_error_live = pid._prev_error.copy()
+            has_run_live = pid._has_run.copy()
+            saw_saturation = saw_saturation or bool(
+                np.any(np.abs(u_np) >= 0.3 - 1e-12)
+            )
+
+            inputs = _pack_arrays(
+                cg,
+                {
+                    "y": y,
+                    "x_ref": x_ref,
+                    "u_prev": u_prev_so,
+                    "state_x_hat": x_hat.ravel(),
+                    "state_P": P.ravel(),
+                    "state_integral": integral_so,
+                    "state_prev_error": prev_error_so,
+                    "state_has_run": has_run_so,
+                },
+            )
+            out, state = _step(lib, cg, inputs, n_out, n_state)
+            max_err = max(max_err, float(np.max(np.abs(out - u_np))))
+
+            # Each loop evolves its own state.
+            x_hat = state[sl["state_x_hat"][0] : sl["state_x_hat"][1]].reshape(3, 1)
+            P = state[sl["state_P"][0] : sl["state_P"][1]].reshape(3, 3)
+            integral_so = state[sl["state_integral"][0] : sl["state_integral"][1]]
+            prev_error_so = state[sl["state_prev_error"][0] : sl["state_prev_error"][1]]
+            has_run_so = state[sl["state_has_run"][0] : sl["state_has_run"][1]]
+            u_prev_so = out
+            u_prev_np = u_np
+
+        assert saw_saturation, "oracle never saturated — anti-windup path untested"
+        assert max_err < 1e-10, (
+            f".so diverged from live KF+PID over 100 ticks: max abs err = {max_err:.3e}"
         )
 

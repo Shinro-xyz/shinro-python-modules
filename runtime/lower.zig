@@ -85,6 +85,7 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
             .sub => ew2(g.nodes[0..], node, i, &buf, .sub),
             .mul => ew2(g.nodes[0..], node, i, &buf, .mul),
             .div => ew2(g.nodes[0..], node, i, &buf, .div),
+            .ne => ew2(g.nodes[0..], node, i, &buf, .ne),
             .neg => {
                 const s = node_input(g.nodes[0..], node, &buf);
                 inline for (0..node.rows * node.cols) |j| out[j] = -s[j];
@@ -207,7 +208,7 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
 
 // --- helpers ---------------------------------------------------------------
 
-const BinOp = enum { add, sub, mul, div };
+const BinOp = enum { add, sub, mul, div, ne };
 
 /// Elementwise binary op with broadcast: each operand is either the same
 /// length as the output, or a single element (0-d / size-1 broadcast).
@@ -221,7 +222,7 @@ const BinOp = enum { add, sub, mul, div };
 ///
 /// Args:
 ///     nodes: The full generated node table (for shape lookup).
-///     node: The current add/sub/mul/div node.
+///     node: The current add/sub/mul/div/ne node.
 ///     self_idx: The node's index in `nodes` (its buffer offset).
 ///     buf: The shared step buffer (written at the node's offset).
 ///     op: Which binary op to apply (add, sub, mul, div).
@@ -239,6 +240,9 @@ inline fn ew2(nodes: []const g.Node, node: g.Node, self_idx: usize, buf: *[g.buf
             .sub => av - bv,
             .mul => av * bv,
             .div => av / bv,
+            // Inequality as a 1.0/0.0 flag — the graph's boolean repr,
+            // consumed by where_op downstream (e.g. PID anti-windup).
+            .ne => if (av != bv) 1.0 else 0.0,
         };
     }
 }

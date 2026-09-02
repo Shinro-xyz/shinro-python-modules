@@ -162,6 +162,23 @@ class Tracer:
         node = self._g.emit("neg", [self.node], self.shape)
         return Tracer(self._g, self.shape, node)
 
+    def __truediv__(self, other: Any) -> Tracer:
+        other = _lift(self._g, other)
+        out_shape = _broadcast_shape(self.shape, other.shape)
+        node = self._g.emit("div", [self.node, other.node], out_shape)
+        return Tracer(self._g, out_shape, node)
+
+    def __ne__(self, other: Any) -> Tracer:  # type: ignore[override]
+        # Elementwise inequality recorded as a `ne` node producing 1.0/0.0
+        # flags — the graph's only boolean representation, consumed by
+        # where/any downstream (e.g. PID's anti-windup saturation mask).
+        # Deliberately returns a Tracer, not a bool: under tracing, `!=` is
+        # data flow, not a Python boolean.
+        other = _lift(self._g, other)
+        out_shape = _broadcast_shape(self.shape, other.shape)
+        node = self._g.emit("ne", [self.node, other.node], out_shape)
+        return Tracer(self._g, out_shape, node)
+
     @property
     def T(self) -> Tracer:
         """Transpose — reverses the shape."""

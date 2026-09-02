@@ -265,7 +265,7 @@ class TestControllerReset:
         assert "reset" in result.lower()
         ctrl = _store["pid"]
         assert np.allclose(ctrl._integral, 0.0)
-        assert not ctrl.has_run
+        assert np.allclose(ctrl._has_run, 0.0)
 
     def test_reset_unknown_name_returns_error(self):
         """Resetting a nonexistent controller returns an error."""

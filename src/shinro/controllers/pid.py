@@ -49,9 +49,14 @@ class PIDController(Controller):
 
         self.min_limits = output_limits[0] if output_limits else None
         self.max_limits = output_limits[1] if output_limits else None
+        self.min_limits = output_limits[0] if output_limits else None
+        self.max_limits = output_limits[1] if output_limits else None
         self._integral = self.bk.zeros_like(self.ki)
         self._prev_error = self.bk.zeros_like(self.kd)
-        self.has_run = False
+        # First-tick gate as a 0/1 array (not a Python bool): under tracing a
+        # bool branch would bake the first-tick path into the graph forever.
+        # As a recurrent state port the graph gates the D-term at runtime.
+        self._has_run = self.bk.zeros_like(self.ki)
 
     def compute(self, current_state, target_state):
         """Compute the PID control effort.
@@ -68,34 +73,48 @@ class PIDController(Controller):
         self._integral = self._integral + error * self.dt
         i_term = self.ki * self._integral
 
-        if self.has_run is True:
-            der = (error - self._prev_error) / self.dt
-        else:
-            der = self.bk.zeros_like(error)
-            self.has_run = True
+        # Where-gate: der = has_run ? (e - e_prev)/dt : 0. A Python branch
+        # would bake the first-tick path into the traced graph forever; the
+        # 0/1 flag is a recurrent state port the host feeds back (0 on tick
+        # 0, 1 afterwards). where (not multiply): on tick 0 the candidate
+        # divides by dt — with dt=0 that's inf, and inf*0 = NaN under a
+        # multiply gate, while where simply discards the unselected branch.
+        # The condition is an explicit `!= 0` so torch gets a boolean tensor
+        # (torch.where rejects float conditions); under tracing it emits the
+        # same ne node.
+        der = self.bk.where(
+            self._has_run != 0,
+            (error - self._prev_error) / self.dt,
+            self.bk.zeros_like(error),
+        )
         d_term = self.kd * der
 
         control_effort = p_term + i_term + d_term
 
         if self.min_limits is not None and self.max_limits is not None:
             clamped_effort = self.bk.clip(control_effort, self.min_limits, self.max_limits)
-            saturated_indices = control_effort != clamped_effort
-            if self.bk.any(saturated_indices):
-                self._integral = self.bk.where(
-                    saturated_indices,
-                    self._integral - error * self.dt,
-                    self._integral,
-                )
-                control_effort = clamped_effort
+            # Branch-free anti-windup: an elementwise mask replaces the old
+            # `if bk.any(saturated)` early-out (a Python branch on a traced
+            # value, which would silently apply the back-calculation every
+            # tick). Where a channel is unsaturated the mask is 0 and the
+            # integral passes through unchanged — identical results.
+            saturated = control_effort != clamped_effort
+            self._integral = self.bk.where(
+                saturated,
+                self._integral - error * self.dt,
+                self._integral,
+            )
+            control_effort = clamped_effort
 
         self._prev_error = self.bk.copy(error)
+        self._has_run = self.bk.zeros_like(self.ki) + 1.0
         return control_effort
 
     def reset(self):
         """Reset the controller's internal state (integral and previous error)."""
         self._integral = self.bk.zeros_like(self.ki)
         self._prev_error = self.bk.zeros_like(self.kd)
-        self.has_run = False
+        self._has_run = self.bk.zeros_like(self.ki)
 
     @classmethod
     def from_config(cls, config, backend: ArrayBackend | None = None):

@@ -95,6 +95,12 @@ def _mul(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray
     return values[node.inputs[0]] * values[node.inputs[1]]
 
 
+@register_op("ne")
+def _ne(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
+    """Elementwise inequality as 1.0/0.0 floats — the graph's boolean repr."""
+    return (values[node.inputs[0]] != values[node.inputs[1]]).astype(np.float64)
+
+
 @register_op("neg")
 def _neg(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     return -values[node.inputs[0]]

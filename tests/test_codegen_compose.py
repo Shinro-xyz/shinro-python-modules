@@ -265,6 +265,7 @@ class TestSwapController:
         ctrl_ng = trace_node(
             pid,
             input_shapes={"current_state": (3,), "target_state": (3,)},
+            state_shapes={"_integral": (3,), "_prev_error": (3,), "_has_run": (3,)},
         )
 
         composed = compose(est_ng, ctrl_ng, plant_dims=_BASE_DIMS, input_limits=_BASE_LIMITS)
@@ -284,7 +285,7 @@ class TestSwapController:
             kf.x_hat = x_hat_init.copy()
             pid._integral = initial_pid_integral.copy()
             pid._prev_error = initial_pid_prev.copy()
-            pid.has_run = False
+            pid._has_run = np.zeros(3)
             x_hat_np = kf.estimate(y.reshape(-1, 1), u_prev.reshape(-1, 1))
             u_np = pid.compute(x_hat_np.ravel(), x_ref)
             u_np = np.clip(u_np, _BASE_LIMITS[0], _BASE_LIMITS[1])
@@ -297,6 +298,9 @@ class TestSwapController:
                     "u_prev": u_prev,
                     "state_x_hat": x_hat_init,
                     "state_P": initial_P,
+                    "state_integral": initial_pid_integral,
+                    "state_prev_error": initial_pid_prev,
+                    "state_has_run": np.zeros(3),
                 },
             )
 
@@ -333,6 +337,7 @@ class TestSwapBoth:
         ctrl_ng = trace_node(
             pid,
             input_shapes={"current_state": (3,), "target_state": (3,)},
+            state_shapes={"_integral": (3,), "_prev_error": (3,), "_has_run": (3,)},
         )
 
         composed = compose(est_ng, ctrl_ng, plant_dims=_BASE_DIMS, input_limits=_BASE_LIMITS)
@@ -349,14 +354,22 @@ class TestSwapBoth:
             luen.x_hat = x_hat_init.copy()
             pid._integral = initial_pid_integral.copy()
             pid._prev_error = initial_pid_prev.copy()
-            pid.has_run = False
+            pid._has_run = np.zeros(3)
             x_hat_np = luen.estimate(y.reshape(-1, 1), u_prev.reshape(-1, 1))
             u_np = pid.compute(x_hat_np.ravel(), x_ref)
             u_np = np.clip(u_np, _BASE_LIMITS[0], _BASE_LIMITS[1])
 
             traced = interpret(
                 composed.graph,
-                {"y": y, "x_ref": x_ref, "u_prev": u_prev, "state_x_hat": x_hat_init},
+                {
+                    "y": y,
+                    "x_ref": x_ref,
+                    "u_prev": u_prev,
+                    "state_x_hat": x_hat_init,
+                    "state_integral": initial_pid_integral,
+                    "state_prev_error": initial_pid_prev,
+                    "state_has_run": np.zeros(3),
+                },
             )
 
             assert np.allclose(traced["u"], u_np, atol=1e-12), (
