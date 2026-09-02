@@ -159,6 +159,14 @@ state_P (recurrent) ─────▶ Estimator   (any state_* port the trace d
     `state_u_prev` closes the loop.
   - Unmapped input names (e.g. SMC's dynamics terms `f_x`/`g_x`, which need a
     different wiring model) raise at compose time rather than mis-wiring.
+- **Controller recurrent state:** the same `state_*` mechanism applies to the
+  controller side — e.g. PID's `_integral`/`_prev_error` thread as
+  `state_integral`/`state_prev_error` ports (leading underscores are stripped
+  from port names). A Python branch on instance state would bake the traced
+  path forever, so stateful controllers must express selection as data: PID's
+  first-tick gate is a `where` on a 0/1 `_has_run` recurrent port, and its
+  anti-windup back-calculation is an elementwise mask (`ne` + `where`),
+  replacing the old `if bk.any(...)` Python branch.
 - **`clip`**: if `input_limits` is provided (from `[scenario.input_limits]`),
   a `clip` node is inserted on the controller output.
 - **Auto-reshape:** where shapes mismatch (KF `(n,1)` → LQR `(n,)`), `reshape`

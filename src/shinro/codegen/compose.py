@@ -296,8 +296,6 @@ def compose(
         combined.output(port, state_out_id)
         emitted_state_ports.append(port)
 
-    # --- declare combined-graph outputs ---
-    combined.output("u", u_id)
     # Controller state outputs (recurrent): each mutated controller attr's
     # new value (e.g. PID's integral), read from the controller's own
     # state_<attr> output node.
