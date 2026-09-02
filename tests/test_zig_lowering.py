@@ -155,6 +155,14 @@ def mpc_so(tmp_path_factory):
     return _build_so(_build_mpc_graph(), tmp_path_factory.mktemp("zig-build-mpc"))
 
 
+@pytest.fixture(scope="session")
+def mpc_composed_so(tmp_path_factory):
+    """Build the .so from the composed KF + MPC_LTI graph (error-state feed)."""
+    from scripts.gen_mpc import build_mpc_composed_graph
+
+    return _build_so(build_mpc_composed_graph(), tmp_path_factory.mktemp("zig-build-mpc-composed"))
+
+
 def _output_split(cg):
     """Return (n_out, n_state): flat sizes of the outputs and state buffers."""
     n_out = 0
@@ -404,4 +412,59 @@ class TestSolveQpOracle:
             max_err = max(max_err, float(np.max(np.abs(out - np.asarray(traced).ravel()))))
 
         assert max_err < 1e-3, f"Zig .so solve_qp diverged from interpreter: max abs err = {max_err:.3e}"
+
+
+class TestMpcComposedOracle:
+    """The composed KF + MPC_LTI .so matches a live numpy closed loop.
+
+    The regulator gets the error state e = x_hat - x_ref (compose inserts the
+    sub node); the oracle is the real KalmanFilter.estimate() + MPC_LTI.compute()
+    on the numpy backend, driven in parallel through the same y/x_ref sequence.
+    Tolerance is looser than the KF+LQR oracle: the .so's baked EMOSQP
+    warm-starts from the previous tick's solution while the live side
+    cold-starts Python osqp each tick, so ADMM settles at slightly different
+    points within eps — and that difference feeds back through the loop
+    (measured: max ~1.5e-6 over 100 ticks).
+    """
+
+    def test_so_matches_live_kf_mpc(self, mpc_composed_so):
+        lib, cg = mpc_composed_so
+        rng = np.random.default_rng(21)
+        n_out, n_state = _output_split(cg)
+        sl = _state_slices(cg)
+
+        kf = EstimatorFactory("configs/estimators/kalman_base.toml").create(backend=NumpyBackend())
+        mpc = ControllerFactory("configs/controllers/mpc_lti_base.toml").create(backend=NumpyBackend())
+        limits = (np.array([-0.5, -0.5, -1.0]), np.array([0.5, 0.5, 1.0]))
+
+        P = np.eye(3) * 0.1
+        x_hat = np.zeros((3, 1))
+        u_prev_so = np.zeros(3)
+        u_prev_np = np.zeros(3)
+
+        max_err = 0.0
+        for _ in range(100):
+            y = rng.normal(0.0, 0.1, (3,))
+            x_ref = rng.normal(0.0, 0.05, (3,))
+
+            # Live numpy oracle: KF step, then the regulator on the error.
+            kf.P = P.copy()
+            kf.x_hat = x_hat.copy()
+            x_hat_np = kf.estimate(y.reshape(-1, 1), u_prev_np.reshape(-1, 1))
+            u_np = np.clip(
+                mpc.compute(x_hat_np.ravel() - x_ref), limits[0], limits[1]
+            )
+
+            inputs = _pack_inputs(cg, y, x_ref, u_prev_so, x_hat, P)
+            out, state = _step(lib, cg, inputs, n_out, n_state)
+            max_err = max(max_err, float(np.max(np.abs(out - u_np))))
+
+            x_hat = state[sl["state_x_hat"][0] : sl["state_x_hat"][1]].reshape(3, 1)
+            P = state[sl["state_P"][0] : sl["state_P"][1]].reshape(3, 3)
+            u_prev_so = out
+            u_prev_np = u_np
+
+        assert max_err < 1e-4, (
+            f".so diverged from live KF+MPC over 100 ticks: max abs err = {max_err:.3e}"
+        )
 

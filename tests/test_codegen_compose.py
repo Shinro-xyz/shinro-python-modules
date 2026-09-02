@@ -455,6 +455,146 @@ class TestComposePortMeta:
         assert composed.state_outputs == ["state_x_hat", "state_P", "state_u_prev"]
 
 
+# ─── Test 9b: controller role mapping (MPC regulators) ─────────────────────
+
+
+class TestComposeControllerRoles:
+    """Controller inputs map by role from the compute() signature.
+
+    MPC_LTI/MPC_DeltaU are regulators (no reference input): compose feeds the
+    error ``x_hat - x_ref`` so regulating it to zero tracks ``x_ref``. A
+    controller declaring ``u_prev`` (DeltaU) shares the estimator's
+    previous-control port. Unmapped input names raise.
+    """
+
+    def test_mpc_lti_compose_error_state(self, rng):
+        """KF + MPC_LTI: controller receives e = x_hat - x_ref, matches live."""
+        kf = _load_kalman()
+        mpc = ControllerFactory("configs/controllers/mpc_lti_base.toml").create(backend=NumpyBackend())
+
+        est_ng = trace_node(
+            kf,
+            input_shapes={"measurement": (3, 1), "control_input": (3, 1)},
+            state_shapes={"x_hat": (3, 1), "P": (3, 3)},
+        )
+        ctrl_ng = trace_node(mpc, input_shapes={"x0": (3,)})
+        composed = compose(est_ng, ctrl_ng, plant_dims=_BASE_DIMS, input_limits=_BASE_LIMITS)
+
+        # The regulator's state feed is the error: a sub node bridges x_hat and x_ref.
+        ops = [n.op for n in composed.graph.nodes]
+        assert "sub" in ops, f"expected an error-state sub node; ops = {ops}"
+
+        initial_P = kf.P.copy()
+        for trial in range(20):
+            y = rng.normal(0.0, 0.1, (3,))
+            x_ref = rng.normal(0.0, 0.05, (3,))
+            x_hat_init = rng.normal(0.0, 0.1, (3, 1))
+            u_prev = rng.normal(0.0, 0.1, (3,))
+
+            # Ground truth: live KF step, then the regulator on the error.
+            kf.P = initial_P.copy()
+            kf.x_hat = x_hat_init.copy()
+            x_hat_np = kf.estimate(y.reshape(-1, 1), u_prev.reshape(-1, 1))
+            u_np = np.clip(
+                mpc.compute(x_hat_np.ravel() - x_ref), _BASE_LIMITS[0], _BASE_LIMITS[1]
+            )
+
+            traced = interpret(
+                composed.graph,
+                {
+                    "y": y,
+                    "x_ref": x_ref,
+                    "u_prev": u_prev,
+                    "state_x_hat": x_hat_init,
+                    "state_P": initial_P,
+                },
+            )
+            assert np.allclose(traced["u"], u_np, atol=1e-9), (
+                f"trial {trial}: KF+MPC_LTI u diverged. "
+                f"max err = {np.max(np.abs(traced['u'] - u_np))}"
+            )
+
+    def test_mpc_deltau_compose_routes_u_prev(self, rng):
+        """KF + MPC_DeltaU: the controller's u_prev is the shared recurrent port."""
+        kf = _load_kalman()
+        mpc = ControllerFactory("configs/controllers/mpc_base.toml").create(backend=NumpyBackend())
+
+        est_ng = trace_node(
+            kf,
+            input_shapes={"measurement": (3, 1), "control_input": (3, 1)},
+            state_shapes={"x_hat": (3, 1), "P": (3, 3)},
+        )
+        ctrl_ng = trace_node(mpc, input_shapes={"x0": (3,), "u_prev": (3,)})
+        composed = compose(est_ng, ctrl_ng, plant_dims=_BASE_DIMS, input_limits=_BASE_LIMITS)
+
+        # Same port list as KF+LQR: u_prev is shared, not duplicated.
+        assert composed.inputs == ["y", "x_ref", "u_prev", "state_x_hat", "state_P"]
+        assert composed.state_outputs == ["state_x_hat", "state_P", "state_u_prev"]
+
+        initial_P = kf.P.copy()
+        for trial in range(20):
+            y = rng.normal(0.0, 0.1, (3,))
+            x_ref = rng.normal(0.0, 0.05, (3,))
+            x_hat_init = rng.normal(0.0, 0.1, (3, 1))
+            u_prev = rng.normal(0.0, 0.1, (3,))
+
+            # Ground truth: u_prev feeds BOTH the estimator and the controller.
+            kf.P = initial_P.copy()
+            kf.x_hat = x_hat_init.copy()
+            x_hat_np = kf.estimate(y.reshape(-1, 1), u_prev.reshape(-1, 1))
+            u_np = np.clip(
+                mpc.compute(x_hat_np.ravel() - x_ref, u_prev),
+                _BASE_LIMITS[0],
+                _BASE_LIMITS[1],
+            )
+
+            traced = interpret(
+                composed.graph,
+                {
+                    "y": y,
+                    "x_ref": x_ref,
+                    "u_prev": u_prev,
+                    "state_x_hat": x_hat_init,
+                    "state_P": initial_P,
+                },
+            )
+            assert np.allclose(traced["u"], u_np, atol=1e-9), (
+                f"trial {trial}: KF+MPC_DeltaU u diverged. "
+                f"max err = {np.max(np.abs(traced['u'] - u_np))}"
+            )
+
+    def test_unknown_controller_input_raises(self):
+        """A controller input outside the role table raises (e.g. SMC's f_x/g_x)."""
+        from shinro.codegen.trace_node import NodeGraph
+
+        est_g = Graph()
+        est_in = est_g.input("measurement", (3, 1))
+        est_g.input("control_input", (3, 1))
+        est_g.input("state_x_hat", (3, 1))
+        est_g.output("out", est_in)
+        estimator = NodeGraph(
+            graph=est_g,
+            contract=None,  # type: ignore[arg-type]
+            input_nodes={"measurement": est_in},
+            output_nodes={"out": est_in},
+            state_attrs=[],
+        )
+        ctrl_g = Graph()
+        x_in = ctrl_g.input("x", (3,))
+        ctrl_g.input("f_x", (3,))  # SMC-style dynamics term — not a known role
+        ctrl_g.input("g_x", (3,))
+        ctrl_g.output("out", x_in)
+        controller = NodeGraph(
+            graph=ctrl_g,
+            contract=None,  # type: ignore[arg-type]
+            input_nodes={"x": x_in},
+            output_nodes={"out": x_in},
+            state_attrs=[],
+        )
+        with pytest.raises(ValueError, match="does not map to a known role"):
+            compose(estimator, controller, plant_dims=_BASE_DIMS, input_limits=None)
+
+
 # ─── Test 10: compose error paths ──────────────────────────────────────────
 
 

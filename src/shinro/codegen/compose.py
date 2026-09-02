@@ -5,13 +5,15 @@ The composition pass takes the per-component graphs captured by
 graph representing one tick of the closed loop:
 
     Trajectory ─x_ref─▶ Controller ─u─▶ [clip] ──▶ output
-                        ▲
-                        │ x_hat
-                     Estimator ◀── y (measurement)
+                         ▲
+                         │ x_hat
+                      Estimator ◀── y (measurement)
 
-The wiring is the **fixed ABC dataflow** — it's the same for every scenario,
-so no per-scenario edge dict is needed. What's scenario-specific (clip
-limits, vector dims) comes from the scenario config.
+The wiring is the **fixed ABC dataflow** — the same for every scenario, so no
+per-scenario edge dict is needed. What's scenario-specific (clip limits, vector
+dims) comes from the scenario config. Controller inputs are mapped by role
+from the compute() signature; a regulator controller (MPC) gets the error
+``x_hat - x_ref`` instead of a separate reference input.
 
 Shape mismatches between estimator and controller (e.g. the KF produces
 ``(n,1)`` column vectors but the LQR expects ``(n,)`` flat) are resolved by
@@ -74,6 +76,14 @@ def compose(
         y (measurement) ──▶ Estimator ──x_hat──▶ Controller ──u──▶ [clip] ──▶ output
         x_ref ───────────────────────────────▶ Controller
         state_x_hat (recurrent) ─▶ Estimator
+
+    The controller's inputs are mapped by ROLE from its compute() signature
+    (state / reference / u_prev — see ``_CONTROLLER_INPUT_ROLES``), not by
+    hardcoded names. A controller that takes a reference (LQR, MPPI) receives
+    ``x_hat`` and ``x_ref`` separately; a regulator without a reference input
+    (MPC_LTI, MPC_DeltaU) receives the error ``x_hat - x_ref`` instead.
+    ``u_prev`` routes the shared previous-control port into controllers that
+    declare it (MPC_DeltaU).
 
     State (the estimator's recurrent attributes — ``x_hat``, the Kalman
     filter's covariance ``P``, ...) and the previous control (``u_prev``, fed
@@ -170,11 +180,44 @@ def compose(
     )
 
     # --- merge the controller ---
-    # Controller inputs: current_state (x_hat), target_state (x_ref).
-    ctrl_input_map = {
-        "current_state": x_hat_flat_id,
-        "target_state": x_ref_id,
-    }
+    # Controller inputs are mapped by ROLE, driven by the input placeholders
+    # the traced controller declares (its compute() signature):
+    #   state     -> the state estimate x_hat, or the tracking error
+    #                e = x_hat - x_ref when the controller declares no
+    #                reference input. A regulator (MPC_LTI, MPC_DeltaU)
+    #                drives e to zero, which tracks x_ref — exact for A = I
+    #                plants; general A needs an (A - I) x_ref feedforward.
+    #   reference -> the reference trajectory x_ref.
+    #   u_prev    -> the previous control — the same recurrent port the
+    #                estimator consumes (e.g. MPC_DeltaU's rate input).
+    controller_takes_reference = False
+    state_role_names: list[str] = []
+    ctrl_input_map: dict[str, int] = {}
+    for node in controller.graph.nodes:
+        if node.op != "input":
+            continue
+        name = node.attrs["name"]
+        role = _CONTROLLER_INPUT_ROLES.get(name)
+        if role == "reference":
+            controller_takes_reference = True
+            ctrl_input_map[name] = x_ref_id
+        elif role == "u_prev":
+            ctrl_input_map[name] = u_prev_id
+        elif role == "state":
+            state_role_names.append(name)
+        else:
+            raise ValueError(
+                f"controller input '{name}' does not map to a known role "
+                f"(state / reference / u_prev); extend _CONTROLLER_INPUT_ROLES "
+                f"in shinro.codegen.compose"
+            )
+    if controller_takes_reference or not state_role_names:
+        state_feed_id = x_hat_flat_id
+    else:
+        # Regulator: feed the error state e = x_hat - x_ref.
+        state_feed_id = combined.emit("sub", [x_hat_flat_id, x_ref_id], (n_x,))
+    for name in state_role_names:
+        ctrl_input_map[name] = state_feed_id
     ctrl_remap, _ = _merge_and_rewire(combined, controller.graph, ctrl_input_map)
 
     # The controller's output (u) — clip if input_limits provided, then emit.
@@ -234,6 +277,23 @@ def compose(
 
 
 # ─── helpers ───────────────────────────────────────────────────────────────
+
+
+# Controller input name → dataflow role. Exact names (no prefix matching) so
+# `x_ref` never collides with `x0`/`x`. Controllers whose compute() uses other
+# names for these roles should be added here; anything unmapped raises at
+# compose time rather than silently mis-wiring (e.g. SMC's dynamics terms
+# f_x/g_x, which need a different wiring model entirely).
+_CONTROLLER_INPUT_ROLES: dict[str, str] = {
+    "x0": "state",
+    "current_state": "state",
+    "state": "state",
+    "x": "state",
+    "x_ref": "reference",
+    "target_state": "reference",
+    "target": "reference",
+    "u_prev": "u_prev",
+}
 
 
 def _merge_and_rewire(

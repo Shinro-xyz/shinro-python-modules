@@ -130,7 +130,8 @@ dataflow:
 
 ```
 y (measurement) ──▶ Estimator ──x_hat──▶ Controller ──u──▶ [clip] ──▶ output
-x_ref ──────────────────────────────▶ Controller
+x_ref ────────┬──────────────────────────▶ Controller (reference role)
+              └─(regulator: sub)─▶ e = x_hat - x_ref ─▶ Controller (state role)
 state_x_hat (recurrent) ─▶ Estimator
 state_P (recurrent) ─────▶ Estimator   (any state_* port the trace declares)
 ```
@@ -142,6 +143,22 @@ state_P (recurrent) ─────▶ Estimator   (any state_* port the trace d
   trace detected as mutated without a matching pre-injected placeholder raises:
   that recursion would be silently frozen at its trace-time value (e.g. the
   KF's covariance collapsing to a one-step gain).
+- **Controller role mapping:** the controller's inputs are mapped by *role*
+  from its `compute()` signature (`_CONTROLLER_INPUT_ROLES` in `compose.py`),
+  not by hardcoded names. Roles: `state` (names like `x0`, `current_state`,
+  `state`), `reference` (`x_ref`, `target_state`, `target`), `u_prev`.
+  - A controller that declares a **reference** input (LQR, MPPI) receives
+    `x_hat` and `x_ref` separately.
+  - A **regulator** with no reference input (MPC_LTI, MPC_DeltaU) receives
+    the *error state* `e = x_hat - x_ref` instead — regulating `e` to zero
+    tracks `x_ref` (a `sub` node bridges the two). Exact for `A = I` plants;
+    general `A` needs an `(A - I) x_ref` feedforward to avoid steady-state
+    offset.
+  - A controller declaring **`u_prev`** (MPC_DeltaU) shares the estimator's
+    previous-control recurrent port — the same value feeds both, and
+    `state_u_prev` closes the loop.
+  - Unmapped input names (e.g. SMC's dynamics terms `f_x`/`g_x`, which need a
+    different wiring model) raise at compose time rather than mis-wiring.
 - **`clip`**: if `input_limits` is provided (from `[scenario.input_limits]`),
   a `clip` node is inserted on the controller output.
 - **Auto-reshape:** where shapes mismatch (KF `(n,1)` → LQR `(n,)`), `reshape`

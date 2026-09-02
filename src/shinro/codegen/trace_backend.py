@@ -150,6 +150,21 @@ class TraceBackend:
         out_shape = (len(arrays),) + base
         return self._emit("stack", [a for a in arrays], out_shape)
 
+    def hstack(self, arrays: list[Tracer]) -> Tracer:
+        # 1-D hstack == stack along a new leading axis + flatten: pure data
+        # movement, bit-exact with np.hstack. Lets MPC_DeltaU's
+        # x0_aug = hstack([x0, u_prev]) trace without a new VM op.
+        if not arrays:
+            raise NotImplementedError("TraceBackend.hstack of empty list")
+        if any(len(a.shape) != 1 for a in arrays):
+            raise NotImplementedError(
+                "TraceBackend.hstack only supports 1-D arrays "
+                f"(got shapes {[a.shape for a in arrays]})"
+            )
+        stacked = self.stack(arrays)
+        n = sum(a.shape[0] for a in arrays)
+        return self._emit("reshape", [stacked], (n,), target_shape=(n,))
+
     def reshape(self, x: Tracer, *shape: int) -> Tracer:
         # Converts the (shape,) or *shape call forms, then emits a reshape op.
         # The reshape node stores its target shape in attrs, same as the
