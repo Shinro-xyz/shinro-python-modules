@@ -48,7 +48,7 @@ fallback_version = "0.0.0"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 addopts = "-m 'not integration and not mcp'"
 markers = [
     "integration: full-loop physics-backed tests (slow, requires MuJoCo; run via `make test-integration`)",
