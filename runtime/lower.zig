@@ -19,7 +19,11 @@
 //   - state_out: packed in cg.state_outputs order (recurrent → next tick)
 
 const std = @import("std");
-const g = @import("graph_data.zig");
+// The generated graph and the bake's n_vars are anonymous imports wired by
+// build.zig from -Dgraph / -Dsolver_dir (defaults: runtime/graph_data.zig and
+// runtime/codegen/emosqp/solver_meta.zig).
+const g = @import("graph_data");
+const sm = @import("solver_meta");
 const la = @import("linalg.zig");
 const qp = @import("qp.zig");
 
@@ -197,8 +201,20 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
             // tick: it is read from the node's input slot and written in via
             // osqp_update_data_vec, then the full solution lands in this
             // node's output slot (u[:m] is sliced out by a downstream op).
-            // The node's output size must match the baked problem's n_vars.
+            // The node's output size must match the baked problem's n_vars —
+            // enforced here at compile time, so a graph lowered against the
+            // wrong bake refuses to build instead of silently linking a
+            // shape-mismatched solver.
             .solve_qp => {
+                comptime {
+                    if (node.rows * node.cols != sm.n_vars) {
+                        @compileError("graph solve_qp node output size (" ++
+                            std.fmt.comptimePrint("{d}", .{node.rows * node.cols}) ++
+                            ") does not match baked solver n_vars (" ++
+                            std.fmt.comptimePrint("{d}", .{sm.n_vars}) ++
+                            ") — rebuild with the matching -Dsolver_dir");
+                    }
+                }
                 const q_vec = node_input(g.nodes[0..], node, &buf);
                 qp.solve_qp(q_vec, out);
             },

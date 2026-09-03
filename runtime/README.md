@@ -74,30 +74,57 @@ shipped content is always "whichever generator ran last":
 
 | Artifact | Written by | Restore shipped default |
 |---|---|---|
-| `runtime/graph_data.zig` | `scripts/gen_base.py` (KF+LQR), `scripts/gen_mpc.py` (KF+MPC_LTI), and the pytest fixtures in `tests/test_zig_lowering.py` | `make zig-gen` |
+| `runtime/graph_data.zig` | `scripts/gen_base.py` (KF+LQR), `scripts/gen_mpc.py` (KF+MPC_LTI / KF+MPC_DeltaU), and the pytest fixtures in `tests/test_zig_lowering.py` | `make zig-gen` |
 | `runtime/codegen/emosqp/` | `scripts/gen_emosqp_test.py` — bakes the whole static solver tree for one MPC problem | re-run the script (default: `mpc_lti_base.toml`) |
 | `runtime/tests/emosqp_data.zig` | `scripts/gen_emosqp_test.py` (oracle vectors for the same bake) | re-run the script |
 
 The committed default is the shipped bring-up pair: **KF + LQR graph +
 `mpc_lti_base.toml` bake (n_vars=30)**.
 
+### Building a different graph/solver pair without clobbering
+
+`runtime/build.zig` takes two build options that select which generated graph
+and which baked solver a build compiles in, without touching the shared paths:
+
+```bash
+zig build --build-file runtime/build.zig --prefix build/ \
+    -Dgraph=<path-to-graph_data.zig> -Dsolver_dir=<path-to-bake-dir>
+```
+
+- `-Dgraph` — the generated graph (default `graph_data.zig`). `lower.zig`
+  imports it as an anonymous module, so a build can consume a graph from any
+  path (e.g. a pytest tmp dir).
+- `-Dsolver_dir` — the baked OSQP codegen solver tree (default
+  `codegen/emosqp`). The C sources and include paths are rooted there, and the
+  bake's `solver_meta.zig` (`pub const n_vars`) is imported for the comptime
+  check below.
+
+This is how the MPC_DeltaU `.so` coexists with the shipped MPC_LTI one: bake
+DeltaU into a second directory (`scripts/gen_emosqp_test.py --config
+configs/controllers/mpc_base.toml --out-dir <dir>`), lower the KF+DeltaU
+composed graph (`scripts/gen_mpc.py` with the DeltaU config), and build with
+`-Dgraph`/`-Dsolver_dir` pointing at the pair. The shipped default is never
+touched.
+
+### The comptime graph↔bake check
+
 Coupling rule: **a graph containing a `.solve_qp` node must be built against a
-bake from the same MPC problem** — the solver's n_vars is baked into fixed-size
-C arrays, and `runtime/qp.zig` requires the node's output size to match.
-Baking for a different MPC config (e.g. `mpc_base.toml`'s MPC_DeltaU,
-n_vars=45) breaks every `mpc_lti_base.toml`-built graph/test until the bake is
-restored. Non-MPC graphs (e.g. the base graph) compile the bake in but never
-call it.
+bake from the same MPC problem** — the solver's n_vars is baked into
+fixed-size C arrays. This is now enforced at **compile time**: `lower.zig`
+comptime-asserts that every `.solve_qp` node's output size equals the baked
+`solver_meta.n_vars`, so a cross-config build fails with a `@compileError`
+naming both sizes instead of silently linking a shape-mismatched solver.
 
 Two deliberate notes:
 
-- The pytest fixtures lower each graph into `graph_data.zig` and build into
-  per-fixture prefixes (`tmp_path`), so compiled `.so`s never collide — but
-  the *source* table is last-fixture-wins. Re-run `make zig-gen` after the
-  test suite to restore the shipped base graph.
+- The pytest fixtures lower each graph into per-fixture paths and build into
+  per-fixture prefixes (`tmp_path`), so compiled `.so`s never collide — and
+  with `-Dgraph`/`-Dsolver_dir` the *source* table and bake are no longer
+  last-fixture-wins either. Re-run `make zig-gen` after the test suite to
+  restore the shipped base graph.
 - One robot = one controller = one binary, so a single shared path per
   artifact is acceptable: per-scenario bundle directories (and/or multiple
-  baked solvers in one `.so`) were considered and deliberately deferred.
-  Potential future hardening, also deferred: a comptime check that a graph
-  containing `.solve_qp` matches the bake's n_vars (would catch mismatches at
-  build time instead of silently linking a shape-mismatched solver).
+  baked solvers in one `.so`) were considered and deliberately deferred. The
+  `-Dgraph`/`-Dsolver_dir` options are the minimal plumbing that makes a
+  second bake a first-class operation; named scenario bundles can layer on
+  top of them later if ever needed.

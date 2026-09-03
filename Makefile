@@ -89,6 +89,10 @@ test-integration:
 # (gen_base.py / gen_mpc.py / the pytest fixtures / gen_emosqp_test.py).
 # Restore the shipped default (KF+LQR graph, mpc_lti_base.toml bake) with
 # `make zig-gen` + re-running gen_emosqp_test.py — see runtime/README.md.
+# To build a different graph/solver pair without clobbering the shared paths,
+# pass -Dgraph=<path> and -Dsolver_dir=<dir> to `zig build` (e.g. the
+# MPC_DeltaU bake); a graph whose .solve_qp node doesn't match the bake's
+# n_vars is rejected at compile time.
 # ───────────────────────────────────────────────────────────────────────────
 zig-gen:
 	mkdir -p build

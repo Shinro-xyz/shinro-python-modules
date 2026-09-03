@@ -264,6 +264,24 @@ The individual steps are `make zig-gen` (serialize the `base_tracking` graph to
 `runtime/graph_data.zig`) and `make zig-build` (compile `runtime/build.zig` into
 `build/lib/libbase.so`). The `.so` lands in `build/` (gitignored).
 
+`runtime/build.zig` accepts two build options that select which generated
+graph and which baked OSQP solver a build compiles in, without touching the
+shared paths:
+
+```bash
+zig build --build-file runtime/build.zig --prefix build/ \
+    -Dgraph=<path-to-graph_data.zig> -Dsolver_dir=<path-to-bake-dir>
+```
+
+`-Dgraph` defaults to `runtime/graph_data.zig`; `-Dsolver_dir` defaults to
+`runtime/codegen/emosqp/`. This is how a second MPC bake (e.g. MPC_DeltaU,
+n_vars=45) coexists with the shipped MPC_LTI one: bake it into a separate
+directory and build the DeltaU graph against it. The bake's `solver_meta.zig`
+(`pub const n_vars`) feeds a comptime check in `runtime/lower.zig` that
+rejects any graph whose `.solve_qp` node size doesn't match the bake — a
+cross-config build fails at compile time instead of silently linking a
+shape-mismatched solver.
+
 ### Zig coverage of the op set
 
 `runtime/lower.zig` handles a subset of the interpreter's ops — the ops

@@ -35,17 +35,21 @@ RUNTIME = REPO_ROOT / "runtime"
 BUILD = REPO_ROOT / "build"
 
 
-def _build_so(composed, build_dir):
+def _build_so(composed, build_dir, graph_path=None, solver_dir=None):
     """Lower a composed graph, compile the comptime VM, and load libbase.so.
 
-    Each call lowers ``composed`` to ``runtime/graph_data.zig`` and builds a
-    fresh ``libbase.so`` into the given (unique) prefix directory, so multiple
-    graphs can be cross-checked in one session without clobbering each other.
+    Each call lowers ``composed`` to ``runtime/graph_data.zig`` (or
+    ``graph_path`` when given) and builds a fresh ``libbase.so`` into the
+    given (unique) prefix directory, so multiple graphs can be cross-checked
+    in one session without clobbering each other. ``solver_dir`` selects the
+    baked OSQP solver to compile in (default: the shipped
+    ``runtime/codegen/emosqp/`` bake) — pass a DeltaU bake to build a graph
+    whose ``.solve_qp`` node has n_vars=45.
     """
     if shutil.which("zig") is None:
         pytest.skip("zig not on PATH; skipping Zig lowering oracle")
 
-    out_zig = RUNTIME / "graph_data.zig"
+    out_zig = graph_path or (RUNTIME / "graph_data.zig")
     lower_zig(composed, str(out_zig))
 
     cmd = [
@@ -56,6 +60,10 @@ def _build_so(composed, build_dir):
         "--prefix",
         str(build_dir),
     ]
+    if graph_path is not None:
+        cmd += [f"-Dgraph={graph_path}"]
+    if solver_dir is not None:
+        cmd += [f"-Dsolver_dir={solver_dir}"]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         pytest.skip(f"zig build failed: {result.stderr.strip()[:400]}")
@@ -179,6 +187,20 @@ def _build_pid_composed_graph():
     return compose(kf_graph, pid_graph, plant_dims={"n_x": 3, "n_u": 3}, input_limits=limits)
 
 
+def _build_mpc_deltau_composed_graph():
+    """KF + MPC_DeltaU composed graph (n_vars=45 bake required).
+
+    DeltaU's compute(x0, u_prev) augments the state with the previous control;
+    compose routes the shared u_prev recurrent port to both the estimator and
+    the controller, and state_u_prev closes the loop. The graph's .solve_qp
+    node has output size 45 (horizon 15 × n_u 3), so it must be built against
+    the mpc_base.toml bake via -Dsolver_dir.
+    """
+    from scripts.gen_mpc import build_mpc_composed_graph
+
+    return build_mpc_composed_graph("configs/controllers/mpc_base.toml")
+
+
 @pytest.fixture(scope="session")
 def base_so(tmp_path_factory):
     """Build the .so from the base_tracking composed graph once per session."""
@@ -209,6 +231,33 @@ def mpc_composed_so(tmp_path_factory):
 def pid_composed_so(tmp_path_factory):
     """Build the .so from the composed KF + PID graph (recurrent integral + anti-windup)."""
     return _build_so(_build_pid_composed_graph(), tmp_path_factory.mktemp("zig-build-pid-composed"))
+
+
+@pytest.fixture(scope="session")
+def deltau_bake(tmp_path_factory):
+    """Bake the MPC_DeltaU static solver (mpc_base.toml, n_vars=45) into a tmp dir.
+
+    A second bake alongside the shipped mpc_lti_base.toml one — the whole
+    point of the -Dsolver_dir build option. Never touches the shared
+    runtime/codegen/emosqp/ tree.
+    """
+    from scripts.gen_emosqp_test import bake
+
+    bake_dir = tmp_path_factory.mktemp("deltau-bake")
+    bake("configs/controllers/mpc_base.toml", str(bake_dir), str(bake_dir / "emosqp_data.zig"))
+    return bake_dir
+
+
+@pytest.fixture(scope="session")
+def mpc_deltau_composed_so(tmp_path_factory, deltau_bake):
+    """Build the .so from the composed KF + MPC_DeltaU graph against the DeltaU bake."""
+    graph_path = tmp_path_factory.mktemp("deltau-graph") / "graph_data.zig"
+    return _build_so(
+        _build_mpc_deltau_composed_graph(),
+        tmp_path_factory.mktemp("zig-build-mpc-deltau"),
+        graph_path=graph_path,
+        solver_dir=deltau_bake,
+    )
 
 
 def _output_split(cg):
@@ -606,4 +655,89 @@ class TestPidComposedOracle:
         assert max_err < 1e-10, (
             f".so diverged from live KF+PID over 100 ticks: max abs err = {max_err:.3e}"
         )
+
+
+class TestMpcDeltaUComposedOracle:
+    """The composed KF + MPC_DeltaU .so matches a live numpy closed loop.
+
+    The regression test for the second bake: the graph's .solve_qp node has
+    output size 45 (mpc_base.toml, horizon 15), so the .so is built against
+    the DeltaU bake via -Dsolver_dir — the shipped n_vars=30 bake would be
+    rejected at compile time by the comptime graph↔bake check. The live oracle
+    is KalmanFilter.estimate() + MPC_DeltaU.compute(x̂ − x_ref, u_prev) with
+    u_prev threaded on both sides. Tolerance matches TestMpcComposedOracle:
+    the .so's baked EMOSQP warm-starts from the previous tick while the live
+    side cold-starts Python osqp, so ADMM settles within eps and the
+    difference feeds back through the loop.
+    """
+
+    def test_so_matches_live_kf_mpc_deltau(self, mpc_deltau_composed_so):
+        lib, cg = mpc_deltau_composed_so
+        rng = np.random.default_rng(41)
+        n_out, n_state = _output_split(cg)
+        sl = _state_slices(cg)
+
+        kf = EstimatorFactory("configs/estimators/kalman_base.toml").create(backend=NumpyBackend())
+        mpc = ControllerFactory("configs/controllers/mpc_base.toml").create(backend=NumpyBackend())
+        limits = (np.array([-0.5, -0.5, -1.0]), np.array([0.5, 0.5, 1.0]))
+
+        P = np.eye(3) * 0.1
+        x_hat = np.zeros((3, 1))
+        u_prev_so = np.zeros(3)
+        u_prev_np = np.zeros(3)
+
+        max_err = 0.0
+        for _ in range(100):
+            y = rng.normal(0.0, 0.1, (3,))
+            x_ref = rng.normal(0.0, 0.05, (3,))
+
+            # Live numpy oracle: KF step, then the DeltaU regulator on the
+            # error with its own u_prev.
+            kf.P = P.copy()
+            kf.x_hat = x_hat.copy()
+            x_hat_np = kf.estimate(y.reshape(-1, 1), u_prev_np.reshape(-1, 1))
+            u_np = np.clip(
+                mpc.compute(x_hat_np.ravel() - x_ref, u_prev_np), limits[0], limits[1]
+            )
+
+            inputs = _pack_inputs(cg, y, x_ref, u_prev_so, x_hat, P)
+            out, state = _step(lib, cg, inputs, n_out, n_state)
+            max_err = max(max_err, float(np.max(np.abs(out - u_np))))
+
+            x_hat = state[sl["state_x_hat"][0] : sl["state_x_hat"][1]].reshape(3, 1)
+            P = state[sl["state_P"][0] : sl["state_P"][1]].reshape(3, 3)
+            u_prev_so = out
+            u_prev_np = u_np
+
+        assert max_err < 1e-4, (
+            f".so diverged from live KF+MPC_DeltaU over 100 ticks: max abs err = {max_err:.3e}"
+        )
+
+
+def test_comptime_n_vars_mismatch_rejects_build(tmp_path):
+    """A .solve_qp graph built against the wrong bake fails at compile time.
+
+    The regression test for the comptime graph↔bake check: lowering the DeltaU
+    graph (n_vars=45) and building it against the shipped n_vars=30 bake must
+    fail with a @compileError naming both sizes — not silently link a
+    shape-mismatched solver.
+    """
+    if shutil.which("zig") is None:
+        pytest.skip("zig not on PATH; skipping Zig lowering oracle")
+
+    graph_path = tmp_path / "graph_data.zig"
+    lower_zig(_build_mpc_deltau_composed_graph(), str(graph_path))
+
+    cmd = [
+        "zig",
+        "build",
+        "--build-file",
+        str(RUNTIME / "build.zig"),
+        "--prefix",
+        str(tmp_path / "build"),
+        f"-Dgraph={graph_path}",
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    assert result.returncode != 0, "mismatched graph+bake should not compile"
+    assert "does not match baked solver n_vars" in result.stderr, result.stderr[:400]
 
