@@ -137,25 +137,49 @@ def lower_zig(cg: ComposedGraph, out_path: str = "runtime/graph_data.zig") -> No
     with open(out_path, "w") as f:
         f.write("\n".join(lines) + "\n")
 
-    manifest = _graph_manifest(cg, buf_len, len(const_blob))
+    manifest = _graph_manifest(
+        cg,
+        buf_len,
+        len(const_blob),
+        offsets,
+        const_offsets,
+        clip_offsets,
+        input_offsets,
+    )
     manifest_path = os.path.splitext(out_path)[0] + "_manifest.json"
     with open(manifest_path, "w") as f:
         json.dump(manifest, f, indent=2, sort_keys=True)
         f.write("\n")
 
 
-def _graph_manifest(cg: ComposedGraph, buf_len: int, const_blob_len: int) -> dict:
+def _graph_manifest(
+    cg: ComposedGraph,
+    buf_len: int,
+    const_blob_len: int,
+    offsets: list[int],
+    const_offsets: dict[int, int],
+    clip_offsets: dict[int, int],
+    input_offsets: dict[str, int],
+) -> dict:
     """Build the deterministic graph manifest for a composed graph.
 
     Describes what the compiled ``.so`` contains (the node table the VM
-    executes): op histogram, C-ABI port layout, buffer sizes, and the
-    ``.solve_qp`` n_vars the graph expects. No timestamps — the manifest is a
-    pure function of the graph, so identical inputs produce identical bytes.
+    executes): op histogram, the ordered node list (dual Python/Zig op names,
+    wiring, shape, buffer offset, aux), the C-ABI port layout, buffer sizes,
+    and the ``.solve_qp`` n_vars the graph expects. No timestamps — the
+    manifest is a pure function of the graph, so identical inputs produce
+    identical bytes.
 
     Args:
         cg: The composed graph being serialized.
         buf_len: Total f64 buffer size for one step.
         const_blob_len: Number of f64s in the baked constants blob.
+        offsets: Per-node buffer offset (node ``i`` owns ``rows*cols`` f64s at
+            ``buf[offsets[i]..]``).
+        const_offsets: Maps const node index → offset into ``const_blob``.
+        clip_offsets: Maps clip node index → offset into ``clip_lo``/``hi``.
+        input_offsets: Maps input port name → offset into the packed input
+            buffer.
 
     Returns:
         A JSON-serializable dict (keys sorted for stable output).
@@ -177,11 +201,31 @@ def _graph_manifest(cg: ComposedGraph, buf_len: int, const_blob_len: int) -> dic
             solve_qp = {"expected_n_vars": _size(node.shape)}
             break
 
+    nodes = []
+    for i, node in enumerate(g.nodes):
+        vm_op, aux = _node_vm_info(
+            g, i, node, const_offsets, clip_offsets, input_offsets, cg.outputs, cg.state_outputs
+        )
+        rows, cols = _rows_cols(node.shape)
+        nodes.append(
+            {
+                "i": i,
+                "op": node.op,
+                "vm_op": vm_op,
+                "inputs": list(node.inputs),
+                "rows": rows,
+                "cols": cols,
+                "offset": offsets[i],
+                "aux": aux,
+            }
+        )
+
     return {
         "float_type": "f64",
         "buf_len": buf_len,
         "const_blob_len": const_blob_len,
         "nodes_total": len(g.nodes),
+        "nodes": nodes,
         "ops": sorted(op_histogram),
         "op_histogram": op_histogram,
         "inputs": [{"name": n, "shape": list(_input_shape(g, n))} for n in cg.inputs],
@@ -237,35 +281,65 @@ def _node_line(
     """
     rows, cols = _rows_cols(node.shape)
     inputs = "&.{" + ", ".join(str(x) for x in node.inputs) + "}"
-    op = node.op
-    aux = 0
-
-    if node.op == "const":
-        op = "cst"
-        aux = const_offsets[i]
-    elif node.op == "input":
-        op = "inp"
-        aux = input_offsets[node.attrs["name"]]
-    elif node.op == "output":
-        op = "out"
-        name = node.attrs["name"]
-        if name in outputs:
-            aux = outputs.index(name)
-        else:
-            # state outputs are offset by n_outputs in the VM's port switch.
-            aux = len(outputs) + state_outputs.index(name)
-    elif node.op == "where":
-        op = "where_op"
-    elif node.op == "clip":
-        op = "clip"
-        aux = clip_offsets[i]
-    elif node.op == "slice":
-        # slice(x, start, stop): start is the input offset (stop is implicit —
-        # the node's rows*cols is stop - start).
-        op = "slice"
-        aux = node.attrs["start"]
+    op, aux = _node_vm_info(g, i, node, const_offsets, clip_offsets, input_offsets, outputs, state_outputs)
 
     return f".{{ .op = .{op}, .inputs = {inputs}, .rows = {rows}, .cols = {cols}, .aux = {aux} }}"
+
+
+def _node_vm_info(
+    g: Graph,
+    i: int,
+    node: Node,
+    const_offsets: dict[int, int],
+    clip_offsets: dict[int, int],
+    input_offsets: dict[str, int],
+    outputs: list[str],
+    state_outputs: list[str],
+) -> tuple[str, int]:
+    """Map a Python graph node to its Zig VM ``(op, aux)`` pair.
+
+    This is the single source of truth for the Python→Zig op translation,
+    shared by the emitted table (``_node_line``) and the graph manifest:
+    ``const`` → ``cst`` (aux = index into ``const_blob``), ``input`` → ``inp``
+    (aux = offset into the packed input buffer), ``output`` → ``out`` (aux =
+    index into ``outputs`` or, for state outputs, ``len(outputs) + index`` so
+    the VM can split the two C-ABI buffers), ``where`` → ``where_op``, ``clip``
+    → ``clip`` (aux = index into ``clip_lo``/``clip_hi``), ``slice`` → ``slice``
+    (aux = start offset into its input's data). All other ops map to themselves
+    with aux = 0.
+
+    Args:
+        g: The composed graph being serialized.
+        i: Node index in ``g.nodes``.
+        node: The Python node to translate.
+        const_offsets: Maps const node index → offset into ``const_blob``.
+        clip_offsets: Maps clip node index → offset into ``clip_lo``/``hi``.
+        input_offsets: Maps input port name → offset into the packed input
+            buffer.
+        outputs: Names of the graph's non-state output ports.
+        state_outputs: Names of the graph's state output ports.
+
+    Returns:
+        The ``(vm_op, aux)`` pair for the node.
+    """
+    if node.op == "const":
+        return "cst", const_offsets[i]
+    if node.op == "input":
+        return "inp", input_offsets[node.attrs["name"]]
+    if node.op == "output":
+        name = node.attrs["name"]
+        if name in outputs:
+            return "out", outputs.index(name)
+        return "out", len(outputs) + state_outputs.index(name)
+    if node.op == "where":
+        return "where_op", 0
+    if node.op == "clip":
+        return "clip", clip_offsets[i]
+    if node.op == "slice":
+        # slice(x, start, stop): start is the input offset (stop is implicit —
+        # the node's rows*cols is stop - start).
+        return "slice", node.attrs["start"]
+    return node.op, 0
 
 
 def _input_size(g: Graph, name: str) -> int:

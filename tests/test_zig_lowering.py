@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import ctypes
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -760,6 +761,30 @@ def manifests(tmp_path_factory, deltau_bake):
     return base_dir, deltau_dir
 
 
+# Each Zig node line: .{ .op = .matmul, .inputs = &.{6, 3}, .rows = 3, .cols = 3, .aux = 0 }
+_NODE_RE = re.compile(
+    r"\.\{ \.op = \.(\w+), \.inputs = &\.\{([^}]*)\}, \.rows = (\d+), \.cols = (\d+), \.aux = (\d+) \}"
+)
+
+
+def _parse_zig_nodes(text):
+    """Parse every node entry from a generated graph_data.zig into dicts."""
+    nodes = []
+    for m in _NODE_RE.finditer(text):
+        vm_op, inputs, rows, cols, aux = m.groups()
+        in_ids = [int(x) for x in inputs.split(",") if x.strip()] if inputs.strip() else []
+        nodes.append(
+            {
+                "vm_op": vm_op,
+                "inputs": in_ids,
+                "rows": int(rows),
+                "cols": int(cols),
+                "aux": int(aux),
+            }
+        )
+    return nodes
+
+
 class TestBuildManifest:
     """The build manifest (audit trail) describes what's inside the .so.
 
@@ -807,6 +832,17 @@ class TestBuildManifest:
         assert [p["name"] for p in g["outputs"]] == build_base_graph().outputs
         assert [p["name"] for p in g["state_outputs"]] == build_base_graph().state_outputs
 
+        # ordered node list with dual names + layout fields
+        assert len(g["nodes"]) == g["nodes_total"]
+        assert set(g["nodes"][0]) == {"i", "op", "vm_op", "inputs", "rows", "cols", "offset", "aux"}
+        assert any(n["op"] == "const" and n["vm_op"] == "cst" for n in g["nodes"])
+        assert any(n["op"] == "input" and n["vm_op"] == "inp" for n in g["nodes"])
+        # offsets are cumulative in node order (contiguous buffer slots)
+        prev_end = 0
+        for n in g["nodes"]:
+            assert n["offset"] == prev_end
+            prev_end += n["rows"] * n["cols"]
+
     def test_deltau_manifest_differs_op_wise(self, manifests):
         """DeltaU vs base reports differ op-wise: solve_qp present, n_vars pair."""
         base_dir, deltau_dir = manifests
@@ -819,6 +855,10 @@ class TestBuildManifest:
         assert "solve_qp" not in base["graph"]["ops"]
         assert "slice" in deltau["graph"]["ops"]  # u[:3] after the solve
         assert deltau["graph"]["nodes_total"] != base["graph"]["nodes_total"]
+        # the node list reflects the QP wiring: solve_qp feeds the slice
+        solve = [n for n in deltau["graph"]["nodes"] if n["vm_op"] == "solve_qp"][0]
+        assert solve["rows"] == 45 and solve["cols"] == 1
+        assert solve["inputs"] == [solve["i"] - 1]  # q = Fᵀ x_aug matmul
 
     def test_archive_copy_timestamped_and_identical(self, manifests):
         """The archive copy is timestamped and byte-identical to the report."""
@@ -831,10 +871,39 @@ class TestBuildManifest:
         assert archives[0].read_text() == report
 
     def test_drift_guard_nodes_match_emitted_table(self, manifests):
-        """nodes_total in the report matches the emitted node table in graph_data.zig."""
+        """The manifest's node list matches the emitted Zig table field-for-field.
+
+        Regex-parses every node entry from graph_data.zig and compares vm_op,
+        wiring, shape, and aux against the manifest — the serializer and the
+        manifest can never silently drift.
+        """
         base_dir, _ = manifests
         report = self._report(base_dir)
         text = (RUNTIME / "graph_data.zig").read_text()
-        n_entries = text.count(".{ .op = .")
-        assert report["graph"]["nodes_total"] == n_entries
+        zig_nodes = _parse_zig_nodes(text)
+        assert len(zig_nodes) == report["graph"]["nodes_total"]
+        manifest_nodes = report["graph"]["nodes"]
+        assert len(manifest_nodes) == len(zig_nodes)
+        for mn, zn in zip(manifest_nodes, zig_nodes):
+            assert mn["vm_op"] == zn["vm_op"], f"node {mn['i']} op mismatch"
+            assert mn["inputs"] == zn["inputs"], f"node {mn['i']} wiring mismatch"
+            assert mn["rows"] == zn["rows"] and mn["cols"] == zn["cols"], (
+                f"node {mn['i']} shape mismatch"
+            )
+            assert mn["aux"] == zn["aux"], f"node {mn['i']} aux mismatch"
+
+    def test_lowering_is_deterministic(self, tmp_path):
+        """Two lowers of the same graph produce byte-identical manifests."""
+        from shinro.codegen.lower_zig import lower_zig
+
+        cg = build_base_graph()
+        p1 = tmp_path / "g1" / "graph_data.zig"
+        p2 = tmp_path / "g2" / "graph_data.zig"
+        p1.parent.mkdir()
+        p2.parent.mkdir()
+        lower_zig(cg, str(p1))
+        lower_zig(cg, str(p2))
+        m1 = (p1.parent / "graph_data_manifest.json").read_bytes()
+        m2 = (p2.parent / "graph_data_manifest.json").read_bytes()
+        assert m1 == m2
 

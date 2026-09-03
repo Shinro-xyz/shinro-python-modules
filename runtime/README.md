@@ -135,7 +135,10 @@ browse which controller combinations were built and when:
 
 The graph content is emitted by `shinro.codegen.lower_zig` as
 `<graph>_manifest.json` next to `graph_data.zig` (same node table the VM
-compiles, so the report describes what is actually inside the `.so`).
+compiles, so the report describes what is actually inside the `.so`). It
+carries the **ordered node list** — `{i, op (Python), vm_op (Zig), inputs
+(wiring), rows, cols, offset (buffer start), aux}` — one entry per node in
+execution order, so the whole computation is reproducible from the report.
 
 To reproduce "the LQR we had two weeks ago": `git checkout` the old graph (or
 re-run `gen_base.py` at that commit), rebuild, and the new report must
