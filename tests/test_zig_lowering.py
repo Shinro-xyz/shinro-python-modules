@@ -12,6 +12,7 @@ Requires ``zig`` on PATH. Skipped cleanly if it's unavailable.
 from __future__ import annotations
 
 import ctypes
+import json
 import shutil
 import subprocess
 from pathlib import Path
@@ -740,4 +741,100 @@ def test_comptime_n_vars_mismatch_rejects_build(tmp_path):
     result = subprocess.run(cmd, capture_output=True, text=True)
     assert result.returncode != 0, "mismatched graph+bake should not compile"
     assert "does not match baked solver n_vars" in result.stderr, result.stderr[:400]
+
+
+@pytest.fixture(scope="module")
+def manifests(tmp_path_factory, deltau_bake):
+    """Build base and DeltaU .so's and return their build dirs."""
+    base_dir = tmp_path_factory.mktemp("zig-build-manifest-base")
+    _build_so(build_base_graph(), base_dir)
+
+    deltau_dir = tmp_path_factory.mktemp("zig-build-manifest-deltau")
+    graph_path = tmp_path_factory.mktemp("zig-build-manifest-deltau-graph") / "graph_data.zig"
+    _build_so(
+        _build_mpc_deltau_composed_graph(),
+        deltau_dir,
+        graph_path=graph_path,
+        solver_dir=deltau_bake,
+    )
+    return base_dir, deltau_dir
+
+
+class TestBuildManifest:
+    """The build manifest (audit trail) describes what's inside the .so.
+
+    Every build writes a deterministic report next to the artifact
+    (<prefix>/lib/libbase.manifest.json) plus a timestamped archive copy
+    (<prefix>/manifests/<UTC>-<graphsha8>.json). The report is a pure function
+    of the inputs (no timestamps), so identical builds produce identical
+    reports — the diffable audit record for "which controller combination was
+    this binary built from".
+    """
+
+    def _report(self, build_dir):
+        return json.loads((build_dir / "lib" / "libbase.manifest.json").read_text())
+
+    def test_report_exists_and_describes_binary(self, manifests):
+        """The report carries build facts, provenance, solver, and graph content."""
+        base_dir, _ = manifests
+        report = self._report(base_dir)
+
+        assert report["target"]
+        assert report["optimize"] == "Debug"
+        assert report["zig_version"]
+        assert report["libc"] is True
+        assert report["float_type"] == "f64"
+
+        prov = report["provenance"]
+        assert prov["graph_sha256"]
+        assert prov["solver_sha256"]
+
+        # solver facts from the bake
+        assert report["solver"]["n_vars"] == 30
+        assert report["solver"]["n_cons"] == 60
+        assert report["solver"]["config"].endswith("mpc_lti_base.toml")
+
+        # graph facts: op histogram matches the composed graph, ports match
+        g = report["graph"]
+        assert g["nodes_total"] == len(build_base_graph().graph.nodes)
+        assert g["buf_len"] > 0
+        assert g["solve_qp"] is None  # base graph has no QP node
+        expected = {}
+        for n in build_base_graph().graph.nodes:
+            expected[n.op] = expected.get(n.op, 0) + 1
+        assert g["op_histogram"] == expected
+        assert [p["name"] for p in g["inputs"]] == build_base_graph().inputs
+        assert [p["name"] for p in g["outputs"]] == build_base_graph().outputs
+        assert [p["name"] for p in g["state_outputs"]] == build_base_graph().state_outputs
+
+    def test_deltau_manifest_differs_op_wise(self, manifests):
+        """DeltaU vs base reports differ op-wise: solve_qp present, n_vars pair."""
+        base_dir, deltau_dir = manifests
+        base = self._report(base_dir)
+        deltau = self._report(deltau_dir)
+
+        assert deltau["graph"]["solve_qp"] == {"expected_n_vars": 45}
+        assert deltau["solver"]["n_vars"] == 45
+        assert "solve_qp" in deltau["graph"]["ops"]
+        assert "solve_qp" not in base["graph"]["ops"]
+        assert "slice" in deltau["graph"]["ops"]  # u[:3] after the solve
+        assert deltau["graph"]["nodes_total"] != base["graph"]["nodes_total"]
+
+    def test_archive_copy_timestamped_and_identical(self, manifests):
+        """The archive copy is timestamped and byte-identical to the report."""
+        base_dir, _ = manifests
+        report = (base_dir / "lib" / "libbase.manifest.json").read_text()
+        archives = list((base_dir / "manifests").glob("*.json"))
+        assert len(archives) >= 1
+        # filename: <UTC>-<graphsha8>.json
+        assert "-" in archives[0].stem
+        assert archives[0].read_text() == report
+
+    def test_drift_guard_nodes_match_emitted_table(self, manifests):
+        """nodes_total in the report matches the emitted node table in graph_data.zig."""
+        base_dir, _ = manifests
+        report = self._report(base_dir)
+        text = (RUNTIME / "graph_data.zig").read_text()
+        n_entries = text.count(".{ .op = .")
+        assert report["graph"]["nodes_total"] == n_entries
 

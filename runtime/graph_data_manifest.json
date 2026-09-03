@@ -1,0 +1,93 @@
+{
+  "buf_len": 318,
+  "const_blob_len": 126,
+  "float_type": "f64",
+  "inputs": [
+    {
+      "name": "y",
+      "shape": [
+        3
+      ]
+    },
+    {
+      "name": "x_ref",
+      "shape": [
+        3
+      ]
+    },
+    {
+      "name": "u_prev",
+      "shape": [
+        3
+      ]
+    },
+    {
+      "name": "state_x_hat",
+      "shape": [
+        3,
+        1
+      ]
+    },
+    {
+      "name": "state_P",
+      "shape": [
+        3,
+        3
+      ]
+    }
+  ],
+  "nodes_total": 50,
+  "op_histogram": {
+    "add": 5,
+    "clip": 1,
+    "const": 14,
+    "input": 5,
+    "inv": 1,
+    "matmul": 14,
+    "output": 4,
+    "reshape": 3,
+    "sub": 3
+  },
+  "ops": [
+    "add",
+    "clip",
+    "const",
+    "input",
+    "inv",
+    "matmul",
+    "output",
+    "reshape",
+    "sub"
+  ],
+  "outputs": [
+    {
+      "name": "u",
+      "shape": [
+        3
+      ]
+    }
+  ],
+  "solve_qp": null,
+  "state_outputs": [
+    {
+      "name": "state_x_hat",
+      "shape": [
+        3,
+        1
+      ]
+    },
+    {
+      "name": "state_P",
+      "shape": [
+        3,
+        3
+      ]
+    },
+    {
+      "name": "state_u_prev",
+      "shape": [
+        3
+      ]
+    }
+  ]
+}

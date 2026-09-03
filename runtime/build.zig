@@ -139,4 +139,180 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run Zig unit tests");
     test_step.dependOn(&run_tests.step);
     test_step.dependOn(&run_emosqp_tests.step);
+
+    // Build manifest (audit trail): a deterministic report of what this .so
+    // contains, written next to the artifact after every build, plus a
+    // timestamped archive copy under <prefix>/manifests/ so teams can browse
+    // which controller combinations were built and when.
+    writeManifest(b, target, optimize, graph_path, solver_dir);
+}
+
+// ─── build manifest (audit trail) ─────────────────────────────────────────
+
+/// Resolve a path to a real filesystem path (absolute as-is, relative against
+/// the build root) for reading at build time.
+fn resolvePath(b: *std.Build, p: []const u8) []const u8 {
+    if (std.fs.path.isAbsolute(p)) return p;
+    return std.fs.path.join(b.allocator, &.{ b.build_root.path.?, p }) catch @panic("OOM");
+}
+
+/// Read a file at build time; returns "" (with a warning) if unreadable.
+fn readFile(b: *std.Build, path: []const u8) []const u8 {
+    return std.Io.Dir.cwd().readFileAlloc(b.graph.io, path, b.allocator, .limited(1 << 20)) catch |err| {
+        std.debug.print("warning: could not read {s}: {s}\n", .{ path, @errorName(err) });
+        return "";
+    };
+}
+
+/// Lowercase hex sha256 of a file's bytes ("" if unreadable).
+fn sha256Hex(b: *std.Build, path: []const u8) []const u8 {
+    const bytes = readFile(b, path);
+    if (bytes.len == 0) return "";
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+    const hex = std.fmt.bytesToHex(&digest, .lower);
+    return b.allocator.dupe(u8, &hex) catch @panic("OOM");
+}
+
+/// JSON-escape a string (quotes, backslash, control chars).
+fn jsonEscape(b: *std.Build, s: []const u8) []const u8 {
+    var out = std.ArrayList(u8).empty;
+    for (s) |c| {
+        switch (c) {
+            '"' => out.appendSlice(b.allocator, "\\\"") catch @panic("OOM"),
+            '\\' => out.appendSlice(b.allocator, "\\\\") catch @panic("OOM"),
+            '\n' => out.appendSlice(b.allocator, "\\n") catch @panic("OOM"),
+            '\r' => out.appendSlice(b.allocator, "\\r") catch @panic("OOM"),
+            '\t' => out.appendSlice(b.allocator, "\\t") catch @panic("OOM"),
+            else => out.append(b.allocator, c) catch @panic("OOM"),
+        }
+    }
+    return out.items;
+}
+
+/// Parse the bake's solver_meta.zig into a JSON object string fragment
+/// (n_vars, n_cons, eps, config). Missing fields are simply absent.
+fn solverMetaJson(b: *std.Build, solver_dir: []const u8) []const u8 {
+    const meta_path = std.fs.path.join(b.allocator, &.{ resolvePath(b, solver_dir), "solver_meta.zig" }) catch @panic("OOM");
+    const text = readFile(b, meta_path);
+    var out = std.ArrayList(u8).empty;
+    var first = true;
+    var it = std.mem.splitScalar(u8, text, '\n');
+    while (it.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t");
+        if (!std.mem.startsWith(u8, trimmed, "pub const ")) continue;
+        const rest = trimmed["pub const ".len..];
+        const eq = std.mem.indexOfScalar(u8, rest, '=') orelse continue;
+        // name is the identifier before the first ':' (e.g. "n_vars" in
+        // "n_vars: usize = 30;").
+        const name_end = std.mem.indexOfScalar(u8, rest, ':') orelse eq;
+        const name = std.mem.trim(u8, rest[0..name_end], " ");
+        const val = std.mem.trim(u8, rest[eq + 1 ..], " ;");
+        if (!first) out.append(b.allocator, ',') catch @panic("OOM");
+        first = false;
+        out.appendSlice(b.allocator, "\"") catch @panic("OOM");
+        out.appendSlice(b.allocator, name) catch @panic("OOM");
+        out.appendSlice(b.allocator, "\": ") catch @panic("OOM");
+        if (std.mem.startsWith(u8, val, "\"") and val.len >= 2) {
+            out.appendSlice(b.allocator, "\"") catch @panic("OOM");
+            out.appendSlice(b.allocator, jsonEscape(b, val[1 .. val.len - 1])) catch @panic("OOM");
+            out.appendSlice(b.allocator, "\"") catch @panic("OOM");
+        } else {
+            out.appendSlice(b.allocator, val) catch @panic("OOM");
+        }
+    }
+    return out.items;
+}
+
+/// Load the graph manifest emitted by lower_zig next to the graph file
+/// (<stem>_manifest.json) as a raw JSON object string. "" if absent.
+fn graphManifestJson(b: *std.Build, graph_path: []const u8) []const u8 {
+    const resolved = resolvePath(b, graph_path);
+    const dir = std.fs.path.dirname(resolved) orelse ".";
+    const stem = std.fs.path.stem(resolved);
+    const manifest_path = std.fmt.allocPrint(b.allocator, "{s}/{s}_manifest.json", .{ dir, stem }) catch @panic("OOM");
+    return readFile(b, manifest_path);
+}
+
+/// UTC timestamp for the archive filename (YYYY-MM-DDTHHMMSSZ).
+fn utcTimestamp(b: *std.Build) []const u8 {
+    var ts: std.posix.timespec = undefined;
+    _ = std.posix.system.clock_gettime(.REALTIME, &ts);
+    const secs: u64 = @intCast(ts.sec);
+    const epoch = std.time.epoch.EpochSeconds{ .secs = secs };
+    const yd = epoch.getEpochDay().calculateYearDay();
+    const md = yd.calculateMonthDay();
+    const ds = epoch.getDaySeconds();
+    return std.fmt.allocPrint(
+        b.allocator,
+        "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}{d:0>2}{d:0>2}Z",
+        .{ yd.year, md.month.numeric(), md.day_index + 1, ds.getHoursIntoDay(), ds.getMinutesIntoHour(), ds.getSecondsIntoMinute() },
+    ) catch @panic("OOM");
+}
+
+/// Write the deterministic build report next to the artifact and a
+/// timestamped archive copy under <prefix>/manifests/.
+fn writeManifest(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    graph_path: []const u8,
+    solver_dir: []const u8,
+) void {
+    const target_triple = target.result.zigTriple(b.allocator) catch @panic("OOM");
+    const optimize_name = @tagName(optimize);
+    const zig_version = @import("builtin").zig_version_string;
+
+    const graph_sha = sha256Hex(b, resolvePath(b, graph_path));
+    const ws = std.fs.path.join(b.allocator, &.{ resolvePath(b, solver_dir), "workspace.c" }) catch @panic("OOM");
+    const solver_sha = sha256Hex(b, ws);
+    const graph_json = graphManifestJson(b, graph_path);
+    const solver_json = solverMetaJson(b, solver_dir);
+    const graph_field = if (graph_json.len > 0) graph_json else "null";
+
+    const json_text = std.fmt.allocPrint(
+        b.allocator,
+        "{{\n" ++
+            "  \"target\": \"{s}\",\n" ++
+            "  \"optimize\": \"{s}\",\n" ++
+            "  \"zig_version\": \"{s}\",\n" ++
+            "  \"libc\": true,\n" ++
+            "  \"float_type\": \"f64\",\n" ++
+            "  \"provenance\": {{\n" ++
+            "    \"graph_path\": \"{s}\",\n" ++
+            "    \"solver_dir\": \"{s}\",\n" ++
+            "    \"graph_sha256\": \"{s}\",\n" ++
+            "    \"solver_sha256\": \"{s}\"\n" ++
+            "  }},\n" ++
+            "  \"solver\": {{ {s} }},\n" ++
+            "  \"graph\": {s}\n" ++
+            "}}\n",
+        .{
+            jsonEscape(b, target_triple),
+            jsonEscape(b, optimize_name),
+            jsonEscape(b, zig_version),
+            jsonEscape(b, graph_path),
+            jsonEscape(b, solver_dir),
+            graph_sha,
+            solver_sha,
+            solver_json,
+            graph_field,
+        },
+    ) catch @panic("OOM");
+
+    const cwd = std.Io.Dir.cwd();
+    const lib_dir = std.fs.path.join(b.allocator, &.{ b.install_prefix, "lib" }) catch @panic("OOM");
+    cwd.createDirPath(b.graph.io, lib_dir) catch {};
+    const report_path = std.fs.path.join(b.allocator, &.{ lib_dir, "libbase.manifest.json" }) catch @panic("OOM");
+    cwd.writeFile(b.graph.io, .{ .sub_path = report_path, .data = json_text }) catch |err| {
+        std.debug.print("warning: could not write manifest {s}: {s}\n", .{ report_path, @errorName(err) });
+    };
+
+    const manifests_dir = std.fs.path.join(b.allocator, &.{ b.install_prefix, "manifests" }) catch @panic("OOM");
+    cwd.createDirPath(b.graph.io, manifests_dir) catch {};
+    const sha8 = if (graph_sha.len >= 8) graph_sha[0..8] else "nosha";
+    const archive_path = std.fmt.allocPrint(b.allocator, "{s}/{s}-{s}.json", .{ manifests_dir, utcTimestamp(b), sha8 }) catch @panic("OOM");
+    cwd.writeFile(b.graph.io, .{ .sub_path = archive_path, .data = json_text }) catch |err| {
+        std.debug.print("warning: could not write archive manifest {s}: {s}\n", .{ archive_path, @errorName(err) });
+    };
 }

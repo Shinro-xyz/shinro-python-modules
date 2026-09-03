@@ -29,12 +29,21 @@ Usage:
 
 from __future__ import annotations
 
+import json
+import os
+
 from shinro.codegen.compose import ComposedGraph
 from shinro.codegen.tracing import Graph, Node
 
 
 def lower_zig(cg: ComposedGraph, out_path: str = "runtime/graph_data.zig") -> None:
-    """Serialize a composed graph into a Zig data table at ``out_path``."""
+    """Serialize a composed graph into a Zig data table at ``out_path``.
+
+    Also writes a deterministic JSON manifest next to it (``<stem>_manifest.json``)
+    describing the compiled content — op histogram, port layout, buffer sizes,
+    and the ``.solve_qp`` n_vars the graph expects. Same inputs ⇒ byte-identical
+    manifest (no timestamps), so manifests are diffable audit records.
+    """
     g = cg.graph
 
     # --- buffer layout: each node owns a slot sized by its shape ---
@@ -127,6 +136,67 @@ def lower_zig(cg: ComposedGraph, out_path: str = "runtime/graph_data.zig") -> No
 
     with open(out_path, "w") as f:
         f.write("\n".join(lines) + "\n")
+
+    manifest = _graph_manifest(cg, buf_len, len(const_blob))
+    manifest_path = os.path.splitext(out_path)[0] + "_manifest.json"
+    with open(manifest_path, "w") as f:
+        json.dump(manifest, f, indent=2, sort_keys=True)
+        f.write("\n")
+
+
+def _graph_manifest(cg: ComposedGraph, buf_len: int, const_blob_len: int) -> dict:
+    """Build the deterministic graph manifest for a composed graph.
+
+    Describes what the compiled ``.so`` contains (the node table the VM
+    executes): op histogram, C-ABI port layout, buffer sizes, and the
+    ``.solve_qp`` n_vars the graph expects. No timestamps — the manifest is a
+    pure function of the graph, so identical inputs produce identical bytes.
+
+    Args:
+        cg: The composed graph being serialized.
+        buf_len: Total f64 buffer size for one step.
+        const_blob_len: Number of f64s in the baked constants blob.
+
+    Returns:
+        A JSON-serializable dict (keys sorted for stable output).
+    """
+    g = cg.graph
+    op_histogram: dict[str, int] = {}
+    for node in g.nodes:
+        op_histogram[node.op] = op_histogram.get(node.op, 0) + 1
+
+    def _port(name: str) -> dict:
+        for node in g.nodes:
+            if node.op == "output" and node.attrs["name"] == name:
+                return {"name": name, "shape": list(node.shape)}
+        raise KeyError(f"output port '{name}' not found in graph")
+
+    solve_qp = None
+    for node in g.nodes:
+        if node.op == "solve_qp":
+            solve_qp = {"expected_n_vars": _size(node.shape)}
+            break
+
+    return {
+        "float_type": "f64",
+        "buf_len": buf_len,
+        "const_blob_len": const_blob_len,
+        "nodes_total": len(g.nodes),
+        "ops": sorted(op_histogram),
+        "op_histogram": op_histogram,
+        "inputs": [{"name": n, "shape": list(_input_shape(g, n))} for n in cg.inputs],
+        "outputs": [_port(n) for n in cg.outputs],
+        "state_outputs": [_port(n) for n in cg.state_outputs],
+        "solve_qp": solve_qp,
+    }
+
+
+def _input_shape(g: Graph, name: str) -> tuple[int, ...]:
+    """Return the shape of the ``input`` port named ``name``."""
+    for node in g.nodes:
+        if node.op == "input" and node.attrs["name"] == name:
+            return node.shape
+    raise KeyError(f"input port '{name}' not found in graph")
 
 
 # ─── helpers ───────────────────────────────────────────────────────────────
