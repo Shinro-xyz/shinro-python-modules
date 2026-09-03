@@ -115,6 +115,32 @@ comptime-asserts that every `.solve_qp` node's output size equals the baked
 `solver_meta.n_vars`, so a cross-config build fails with a `@compileError`
 naming both sizes instead of silently linking a shape-mismatched solver.
 
+## Build manifest — the audit trail
+
+Every build writes a **deterministic report** next to the artifact plus a
+**timestamped archive copy**, so teams can see what a binary contains and
+browse which controller combinations were built and when:
+
+- `<prefix>/lib/libbase.manifest.json` — the report: build facts (resolved
+  target triple, optimize mode, zig version, libc, `float_type`), provenance
+  (`-Dgraph`/`-Dsolver_dir` paths + sha256 of `graph_data.zig` and the bake's
+  `workspace.c`), solver facts (baked `n_vars`/`n_cons`/`eps`/`config` from
+  `solver_meta.zig`), and the graph content (op histogram, port layout,
+  `buf_len`, the `.solve_qp` n_vars the graph expects).
+- `<prefix>/manifests/<UTC>-<graphsha8>.json` — the archive copy. The
+  timestamp lives in the **filename only**, never in the report, so the report
+  is a pure function of its inputs: identical inputs ⇒ byte-identical report.
+  Diffing two reports answers "did the binary content change, op-wise?"; the
+  archive answers "when was this combination built?".
+
+The graph content is emitted by `shinro.codegen.lower_zig` as
+`<graph>_manifest.json` next to `graph_data.zig` (same node table the VM
+compiles, so the report describes what is actually inside the `.so`).
+
+To reproduce "the LQR we had two weeks ago": `git checkout` the old graph (or
+re-run `gen_base.py` at that commit), rebuild, and the new report must
+byte-match the archived one — the sha256 provenance pins the exact inputs.
+
 Two deliberate notes:
 
 - The pytest fixtures lower each graph into per-fixture paths and build into

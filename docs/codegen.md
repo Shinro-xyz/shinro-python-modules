@@ -282,6 +282,20 @@ rejects any graph whose `.solve_qp` node size doesn't match the bake — a
 cross-config build fails at compile time instead of silently linking a
 shape-mismatched solver.
 
+### Build manifest (audit trail)
+
+Every build writes a deterministic report next to the artifact
+(`<prefix>/lib/libbase.manifest.json`) plus a timestamped archive copy
+(`<prefix>/manifests/<UTC>-<graphsha8>.json`). The report describes what is
+inside the `.so`: build facts (target triple, optimize mode, zig version),
+provenance (graph/solver paths + sha256s), solver facts (baked `n_vars`,
+`n_cons`, `eps`, config), and the graph content — op histogram, C-ABI port
+layout, `buf_len`, and the `.solve_qp` n_vars the graph expects. The graph
+content comes from a `<graph>_manifest.json` emitted by `lower_zig` next to
+`graph_data.zig`. No timestamps in the report, so identical inputs produce
+byte-identical reports — diffing two reports shows exactly what changed
+op-wise, and the archive records when each combination was built.
+
 ### Zig coverage of the op set
 
 `runtime/lower.zig` handles a subset of the interpreter's ops — the ops
