@@ -96,9 +96,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .link_libc = true,
-        // Release builds ship without DWARF: debug info is ~80% of the .so
-        // (measured: 2.9-3.2 MB of 3.5-3.8 MB). Keep it in Debug for dev.
-        .strip = optimize != .Debug,
     });
     lib_mod.addAnonymousImport("graph_data", .{ .root_source_file = lazyPath(b, graph_path) });
     lib_mod.addAnonymousImport("solver_meta", .{ .root_source_file = lazyPath(b, b.pathJoin(&.{ solver_dir, "solver_meta.zig" })) });
@@ -282,7 +279,6 @@ fn writeManifest(
         "{{\n" ++
             "  \"target\": \"{s}\",\n" ++
             "  \"optimize\": \"{s}\",\n" ++
-            "  \"stripped\": {s},\n" ++
             "  \"zig_version\": \"{s}\",\n" ++
             "  \"libc\": true,\n" ++
             "  \"float_type\": \"f64\",\n" ++
@@ -298,7 +294,6 @@ fn writeManifest(
         .{
             jsonEscape(b, target_triple),
             jsonEscape(b, optimize_name),
-            if (optimize == .Debug) "false" else "true",
             jsonEscape(b, zig_version),
             jsonEscape(b, graph_path),
             jsonEscape(b, solver_dir),
