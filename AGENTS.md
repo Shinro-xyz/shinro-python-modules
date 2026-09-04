@@ -1,6 +1,6 @@
 # shinro-python-modules — AGENTS.md
 
-This is now a pip-installable Python package. Source lives under `src/shinro/`.
+This is a pip-installable Python package. Source lives under `src/shinro/`.
 Import code as `shinro.*` (never by top-level module path).
 
 ## Codebase Index
@@ -19,107 +19,79 @@ instead of an index.
 
 For lab notes, read `lab-notes/daily/` directly (see below).
 
+## Overview
 
-## Project Overview
+A modular control suite built on five ABCs — **Controller**, **Plant**,
+**StateEstimator**, **TrajectoryGenerator**, **PhysicsEngine** — composed via a
+registry/factory pattern from TOML configs (`src/shinro/configs/`), with
+numpy/torch support through the `ArrayBackend` abstraction. The full component
+catalog (registered names, config files) lives in
+[`docs/components.md`](./docs/components.md); architecture narrative in
+[`docs/how-it-works.md`](./docs/how-it-works.md).
 
-**Comprehensive control suite** for robotics — a modular library of controllers, plants, state estimators, and trajectory generators. Built on five abstract base classes: **Controller**, **Plant**, **StateEstimator**, **TrajectoryGenerator**, and **PhysicsEngine**.
+Key design: the arm's `step()` takes a Cartesian velocity twist
+`[dx, dy, dz, droll, dpitch, dyaw]`, integrates it into a target pose, runs IK
+internally, and sends joint angles to servos. The controller **never touches
+joint space**.
 
-### Design Goals
+## Commands
 
-- **Modular**: Mix and match any controller with any plant, estimator, trajectory, or physics engine
-- **Backend-agnostic**: Full numpy/torch support via `ArrayBackend` abstraction
-- **Engine-agnostic**: Physics engine abstraction (MuJoCo, Isaac Lab, PyBullet, Drake, etc.)
-- **Linear + Nonlinear**: LTI components for fast prototyping, nonlinear variants for real-world fidelity
-- **Config-driven**: TOML-based component configuration via factory/registry pattern
+- `make test` — full suite, **skips** `test_very_large_horizon_mpc_times_out`.
+  Per-file targets (`make test-controllers`, etc.) do **not** skip it.
+- Single test: `python3 -m pytest tests/test_x.py -v -k "name"`.
+- **Marker gotcha:** pytest's default `addopts` excludes the `integration` and
+  `mcp` markers, so those tests silently don't run under plain pytest. Use the
+  Make targets (`make test-integration`, `make test-mcp-functional`), which
+  pass `--override-ini="addopts="`.
+- `make lint` = `ruff check .` + pyright **only on** `utils/`, `components.py`,
+  `controllers/`, `estimators/`, `trajectories/`, `plants/`. `codegen/`,
+  `mcp/`, `simulation/` are not typechecked — code added there won't be caught
+  by lint.
+- Optional extras (`[mujoco]`, `[torch]`, `[lerobot]`, `[onnx-rl]`) are not
+  installed by default; tests `importorskip` and silently pass over. If a
+  backend test "didn't run", that's why. Requires Python ≥3.12; CI matrix is
+  3.12–3.14.
+- Demos: `python -m demos.demo_*`.
 
-### Current Components
+## Zig lowering (codegen → `.so`)
 
-| Category | Shipped | Planned / experimental |
-|----------|---------|------------------------|
-| **Controllers** | LQR, PID, MPC_LTI, MPC_DeltaU, MPPI, SMC, OnnxRL, LeRobotDiffusion | NMPC, iLQR, computed torque, adaptive |
-| **Plants** | HolonomicMobileRobot, ArmRobot (6-DOF), InvertedPendulum, CartPole, DoublePendulum, Quadrotor (placeholder) | Unicycle, freeflyer |
-| **Estimators** | KalmanFilter, LuenbergerObserver | EKF, UKF, particle filter |
-| **Trajectories** | CubicPolynomial, QuinticPolynomial, waypoints, phase_list | B-spline, Lissajous, minimum-snap |
-| **Physics Engines** | MuJoCo | Isaac Lab, PyBullet, Drake, null (no sim) |
+- Requires `zig` on PATH. Artifacts land in `build/` (gitignored).
+  `make test-zig` chains: gen → build → `zig build test` → pytest
+  `tests/test_zig_lowering.py`.
+- **Shared generated paths, last build wins:** `runtime/graph_data.zig` is
+  overwritten by `scripts/gen_base.py`, `scripts/gen_mpc.py`, *and* the pytest
+  fixtures in `tests/test_zig_lowering.py`; `runtime/codegen/emosqp/` likewise
+  holds one MPC bake. After running the test suite, re-run `make zig-gen` to
+  restore the shipped KF+LQR graph.
+- Build an alternate graph/solver pair without clobbering the shared paths via
+  `zig build -Dgraph=<path> -Dsolver_dir=<dir>`. A `.solve_qp` node whose
+  output size doesn't match the bake's `n_vars` is rejected at compile time.
+- `runtime/graph_data.zig` and the solver bake are **generated** — never
+  hand-edit. `runtime/lower.zig` (the comptime VM) is handwritten and never
+  regenerated. See `runtime/README.md` for the build-manifest audit trail.
 
-> For the full per-component catalog (registered names, config files), see
-> [`docs/components.md`](./docs/components.md).
-
-### Key Files
+## Key Files
 
 | File | Purpose |
 |------|---------|
-| `src/shinro/components.py` | ABCs: Controller, Plant, StateEstimator, TrajectoryGenerator, PhysicsEngine |
-| `src/shinro/controllers/mpc_lti.py` | MPC with OSQP QP solver — trajectory optimization |
-| `src/shinro/controllers/lqr.py` | LQR with DARE solve — regulation/stabilization |
-| `src/shinro/controllers/pid.py` | PID with anti-windup — joint-space position servo |
-| `src/shinro/controllers/mppi.py` | Sampling-based Model Predictive Path Integral |
-| `src/shinro/controllers/smc.py` | Sliding Mode Control — robust nonlinear |
-| `src/shinro/controllers/onnx_rl_adapter.py` | ONNX neural-net policy adapter |
-| `src/shinro/controllers/lerobot_adapter.py` | Learned policy adapter (diffusion, ACT, pi0) |
-| `src/shinro/plants/holonomicmobilerobot.py` | 3-DOF base with omni-wheel kinematics |
-| `src/shinro/plants/armrobot.py` | 6-DOF arm: FK, Jacobian, IK, Cartesian step |
-| `src/shinro/plants/inverted_pendulum.py` | 2D inverted pendulum with analytical dynamics |
-| `src/shinro/plants/cartpole.py` | 4D cart-pole with coupled dynamics |
-| `src/shinro/plants/double_pendulum.py` | 4D planar double pendulum |
-| `src/shinro/plants/quadrotor.py` | 12D quadrotor placeholder |
-| `src/shinro/estimators/kalman_filter.py` | Discrete Kalman filter — predict-update cycle |
-| `src/shinro/estimators/luenberger_observer.py` | Observer dynamics — x̂ = Ax̂ + Bu + L(y − Cx̂) |
-| `src/shinro/trajectories/cubic_polynomial.py` | 3rd-order, position + velocity continuity |
-| `src/shinro/trajectories/quintic_polynomial.py` | 5th-order, position + velocity + acceleration continuity |
-| `src/shinro/codegen/` | Trace → compose → interpret → lower (tracing pipeline) |
-| `src/shinro/codegen/lower_zig.py` | Serialize a composed graph to `runtime/graph_data.zig` |
-| `runtime/` | Zig comptime VM + linalg kernels + generated graph (see `runtime/README.md`) |
-| `scripts/gen_base.py` | Regenerate the `base_tracking` graph in `runtime/graph_data.zig` (shared path with `gen_mpc.py` + pytest fixtures — last build wins; `runtime/codegen/emosqp/` likewise holds one MPC bake, see `runtime/README.md`) |
-| `src/shinro/physics_engine/mujoco.py` | MuJoCo engine adapter |
-| `src/shinro/simulation/robotsim.py` | Generic robot simulation factory (config-driven) |
-| `lekiwi_sim.py` | Legacy LeKiwi simulation wrapper (not packaged) |
-| `src/shinro/factories/registry.py` | Component registry + factory classes |
+| `src/shinro/components.py` | The five ABCs |
+| `src/shinro/codegen/` | Trace → compose → interpret → lower pipeline; `lower_zig.py` serializes a graph to `runtime/graph_data.zig` |
+| `src/shinro/factories/registry.py` | Component registry + config-driven factory |
 | `src/shinro/utils/array_backend.py` | NumpyBackend / TorchBackend abstraction |
-| `src/shinro/utils/controllability_checker.py` | LTI system analysis (Gramians, balanced truncation) |
-| `tests/integration/` | Full-loop physics-backed integration tests |
-
-### Architecture
-
-```
-TrajectoryGenerator → Controller → Plant
-StateEstimator → Controller (state feedback)
-PhysicsEngine → Plant (simulation backend)
-ArrayBackend → All components (numpy/torch)
-```
-
-Key design: the arm's `step()` takes a Cartesian velocity twist `[dx, dy, dz, droll, dpitch, dyaw]`, integrates it into a target pose, runs IK internally, and sends joint angles to servos. The controller **never touches joint space**.
-
-### Key Parameters
-
-**MPC_LTI:**
-- Horizon: configurable (default ~10 steps)
-- QP solver: OSQP
-- State dimension: 3 (base) or 6 (arm Cartesian)
-- Input dimension: 3 (base) or 6 (arm twist)
-
-**LQR:**
-- DARE solve for infinite-horizon gain
-- Configurable Q, R weight matrices
-
-**PID:**
-- Joint-space position control with anti-windup
-- Configurable Kp, Ki, Kd per joint
-
-**ArmRobot:**
-- 6-DOF: shoulder roll, shoulder pitch, elbow roll, elbow pitch, wrist roll, wrist pitch
-- FK via homogeneous transforms, Jacobian via geometric method
-- IK via damped pseudoinverse + step clamp
-
-**HolonomicMobileRobot:**
-- 3-DOF: x, y, θ
-- Omni-wheel kinematics: velocity → individual wheel speeds
+| `src/shinro/mcp/server.py` | MCP server (`shinro-mcp` console command, wired in `.mcp.json`) |
+| `src/shinro/simulation/robotsim.py` | Config-driven robot simulation factory |
+| `tests/integration/` | Full-loop physics-backed tests (MuJoCo, opt-in) |
+| `runtime/` | Zig comptime VM + linalg kernels + generated graph |
 
 ## Lab Notebooks
 
 Experiment logs live in `lab-notes/daily/` in the repo. Read the files directly.
 
-Each session's lab note MUST contain a semantic summary of the changes made — what was built, why, key design decisions, and test results. This is not a git log; it's a narrative record of intent and outcomes.
+Each session's lab note MUST contain a semantic summary of the changes made —
+what was built, why, key design decisions, and test results. This is not a git
+log; it's a narrative record of intent and outcomes. (A CI bot
+(`.github/workflows/update-labnotes.yml`) also appends commit logs to today's
+file on push to main.)
 
 ## Workflow
 
@@ -133,7 +105,8 @@ Each session's lab note MUST contain a semantic summary of the changes made — 
 > **Releases:** `make release-patch/minor/major` auto-regenerates `CHANGELOG.md`
 > via `git cliff` (Conventional Commits, see `cliff.toml`) and stages it. Use
 > Conventional Commit prefixes (`feat:`, `fix:`, `chore:`, ...) so the
-> changelog stays clean — non-conforming commits land under "Other".
+> changelog stays clean — non-conforming commits land under "Other". Version is
+> the git tag via setuptools-scm.
 
 ## Porting Numpy Scripts to the Framework
 

@@ -94,7 +94,7 @@ suite, and they are intentionally not part of CI.
 
 ## CI
 
-`.github/workflows/test.yml` runs on push/PR to `main`:
+`.github/workflows/ci.yml` runs on push/PR to `main`:
 
 1. Checkout + set up Python 3.12.
 2. `pip install -r requirements.txt` and `requirements-dev.txt`.
@@ -107,7 +107,7 @@ To run the CI test job locally with [act](https://github.com/nektos/act):
 act -j test --container-architecture linux/amd64
 ```
 
-(the `test` job name is `test` in `test.yml`).
+(the `test` job name is `test` in `ci.yml`).
 
 ## Fixtures
 
