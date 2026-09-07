@@ -81,6 +81,31 @@ def as_numpy_f(f, backend):
     return f_np
 
 
+def discretize_euler(A_c, B_c, dt, backend: ArrayBackend | None = None):
+    """First-order Euler discretization of a continuous-time linear model.
+
+    Computes the discrete-time matrices :math:`A_d = I + dt \\cdot A_c` and
+    :math:`B_d = dt \\cdot B_c`, matching the semi-implicit Euler integration
+    used by the analytical plants. At small ``dt`` the discretization error is
+    negligible, and unlike ``scipy.linalg.expm`` it is backend-agnostic (the
+    Kalman filter stays torch-capable).
+
+    Args:
+        A_c: Continuous-time state matrix (n_x, n_x).
+        B_c: Continuous-time input matrix (n_x, n_u).
+        dt: Time step in seconds.
+        backend: Array backend. Defaults to NumpyBackend.
+
+    Returns:
+        Tuple (A_d, B_d) in the backend's native type.
+    """
+    bk = backend or NumpyBackend()
+    n = A_c.shape[0]
+    A_d = bk.eye(n) + dt * A_c
+    B_d = dt * B_c
+    return A_d, B_d
+
+
 def linearize_plant(plant, x0=None, u0=None, eps=1e-6):
     """Linearize a Plant's dynamics around an operating point.
 

@@ -489,3 +489,35 @@ class TestLinearizePlant:
         A, B = linearize_plant(plant)
         assert _to_np(A, bk).shape == (2, 2)
         assert _to_np(B, bk).shape == (2, 3)
+
+
+class TestDiscretizeEuler:
+    """First-order Euler discretization of a continuous-time linear model."""
+
+    def test_integrator(self, bk):
+        """A pure integrator A=0, B=I discretizes to A=I, B=dt*I."""
+        from shinro.utils.linearization import discretize_euler
+        A_c = bk.zeros((2, 2))
+        B_c = bk.eye(2)
+        A_d, B_d = discretize_euler(A_c, B_c, 0.01, backend=bk)
+        assert np.allclose(_to_np(A_d, bk), np.eye(2), atol=1e-12)
+        assert np.allclose(_to_np(B_d, bk), 0.01 * np.eye(2), atol=1e-12)
+
+    def test_pendulum_upright(self, bk):
+        """Pendulum A_c=[[0,1],[g/l,0]] discretizes to I + dt*A_c."""
+        from shinro.utils.linearization import discretize_euler
+        g, l, dt = 9.81, 0.5, 0.01
+        A_c = bk.array([[0.0, 1.0], [g / l, 0.0]])
+        B_c = bk.array([[0.0], [1.0]])
+        A_d, B_d = discretize_euler(A_c, B_c, dt, backend=bk)
+        expected_A = np.array([[1.0, dt], [g / l * dt, 1.0]])
+        expected_B = np.array([[0.0], [dt]])
+        assert np.allclose(_to_np(A_d, bk), expected_A, atol=1e-12)
+        assert np.allclose(_to_np(B_d, bk), expected_B, atol=1e-12)
+
+    def test_default_backend(self):
+        """Defaults to NumpyBackend when no backend is passed."""
+        from shinro.utils.linearization import discretize_euler
+        A_d, B_d = discretize_euler(np.zeros((2, 2)), np.eye(2), 0.01)
+        assert isinstance(A_d, np.ndarray)
+        assert np.allclose(A_d, np.eye(2), atol=1e-12)

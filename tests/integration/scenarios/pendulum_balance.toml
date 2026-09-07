@@ -1,0 +1,29 @@
+# Pendulum balance: plant-only closed loop Trajectory -> LQR -> Kalman -> InvertedPendulum.
+# No [sim] section: the plant self-integrates its analytical dynamics.
+[scenario]
+name = "pendulum_balance"
+description = "LQR + Kalman regulate an inverted pendulum from a 0.2 rad tilt to upright"
+duration = 12.0
+dt = 0.01
+tolerance = { steady_state = 0.05, estimator = 0.03 }
+input_limits = { min = [-2.0], max = [2.0] }
+
+[plant]
+type = "InvertedPendulum"
+config = "configs/plants/inverted_pendulum.toml"
+initial_state = [0.2, 0.0]
+
+[controller]
+type = "LQR"
+config = "configs/controllers/lqr_pendulum.toml"
+
+[estimator]
+type = "KalmanFilter"
+config = "configs/estimators/kalman_pendulum.toml"
+
+[trajectory]
+type = "waypoints"
+config = "configs/trajectories/pendulum_upright.toml"
+
+[noise.measurement]
+std = [0.005, 0.02]

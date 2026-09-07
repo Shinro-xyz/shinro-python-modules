@@ -6,9 +6,13 @@ from shinro.utils.config_resolver import resolve_config_path
 
 
 class ControllerFactory:
-    def __init__(self, config_path: str):
-        with open(resolve_config_path(config_path), "rb") as f:
-            self.config = tomllib.load(f)
+    def __init__(self, config_path: str | None = None, config: dict | None = None):
+        if (config_path is None) == (config is None):
+            raise ValueError("ControllerFactory requires exactly one of config_path or config.")
+        if config_path is not None:
+            with open(resolve_config_path(config_path), "rb") as f:
+                config = tomllib.load(f)
+        self.config = config
 
     def create(self, backend: ArrayBackend = None):
         cls = _CONTROLLER_REGISTRY[self.config["type"]]

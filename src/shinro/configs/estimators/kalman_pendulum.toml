@@ -1,0 +1,5 @@
+type = "KalmanFilter"
+name = "pendulum_estimator"
+dt = 0.01
+process_noise = [0.001, 0.01]
+measurement_noise = [0.005, 0.05]

@@ -1,0 +1,7 @@
+type = "LuenbergerObserver"
+name = "arm_observer"
+dt = 0.02
+# 6D Cartesian end-effector state [x, y, z, roll, pitch, yaw].
+# Fixed observer gain: with the default A = I model, the error dynamics
+# (A - L C) = 0.2 * I are Schur, so the estimate converges.
+observer_gain = [0.8, 0.8, 0.8, 0.8, 0.8, 0.8]

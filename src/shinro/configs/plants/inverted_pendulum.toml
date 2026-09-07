@@ -1,18 +1,23 @@
-[mass]
-value = 0.1
+# FILE: configs/plants/inverted_pendulum.toml
+# Config for the InvertedPendulum plant — 2D state [theta, theta_dot],
+# 1D torque control [tau]. Consumed by InvertedPendulum.from_config().
+#
+# Usage:
+#   from shinro.factories.registry import _PLANT_REGISTRY
+#   plant = _PLANT_REGISTRY["InvertedPendulum"].from_config(cfg)
+#   plant.step([0.1])
+type = "InvertedPendulum"
+name = "inverted_pendulum"
 
-[length]
-value = 0.5
+# Physical parameters (SI units).
+mass = 0.1      # Pendulum bob mass (kg)
+length = 0.5    # Pendulum rod length (m)
+damping = 0.0   # Linear damping at the pivot (Nms/rad)
+gravity = 9.81  # Gravitational acceleration (m/s^2)
+dt = 0.01       # Integration step (s)
 
-[damping]
-value = 0.0
-
-[gravity]
-value = 9.81
-
-[dt]
-value = 0.01
-
+# Optional state clipping bounds: [theta, theta_dot].
+# Omit for unbounded integration.
 [state_bounds]
 min = [-3.14, -10.0]
 max = [3.14, 10.0]

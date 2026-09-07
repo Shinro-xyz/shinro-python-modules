@@ -51,3 +51,61 @@ class TestArmCartesian:
         records = run_scenario(scenario)
         for r in records[::20]:
             assert np.all(np.isfinite(r.plant_state))
+
+
+@pytest.mark.parametrize(
+    ("est_type", "estimator_cfg"),
+    [
+        ("KalmanFilter", "configs/estimators/kalman_arm.toml"),
+        ("LuenbergerObserver", "configs/estimators/luenberger_arm.toml"),
+    ],
+)
+class TestArmEstimatorVariants:
+    """Different estimators both track the 6D lift schedule within a bounded error."""
+
+    def test_tracking_bounded(self, mujoco_available, tmp_path, est_type, estimator_cfg):
+        """Each estimator variant keeps the trailing tracking error under 0.06."""
+        import textwrap
+
+        variant = tmp_path / "arm_variant.toml"
+        variant.write_text(
+            textwrap.dedent(
+                f"""\
+                [scenario]
+                name = "arm_variant"
+                duration = 7.0
+                dt = 0.02
+                tolerance = {{ steady_state = 0.06, estimator = 0.03 }}
+                input_limits = {{ min = [-0.5, -0.5, -0.5, -0.5, -0.5, -0.5], max = [0.5, 0.5, 0.5, 0.5, 0.5, 0.5] }}
+
+                [physics]
+                free_joint = true
+
+                [plant]
+                name = "arm"
+
+                [controller]
+                type = "PID"
+                config = "configs/controllers/pid_arm.toml"
+
+                [estimator]
+                type = "{est_type}"
+                config = "{estimator_cfg}"
+
+                [trajectory]
+                type = "waypoints"
+                config = "configs/trajectories/arm_lift.toml"
+
+                [sim]
+                config = "robot_config.toml"
+
+                [noise.measurement]
+                std = [0.005, 0.005, 0.005, 0.01, 0.01, 0.01]
+                """
+            )
+        )
+
+        scenario = ScenarioFactory(str(variant)).build()
+        records = run_scenario(scenario)
+        assert_steady_state(records, tolerance=0.06)
+        assert_finite_state(records)

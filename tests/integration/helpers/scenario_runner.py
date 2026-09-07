@@ -141,7 +141,7 @@ def run_scenario(scenario: Scenario, steps: int | None = None, seed: int = 42) -
     est = scenario.estimator
     traj = scenario.trajectory
 
-    dt = float(scenario.config.get("scenario", {}).get("dt", scenario.sim.engine.dt))
+    dt = float(scenario.config.get("scenario", {}).get("dt", scenario.sim.engine.dt if scenario.sim is not None else 0.01))
     duration = float(scenario.config.get("scenario", {}).get("duration", 5.0))
     total_steps = steps if steps is not None else int(round(duration / dt))
     total_steps = min(total_steps, len(traj))  # type: ignore[arg-type]
@@ -177,7 +177,8 @@ def run_scenario(scenario: Scenario, steps: int | None = None, seed: int = 42) -
         control = np.clip(control, lo, hi)
 
         plant.step(control)
-        scenario.sim.step()
+        if scenario.sim is not None:
+            scenario.sim.step()
 
         plant_state = np.asarray(plant.get_state(), dtype=np.float64).flatten()
         if not np.all(np.isfinite(plant_state)):
@@ -211,6 +212,8 @@ def run_phase_schedule(scenario: Scenario, steps: int | None = None) -> list[Ste
     schedule = scenario.trajectory
     if not isinstance(schedule, dict) or "arm" not in schedule:
         raise ValueError("run_phase_schedule requires a phase_list trajectory dict.")
+    if scenario.sim is None:
+        raise ValueError("run_phase_schedule requires a sim-backed scenario (phase schedules drive the RobotSim).")
 
     n = steps if steps is not None else len(schedule["arm"])
     dt = float(scenario.config.get("scenario", {}).get("dt", scenario.sim.engine.dt))

@@ -154,6 +154,23 @@ class TestKalmanFilter:
         kf.reset()
         assert np.allclose(_to_np(kf.x_hat, bk), 0.0)
 
+    def test_from_config_d_shape_matches_input_dim(self, bk):
+        """from_config builds D as (n_y, n_u) so estimate() works when n_y != n_u."""
+        from shinro.estimators.kalman_filter import KalmanFilter
+        cfg = {
+            "process_noise": [0.001, 0.01],
+            "measurement_noise": [0.005, 0.05],
+            "dt": 0.01,
+            "A_dynamics": [[1.0, 0.01], [0.1962, 1.0]],
+            "B_dynamics": [[0.0], [0.4]],
+        }
+        kf = KalmanFilter.from_config(cfg, backend=bk)
+        assert _to_np(kf.D, bk).shape == (2, 1)
+        y = bk.array([[0.1], [0.0]])
+        u = bk.array([[0.5]])
+        x = kf.estimate(y, u)
+        assert _to_np(x, bk).shape == (2, 1)
+
 
 class TestLuenbergerObserver:
     """Verify Luenberger observer: estimate shape, stability, convergence, and reset."""
@@ -263,3 +280,19 @@ class TestLuenbergerObserver:
         obs.estimate(y, u)
         obs.reset()
         assert np.allclose(_to_np(obs.x_hat, bk), 0.0)
+
+    def test_from_config_d_shape_matches_input_dim(self, bk):
+        """from_config builds D as (n_y, n_u) so estimate() works when n_y != n_u."""
+        from shinro.estimators.luenberger_observer import LuenbergerObserver
+        cfg = {
+            "observer_gain": [0.8, 0.8],
+            "dt": 0.01,
+            "A_dynamics": [[1.0, 0.01], [0.1962, 1.0]],
+            "B_dynamics": [[0.0], [0.4]],
+        }
+        obs = LuenbergerObserver.from_config(cfg, backend=bk)
+        assert _to_np(obs.D, bk).shape == (2, 1)
+        y = bk.array([[0.1], [0.0]])
+        u = bk.array([[0.5]])
+        x = obs.estimate(y, u)
+        assert _to_np(x, bk).shape == (2, 1)

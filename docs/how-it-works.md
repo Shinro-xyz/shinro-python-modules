@@ -112,6 +112,22 @@ the closed-loop dataflow, and runs it — either against a real physics engine
 (MuJoCo) for hardware-fidelity simulation, or against the plant's own
 analytical `step()` for a fast in-memory simulation.
 
+Scenarios come in two modes:
+
+- **Sim-backed** (default): the plant is looked up by `[plant].name` on the
+  `RobotSim` built from `[sim]` (e.g. `base_tracking.toml`, `arm_cartesian.toml`).
+- **Plant-only**: when `[sim]` is absent, the plant is built directly from the
+  registry via `[plant].type` + `[plant].config` (a plant TOML) and
+  self-integrates its analytical dynamics — no MuJoCo. `[plant].initial_state`
+  optionally seeds the state, and `[scenario].dt` must equal the plant's own
+  `dt`. Examples: `pendulum_balance.toml`, `cartpole_balance.toml`.
+
+In plant-only mode, a controller/estimator config that omits
+`A_dynamics`/`B_dynamics` gets its discrete-time model **derived from the
+plant** at build time: `linearize_plant` (upright equilibrium) + first-order
+Euler discretization. The plant TOML stays the single source of physics truth —
+controller configs carry only costs/noise.
+
 The key design point: a *scenario* is data, not code. You can swap the
 controller from `LQR` to `MPC` by editing one line of a TOML file.
 

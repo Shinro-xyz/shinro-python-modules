@@ -1,20 +1,22 @@
-[cart_mass]
-value = 0.5
+# FILE: configs/plants/cartpole.toml
+# Config for the CartPole plant — 4D state [x, x_dot, theta, theta_dot],
+# 1D force control [F]. Consumed by CartPole.from_config().
+#
+# Usage:
+#   from shinro.factories.registry import _PLANT_REGISTRY
+#   plant = _PLANT_REGISTRY["CartPole"].from_config(cfg)
+#   plant.step([1.0])
+type = "CartPole"
+name = "cartpole"
 
-[pole_mass]
-value = 0.1
+# Physical parameters (SI units).
+cart_mass = 0.5    # Cart mass (kg)
+pole_mass = 0.1    # Pole mass (kg)
+pole_length = 0.5  # Pole length (m)
+damping = 0.0      # Linear damping at the pole hinge (Nms/rad)
+gravity = 9.81     # Gravitational acceleration (m/s^2)
+dt = 0.01          # Integration step (s)
 
-[pole_length]
-value = 0.5
-
-[damping]
-value = 0.0
-
-[gravity]
-value = 9.81
-
-[dt]
-value = 0.01
-
-[track_limits]
-values = [-2.0, 2.0]
+# Optional cart position bounds (m): [min, max].
+# Omit for unbounded integration.
+track_limits = [-2.0, 2.0]

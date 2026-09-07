@@ -59,6 +59,23 @@ class TestControllerFactory:
         assert isinstance(ctrl, LQR)
         assert ctrl.K is not None
 
+    def test_create_from_config_dict(self, bk):
+        """ControllerFactory accepts a config dict directly (no path)."""
+        from shinro.factories.controller_factory import ControllerFactory
+        cfg = {"type": "LQR", "dt": 0.02, "state_cost": [1.0, 1.0], "control_cost": [0.1, 0.1]}
+        ctrl = ControllerFactory(config=cfg).create(backend=bk)
+        from shinro.controllers.lqr import LQR
+        assert isinstance(ctrl, LQR)
+        assert ctrl.K is not None
+
+    def test_path_and_config_mutually_exclusive(self):
+        """Passing both config_path and config raises ValueError."""
+        from shinro.factories.controller_factory import ControllerFactory
+        with pytest.raises(ValueError, match="exactly one"):
+            ControllerFactory(config_path="x.toml", config={"type": "LQR"})
+        with pytest.raises(ValueError, match="exactly one"):
+            ControllerFactory()
+
     def test_create_pid(self, bk, tmp_path):
         """ControllerFactory creates a PID controller from a valid config."""
         from shinro.factories.controller_factory import ControllerFactory

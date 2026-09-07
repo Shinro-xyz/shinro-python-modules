@@ -124,13 +124,14 @@ class KalmanFilter(StateEstimator):
         n = Q.shape[0]
         R = parse_matrix(bk, config["measurement_noise"])
         n_y = R.shape[0]
+        B = bk.array(config.get("B_dynamics", config["dt"] * bk.eye(n)))
         return cls(
             A=bk.array(config.get("A_dynamics", bk.eye(n))),
-            B=bk.array(config.get("B_dynamics", config["dt"] * bk.eye(n))),
+            B=B,
             Q=Q,
             R=R,
             C=bk.array(config["C"]) if "C" in config else bk.eye(n),
-            D=bk.array(config["D"]) if "D" in config else bk.zeros((n_y, n)),
+            D=bk.array(config["D"]) if "D" in config else bk.zeros((n_y, B.shape[1])),
             x0=bk.zeros((n, 1)),
             backend=bk,
         )

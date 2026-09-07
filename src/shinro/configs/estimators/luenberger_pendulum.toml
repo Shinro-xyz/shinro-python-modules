@@ -1,0 +1,4 @@
+type = "LuenbergerObserver"
+name = "pendulum_observer"
+dt = 0.01
+observer_gain = [0.8, 0.8]

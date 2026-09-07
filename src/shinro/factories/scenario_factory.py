@@ -16,9 +16,11 @@ from shinro.components import Controller, Plant, StateEstimator, TrajectoryGener
 from shinro.controllers.mppi import MPPIController
 from shinro.factories.controller_factory import ControllerFactory
 from shinro.factories.estimator_factory import EstimatorFactory
+from shinro.factories.registry import _PLANT_REGISTRY
 from shinro.factories.trajectory_factory import TrajectoryFactory
-from shinro.utils.array_backend import ArrayBackend
+from shinro.utils.array_backend import ArrayBackend, NumpyBackend
 from shinro.utils.config_resolver import resolve_config_path
+from shinro.utils.linearization import discretize_euler, linearize_plant
 
 if TYPE_CHECKING:
     from shinro.simulation.robotsim import RobotSim
@@ -28,15 +30,17 @@ if TYPE_CHECKING:
 class Scenario:
     """Fully composed control loop plus scenario parameters.
 
-    ``sim`` is the :class:`RobotSim` instance (engine + plants); ``plant`` is
-    the primary plant driven by the controller; ``controller``, ``estimator``
-    and ``trajectory`` are the other loop roles. For feedforward scenarios
-    (e.g. ``phase_list`` pick-and-place) ``controller`` and ``estimator`` are
-    ``None`` and the schedule itself is the control. ``config`` is the raw TOML
-    dict (used by the runner and the tests for tolerances, noise, etc.).
+    ``sim`` is the :class:`RobotSim` instance (engine + plants) for MuJoCo-
+    backed scenarios, or ``None`` for plant-only scenarios where the plant
+    self-integrates its analytical dynamics. ``plant`` is the primary plant
+    driven by the controller; ``controller``, ``estimator`` and ``trajectory``
+    are the other loop roles. For feedforward scenarios (e.g. ``phase_list``
+    pick-and-place) ``controller`` and ``estimator`` are ``None`` and the
+    schedule itself is the control. ``config`` is the raw TOML dict (used by
+    the runner and the tests for tolerances, noise, etc.).
     """
 
-    sim: RobotSim
+    sim: RobotSim | None
     plant: Plant
     controller: Controller | None
     estimator: StateEstimator | None
@@ -50,18 +54,33 @@ class ScenarioFactory:
     Config sections:
         [scenario]    name, description, duration, dt, tolerance, input_limits
         [physics]     free_joint, model_path
-        [plant]       name
+        [plant]       name (sim-backed) OR type + config + initial_state (plant-only)
         [controller]  type, config (optional)
         [estimator]   type, config (optional)
         [trajectory]  type, config
-        [sim]         config (path to the RobotSim TOML)
+        [sim]         config (path to the RobotSim TOML; optional)
         [noise]       measurement (optional)
         [adversarial] inject_at, value (optional)
 
-    The plant is looked up by name on the ``RobotSim`` built from ``[sim]``.
-    Controller/estimator/trajectory are built from their own config files via
-    the existing factories. When ``[physics].free_joint`` is set, the LeKiwi
-    MJCF is rewritten so the arm hangs off a mobile free-jointed base.
+    Two modes:
+
+    1. **Sim-backed** (default): the plant is looked up by ``[plant].name`` on
+       the ``RobotSim`` built from ``[sim]``. When ``[physics].free_joint`` is
+       set, the LeKiwi MJCF is rewritten so the arm hangs off a mobile
+       free-jointed base.
+
+    2. **Plant-only**: when ``[sim]`` is absent, the plant is built directly
+       from the registry via ``[plant].type`` (registered name) and
+       ``[plant].config`` (path to a plant TOML). ``[plant].initial_state``
+       optionally seeds the state. The plant self-integrates its analytical
+       dynamics — no MuJoCo engine. ``[scenario].dt`` must equal the plant's
+       own ``dt`` (the plant integrates at its own time step).
+
+    When a controller/estimator config omits ``A_dynamics``/``B_dynamics`` in
+    plant-only mode, the discrete-time model is derived from the plant via
+    :func:`shinro.utils.linearization.linearize_plant` (upright equilibrium)
+    and first-order Euler discretization, so the plant TOML stays the single
+    source of physics truth.
     """
 
     def __init__(self, config_path: str):
@@ -87,13 +106,18 @@ class ScenarioFactory:
         sim_cfg = self.config.get("sim", {"config": "robot_config.toml"})
         physics_cfg = self.config.get("physics", {})
 
-        from shinro.simulation.robotsim import RobotSim
-
-        xml_string, assets = self._physics_xml(physics_cfg)
-        sim = RobotSim(resolve_config_path(sim_cfg["config"]), xml_string=xml_string, assets=assets)  # type: ignore[arg-type]
-        plant = sim.get_plant(plant_cfg["name"])
-        if plant is None:
-            raise KeyError(f"Plant name '{plant_cfg['name']}' not found in RobotSim. Available plants: {sorted(sim._plants.keys())}")
+        if "sim" in self.config:
+            sim, plant = self._build_sim_plant(plant_cfg, sim_cfg, physics_cfg)
+            derive_model = False
+        else:
+            sim, plant = self._build_plant_only(plant_cfg)
+            derive_model = True
+            scenario_dt = self.config.get("scenario", {}).get("dt")
+            if scenario_dt is not None and abs(float(scenario_dt) - float(plant.dt)) > 1e-12:
+                raise ValueError(
+                    f"[scenario].dt ({scenario_dt}) must equal the plant's dt ({plant.dt}) "
+                    "in plant-only scenarios: the plant self-integrates at its own time step."
+                )
 
         def _create(factory_cls, path: str):
             if backend is not None:
@@ -105,9 +129,13 @@ class ScenarioFactory:
         controller = None
         estimator = None
         if "controller" in self.config:
-            controller = _create(ControllerFactory, self.config["controller"]["config"])
+            controller = self._create_loop_role(
+                ControllerFactory, self.config["controller"]["config"], plant, backend, derive_model
+            )
         if "estimator" in self.config:
-            estimator = _create(EstimatorFactory, self.config["estimator"]["config"])
+            estimator = self._create_loop_role(
+                EstimatorFactory, self.config["estimator"]["config"], plant, backend, derive_model
+            )
 
         # MPPI is function-based: its dynamics/cost are produced from the
         # plant's model via a batched adapter, so it must be wired after the
@@ -130,6 +158,74 @@ class ScenarioFactory:
             trajectory=trajectory,
             config=self.config,
         )
+
+    @staticmethod
+    def _build_sim_plant(plant_cfg: dict, sim_cfg: dict, physics_cfg: dict) -> tuple[RobotSim, Plant]:
+        """Build the RobotSim and look up the plant by name."""
+        from shinro.simulation.robotsim import RobotSim
+
+        xml_string, assets = ScenarioFactory._physics_xml(physics_cfg)
+        sim = RobotSim(resolve_config_path(sim_cfg["config"]), xml_string=xml_string, assets=assets)  # type: ignore[arg-type]
+        plant = sim.get_plant(plant_cfg["name"])
+        if plant is None:
+            raise KeyError(f"Plant name '{plant_cfg['name']}' not found in RobotSim. Available plants: {sorted(sim._plants.keys())}")
+        return sim, plant
+
+    @staticmethod
+    def _build_plant_only(plant_cfg: dict) -> tuple[None, Plant]:
+        """Build a standalone analytical plant from the registry (no MuJoCo sim).
+
+        Requires ``[plant].type`` (registered name) and ``[plant].config``
+        (path to a plant TOML). Applies ``[plant].initial_state`` if given and
+        enforces that ``[scenario].dt`` matches the plant's own ``dt``.
+        """
+        ptype = plant_cfg.get("type")
+        if ptype is None:
+            raise KeyError(
+                "Plant-only scenarios (no [sim] section) require [plant].type "
+                "(registered plant name) and [plant].config (path to a plant TOML)."
+            )
+        pconfig = plant_cfg.get("config")
+        if pconfig is None:
+            raise KeyError("Plant-only scenarios require [plant].config (path to a plant TOML).")
+        if ptype not in _PLANT_REGISTRY:
+            raise KeyError(f"Unknown plant type '{ptype}'. Registered: {sorted(_PLANT_REGISTRY)}")
+
+        with open(resolve_config_path(pconfig), "rb") as f:
+            plant_dict = tomllib.load(f)
+        plant = _PLANT_REGISTRY[ptype].from_config(plant_dict, backend=NumpyBackend())
+
+        if "initial_state" in plant_cfg:
+            init = plant_cfg["initial_state"]
+            n_x = plant.get_state().shape[0]
+            if len(init) != n_x:
+                raise ValueError(
+                    f"[plant].initial_state has length {len(init)} but plant '{ptype}' has state dimension {n_x}."
+                )
+            plant.state = plant.bk.array(init)
+
+        return None, plant
+
+    @staticmethod
+    def _create_loop_role(factory_cls, config_path: str, plant: Plant, backend: ArrayBackend | None, derive_model: bool):
+        """Build a controller/estimator, deriving A/B from the plant when omitted.
+
+        In plant-only mode (``derive_model``), a config that omits
+        ``A_dynamics``/``B_dynamics`` gets the plant's linearized model
+        (upright equilibrium) discretized with first-order Euler at the
+        plant's ``dt``. Sim-backed scenarios are untouched (their
+        ``A = I, B = dt * I`` defaults are correct for the velocity-commanded
+        base).
+        """
+        with open(resolve_config_path(config_path), "rb") as f:
+            cfg = tomllib.load(f)
+        if derive_model and "A_dynamics" not in cfg and "B_dynamics" not in cfg:
+            A_c, B_c = linearize_plant(plant)
+            A_d, B_d = discretize_euler(A_c, B_c, plant.dt, backend=plant.bk)
+            cfg = {**cfg, "A_dynamics": A_d, "B_dynamics": B_d}
+        if backend is not None:
+            return factory_cls(config=cfg).create(backend=backend)
+        return factory_cls(config=cfg).create()
 
     @staticmethod
     def _physics_xml(physics_cfg: dict) -> tuple[str, dict] | tuple[None, None]:
