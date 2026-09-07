@@ -38,7 +38,10 @@ Run: ``python3 scripts/gen_emosqp_test.py [--config ...] [--out-dir ...]``
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
+import sys
+from importlib.metadata import version
 
 import numpy as np
 import osqp
@@ -47,11 +50,22 @@ from scipy import sparse
 from shinro.codegen.lower_zig import _zig_floats
 from shinro.factories.controller_factory import ControllerFactory
 from shinro.utils.array_backend import NumpyBackend
+from shinro.utils.config_resolver import resolve_config_path
 
 DEFAULT_CONFIG = "configs/controllers/mpc_lti_base.toml"
 DEFAULT_OUT_DIR = "runtime/codegen/emosqp"
 DEFAULT_DATA_PATH = "runtime/tests/emosqp_data.zig"
 EPS = 1e-6
+
+
+def _config_sha256(config_path: str) -> str:
+    """Return the sha256 of a config file's raw bytes (hermetic: no preprocessing).
+
+    Resolves the path the same way the factories do, so the hash covers
+    exactly the file the controller was built from.
+    """
+    with open(resolve_config_path(config_path), "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
 
 
 def bake(config: str, out_dir: str, data_out: str) -> int:
@@ -120,6 +134,11 @@ pub const n_vars: usize = {H.shape[0]};
 pub const n_cons: usize = {A.shape[0]};
 pub const eps: f64 = {EPS};
 pub const config = "{config}";
+pub const config_sha256 = "{_config_sha256(config)}";
+pub const python_version = "{sys.version.split()[0]}";
+pub const numpy_version = "{version('numpy')}";
+pub const scipy_version = "{version('scipy')}";
+pub const osqp_version = "{version('osqp')}";
 """
     meta_path = os.path.join(out_dir, "solver_meta.zig")
     with open(meta_path, "w") as f:

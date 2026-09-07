@@ -12,6 +12,7 @@ Requires ``zig`` on PATH. Skipped cleanly if it's unavailable.
 from __future__ import annotations
 
 import ctypes
+import hashlib
 import json
 import re
 import shutil
@@ -37,7 +38,7 @@ RUNTIME = REPO_ROOT / "runtime"
 BUILD = REPO_ROOT / "build"
 
 
-def _build_so(composed, build_dir, graph_path=None, solver_dir=None):
+def _build_so(composed, build_dir, graph_path=None, solver_dir=None, provenance=None):
     """Lower a composed graph, compile the comptime VM, and load libbase.so.
 
     Each call lowers ``composed`` to ``runtime/graph_data.zig`` (or
@@ -47,13 +48,14 @@ def _build_so(composed, build_dir, graph_path=None, solver_dir=None):
     baked OSQP solver to compile in (default: the shipped
     ``runtime/codegen/emosqp/`` bake) — pass a DeltaU bake to build a graph
     whose ``.solve_qp`` node has n_vars=45. Graphs without a ``.solve_qp``
-    node (LQR, PID, ...) are built solver-free.
+    node (LQR, PID, ...) are built solver-free. ``provenance`` is forwarded
+    to ``lower_zig`` (config hashes + tool versions recorded in the manifest).
     """
     if shutil.which("zig") is None:
         pytest.skip("zig not on PATH; skipping Zig lowering oracle")
 
     out_zig = graph_path or (RUNTIME / "graph_data.zig")
-    lower_zig(composed, str(out_zig))
+    lower_zig(composed, str(out_zig), provenance=provenance)
 
     cmd = [
         "zig",
@@ -909,4 +911,100 @@ class TestBuildManifest:
         m1 = (p1.parent / "graph_data_manifest.json").read_bytes()
         m2 = (p2.parent / "graph_data_manifest.json").read_bytes()
         assert m1 == m2
+
+
+class TestDeploymentRecord:
+    """The post-compile deployment record: master hash over config/graph/solver/binary.
+
+    ``scripts/stamp_deployment.py`` reads the build manifest, hashes the .so
+    and the baked solver tree, and writes ``libbase.deployment.json`` with a
+    single master hash committing to the whole chain. ``verify_deployment.py``
+    re-hashes the artifacts and compares (producer/verifier separation).
+    """
+
+    @staticmethod
+    def _sha256(path: str) -> str:
+        from shinro.utils.config_resolver import resolve_config_path
+
+        return hashlib.sha256(resolve_config_path(path).read_bytes()).hexdigest()
+
+    def _stamp(self, build_dir):
+        from scripts.stamp_deployment import stamp
+
+        return stamp(build_dir, RUNTIME)
+
+    def test_record_master_hash_and_slots(self, manifests):
+        """The record carries a master hash and four slots; binary slot matches the .so."""
+        base_dir, _ = manifests
+        record = self._stamp(base_dir)
+
+        assert re.fullmatch(r"[0-9a-f]{64}", record["master_hash"])
+        for slot in ("config", "graph", "solver", "binary"):
+            assert re.fullmatch(r"[0-9a-f]{64}", record["slots"][slot])
+
+        so = base_dir / "lib" / "libbase.so"
+        assert record["slots"]["binary"] == hashlib.sha256(so.read_bytes()).hexdigest()
+        # base graph has no .solve_qp node -> solver slot is the sentinel
+        assert record["slots"]["solver"] == hashlib.sha256(b"").hexdigest()
+        assert record["solver"] is None
+
+    def test_record_deterministic(self, manifests):
+        """Re-stamping the same build produces a byte-identical record."""
+        base_dir, _ = manifests
+        assert self._stamp(base_dir) == self._stamp(base_dir)
+
+    def test_archive_copy_timestamped(self, manifests):
+        """The archive copy is timestamped in the filename only."""
+        base_dir, _ = manifests
+        self._stamp(base_dir)
+        archives = list((base_dir / "deployments").glob("*.json"))
+        assert len(archives) >= 1
+        assert "-" in archives[0].stem
+
+    def test_verify_passes_and_detects_drift(self, tmp_path_factory):
+        """verify_deployment returns 0 on match, 1 when a pinned config drifts."""
+        from scripts.verify_deployment import verify
+
+        build_dir = tmp_path_factory.mktemp("zig-build-deploy-verify")
+        graph_path = tmp_path_factory.mktemp("zig-build-deploy-verify-graph") / "graph_data.zig"
+        cg = build_base_graph()
+        _build_so(
+            cg,
+            build_dir,
+            graph_path=graph_path,
+            provenance={
+                "configs": {
+                    "configs/estimators/kalman_base.toml": self._sha256("configs/estimators/kalman_base.toml"),
+                    "configs/controllers/lqr_base.toml": self._sha256("configs/controllers/lqr_base.toml"),
+                },
+            },
+        )
+        self._stamp(build_dir)
+        record = build_dir / "lib" / "libbase.deployment.json"
+
+        assert verify(record, graph_path=graph_path) == 0
+
+        cfg = REPO_ROOT / "src/shinro/configs/controllers/lqr_base.toml"
+        original = cfg.read_bytes()
+        try:
+            cfg.write_bytes(original + b"\n# tamper\n")
+            assert verify(record, graph_path=graph_path) == 1
+        finally:
+            cfg.write_bytes(original)
+
+    def test_graph_provenance_recorded(self, tmp_path):
+        """lower_zig with provenance records config hashes + tool versions."""
+        cg = build_base_graph()
+        out = tmp_path / "graph_data.zig"
+        lower_zig(
+            cg,
+            str(out),
+            provenance={
+                "configs": {"configs/controllers/lqr_base.toml": "abc123"},
+                "python_version": "3.12",
+            },
+        )
+        manifest = json.loads((tmp_path / "graph_data_manifest.json").read_text())
+        assert manifest["provenance"]["configs"]["configs/controllers/lqr_base.toml"] == "abc123"
+        assert manifest["provenance"]["python_version"] == "3.12"
 

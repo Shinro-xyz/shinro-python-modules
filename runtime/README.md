@@ -164,3 +164,44 @@ Two deliberate notes:
   `-Dgraph`/`-Dsolver_dir` options are the minimal plumbing that makes a
   second bake a first-class operation; named scenario bundles can layer on
   top of them later if ever needed.
+
+## Deployment record — the master hash
+
+`make zig-build` runs a post-compile step (`scripts/stamp_deployment.py`) that
+reads the build manifest, hashes the compiled `libbase.so` and the baked solver
+tree, and writes a **deployment record** next to the artifact:
+
+- `<prefix>/lib/libbase.deployment.json` — a single **master hash** committing
+  to the whole config → graph → solver → binary chain, plus per-slot
+  drill-down (which configs + their sha256, tool versions, solver facts,
+  binary sha256).
+- `<prefix>/deployments/<UTC>-<master8>.json` — timestamped archive copy
+  (timestamp in the filename only, so the record is a pure function of its
+  inputs, mirroring the build manifest).
+
+The master hash is `H(config ‖ graph ‖ solver ‖ binary)`:
+
+- **config** — flat hash over the config files the generator consumed,
+  recorded in the graph manifest's `provenance` by `gen_base.py` /
+  `gen_mpc.py` (and in `solver_meta.zig`'s `config_sha256` for the bake).
+- **graph** — `graph_sha256` from the build manifest.
+- **solver** — flat hash over the baked solver tree; the fixed sentinel
+  `sha256(b"")` when the graph has no `.solve_qp` node (LQR, PID), so
+  solver-free and MPC deployments stay structurally comparable. Note: the
+  OSQP codegen embeds a timestamp in the generated C, so re-baking the same
+  problem changes the solver slot even with identical problem data — the
+  slot is "this exact bake", not a reproducible fingerprint (the config hash
+  is the hermetic part).
+- **binary** — sha256 of `libbase.so` itself (the only slot the build manifest
+  lacks — computed post-compile because the `.so` doesn't exist at configure
+  time).
+
+`scripts/verify_deployment.py` re-hashes the artifacts on the target and
+compares against the record (producer/verifier separation): exit 0 on match,
+1 on drift. This is the read-only check that catches a config edited after the
+bake without any rebuild.
+
+Config hashes are hermetic: they cover the raw bytes of the resolved config
+file (no preprocessing — `config_resolver.py` is path-only), and
+`.gitattributes` pins TOML checkouts to LF so the hashes are reproducible
+across platforms.

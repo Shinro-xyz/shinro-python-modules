@@ -101,6 +101,7 @@ zig-gen:
 
 zig-build: zig-gen
 	zig build --build-file runtime/build.zig --prefix build/
+	python3 scripts/stamp_deployment.py --prefix build/
 
 test-zig: zig-build
 	zig build test --build-file runtime/build.zig

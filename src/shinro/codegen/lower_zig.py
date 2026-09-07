@@ -42,13 +42,23 @@ from shinro.codegen.compose import ComposedGraph
 from shinro.codegen.tracing import Graph, Node
 
 
-def lower_zig(cg: ComposedGraph, out_path: str = "runtime/graph_data.zig") -> None:
+def lower_zig(
+    cg: ComposedGraph,
+    out_path: str = "runtime/graph_data.zig",
+    provenance: dict | None = None,
+) -> None:
     """Serialize a composed graph into a Zig data table at ``out_path``.
 
     Also writes a deterministic JSON manifest next to it (``<stem>_manifest.json``)
     describing the compiled content — op histogram, port layout, buffer sizes,
     and the ``.solve_qp`` n_vars the graph expects. Same inputs ⇒ byte-identical
     manifest (no timestamps), so manifests are diffable audit records.
+
+    ``provenance`` is an optional opaque dict (e.g. the config paths + hashes
+    and tool versions the generator consumed) merged into the manifest under
+    ``"provenance"``. It keeps the lowerer generic — the framework doesn't
+    need to know what a generator records — while letting each generator pin
+    exactly which inputs produced the graph.
     """
     g = cg.graph
 
@@ -154,6 +164,8 @@ def lower_zig(cg: ComposedGraph, out_path: str = "runtime/graph_data.zig") -> No
         clip_offsets,
         input_offsets,
     )
+    if provenance:
+        manifest["provenance"] = provenance
     manifest_path = os.path.splitext(out_path)[0] + "_manifest.json"
     with open(manifest_path, "w") as f:
         json.dump(manifest, f, indent=2, sort_keys=True)

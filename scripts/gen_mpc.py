@@ -21,7 +21,10 @@ Run: ``python3 scripts/gen_mpc.py``
 
 from __future__ import annotations
 
+import hashlib
 import inspect
+import sys
+from importlib.metadata import version
 
 import numpy as np
 
@@ -31,6 +34,13 @@ from shinro.codegen.lower_zig import lower_zig
 from shinro.factories.controller_factory import ControllerFactory
 from shinro.factories.estimator_factory import EstimatorFactory
 from shinro.utils.array_backend import NumpyBackend
+from shinro.utils.config_resolver import resolve_config_path
+
+
+def _sha256(config_path: str) -> str:
+    """Return the sha256 of a config file's raw bytes (hermetic: no preprocessing)."""
+    with open(resolve_config_path(config_path), "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
 
 
 def build_mpc_composed_graph(controller_config: str = "configs/controllers/mpc_lti_base.toml"):
@@ -87,8 +97,20 @@ def main() -> None:
     Entry point for ``python scripts/gen_mpc.py``. Serializes the composed
     graph and prints a summary of the node count and input ports.
     """
-    composed = build_mpc_composed_graph()
-    lower_zig(composed, "runtime/graph_data.zig")
+    controller_config = "configs/controllers/mpc_lti_base.toml"
+    composed = build_mpc_composed_graph(controller_config)
+    lower_zig(
+        composed,
+        "runtime/graph_data.zig",
+        provenance={
+            "configs": {
+                "configs/estimators/kalman_base.toml": _sha256("configs/estimators/kalman_base.toml"),
+                controller_config: _sha256(controller_config),
+            },
+            "python_version": sys.version.split()[0],
+            "numpy_version": version("numpy"),
+        },
+    )
     n = len(composed.graph.nodes)
     print(f"wrote runtime/graph_data.zig ({n} nodes, inputs={composed.inputs})")
 

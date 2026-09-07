@@ -1,0 +1,5 @@
+# Hermetic config hashing: pin TOML checkouts to LF so the byte-level
+# config_sha256 recorded in deployment records is reproducible across
+# platforms (Windows core.autocrlf would otherwise flip LF -> CRLF and
+# change the hash for a logically identical config).
+*.toml text eol=lf
