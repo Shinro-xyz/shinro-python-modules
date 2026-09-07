@@ -52,6 +52,11 @@ joint space**.
   backend test "didn't run", that's why. Requires Python ≥3.12; CI matrix is
   3.12–3.14.
 - Demos: `python -m demos.demo_*`.
+- `make compile SCENARIO=<scenario.toml>` — e2e scenario → verified `.so`:
+  `scripts/gen_scenario.py` (zig-free: trace+compose+lower to an isolated
+  path) then `scripts/build_scenario.py` (zig build + oracle + stamp + verify).
+  The scenario TOML's `[compile]` section (`n_x`, `n_u`, `optimize`, `target`,
+  `solver_dir`) is the build spec; never clobbers `runtime/graph_data.zig`.
 
 ## Zig lowering (codegen → `.so`)
 

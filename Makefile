@@ -2,7 +2,8 @@
 	release-patch release-minor release-major changelog \
 	test-controllers test-estimators test-plants test-trajectories test-armrobot \
 	test-components test-array-backend test-batched-adapter test-controllability test-factories \
-	test-linearization test-adversarial test-mcp-server test-mcp-functional
+	test-linearization test-adversarial test-mcp-server test-mcp-functional \
+	compile
 
 # Install the package in editable mode
 install:
@@ -106,6 +107,21 @@ zig-build: zig-gen
 test-zig: zig-build
 	zig build test --build-file runtime/build.zig
 	python3 -m pytest tests/test_zig_lowering.py -v --tb=short
+
+# ───────────────────────────────────────────────────────────────────────────
+# E2E scenario compilation: gen_scenario.py (zig-free) → build_scenario.py
+# (zig + oracle + stamp + verify). The scenario TOML's [compile] section is
+# the build spec (n_x/n_u, optimize, target, solver_dir); CLI overrides pass
+# through via FLAGS. Output lands in build/<name>/ — runtime/graph_data.zig
+# is never touched, so compiling a custom scenario never clobbers the
+# shipped graph. Requires `zig` on PATH for the build stage.
+# ───────────────────────────────────────────────────────────────────────────
+SCENARIO ?= tests/integration/scenarios/base_tracking.toml
+OUT ?= build/scenario
+
+compile:
+	python3 scripts/gen_scenario.py $(SCENARIO) --out $(OUT)
+	python3 scripts/build_scenario.py $(OUT) --scenario $(SCENARIO) $(FLAGS)
 
 # Run linter and type checker
 lint:

@@ -30,3 +30,9 @@ config = "robot_config.toml"
 
 [noise.measurement]
 std = [0.01, 0.01, 0.02]
+
+# Compile-time spec for the e2e compilation pipeline (scripts/gen_scenario.py).
+# n_x / n_u are baked into the graph at trace time ("fixed as compiled").
+[compile]
+n_x = 3
+n_u = 3

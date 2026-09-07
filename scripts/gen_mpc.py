@@ -22,18 +22,12 @@ Run: ``python3 scripts/gen_mpc.py``
 from __future__ import annotations
 
 import hashlib
-import inspect
 import sys
 from importlib.metadata import version
 
 import numpy as np
 
-from shinro.codegen import trace_node
-from shinro.codegen.compose import compose
-from shinro.codegen.lower_zig import lower_zig
-from shinro.factories.controller_factory import ControllerFactory
-from shinro.factories.estimator_factory import EstimatorFactory
-from shinro.utils.array_backend import NumpyBackend
+from shinro.codegen import build_composed_graph, lower_zig
 from shinro.utils.config_resolver import resolve_config_path
 
 
@@ -62,31 +56,12 @@ def build_mpc_composed_graph(controller_config: str = "configs/controllers/mpc_l
         A :class:`~shinro.codegen.compose.ComposedGraph` for the KF + MPC
         closed-loop step.
     """
-    kf = EstimatorFactory("configs/estimators/kalman_base.toml").create(backend=NumpyBackend())
-    mpc = ControllerFactory(controller_config).create(backend=NumpyBackend())
-
-    # Seed for live numpy use only — in the traced graph both x_hat and P are
-    # pre-injected tracers (recurrent ports); the host supplies their initial
-    # values at tick 0 (P0 = 0.1*I matches KalmanFilter.reset()).
-    kf.P = np.eye(3) * 0.1
-    kf.x_hat = np.zeros((3, 1))
-    kf_graph = trace_node(
-        kf,
-        input_shapes={"measurement": (3, 1), "control_input": (3, 1)},
-        state_shapes={"x_hat": (3, 1), "P": (3, 3)},
-    )
-    # Trace shapes come from the controller's compute() signature: MPC_LTI is
-    # compute(x0); MPC_DeltaU is compute(x0, u_prev) — the extra input is the
-    # shared previous-control recurrent port compose wires for free.
-    ctrl_input_shapes = {
-        name: (3,) for name in inspect.signature(mpc.compute).parameters if name != "self"
-    }
-    mpc_graph = trace_node(mpc, input_shapes=ctrl_input_shapes)
     limits = (np.array([-0.5, -0.5, -1.0]), np.array([0.5, 0.5, 1.0]))
-    return compose(
-        kf_graph,
-        mpc_graph,
-        plant_dims={"n_x": 3, "n_u": 3},
+    return build_composed_graph(
+        "configs/estimators/kalman_base.toml",
+        controller_config,
+        n_x=3,
+        n_u=3,
         input_limits=limits,
     )
 

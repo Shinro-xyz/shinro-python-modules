@@ -287,6 +287,39 @@ The generated graph also carries a `has_solve_qp` flag. `build.zig` reads it
 and links the OSQP bake only for QP graphs, so LQR/PID binaries omit the OSQP
 C sources and bake metadata entirely.
 
+### Compiling an arbitrary scenario (the e2e workflow)
+
+The shipped `make zig-build` path is welded to the KF+LQR base graph. For any
+other estimator/controller pair — a different robot, a PID instead of LQR, a
+Luenberger observer instead of a Kalman filter — the two-script e2e pipeline
+is generic and never touches the shared paths:
+
+```bash
+make compile SCENARIO=tests/integration/scenarios/base_tracking.toml
+```
+
+1. **`scripts/gen_scenario.py`** (zig-free) — reads the scenario TOML's
+   `[controller]`/`[estimator]` configs, `[scenario].input_limits`, and the
+   `[compile]` section; traces + composes via the generic
+   `shinro.codegen.build_composed_graph`; lowers to an isolated
+   `build/<name>/graph_data.zig` + manifest. The two-pass trace discovers
+   recurrent state by attr-diff, so a new controller's integral or a new
+   estimator's observer state compose with zero per-component declaration.
+2. **`scripts/build_scenario.py`** (zig) — pre-flight zig check, build flags
+   from `[compile]` (CLI > TOML > default), `zig build -Dgraph=<abs>`, then
+   **verifies before stamping**: re-gens the graph in-process and byte-compares
+   manifests (integrity), runs the ctypes oracle (`shinro_step` vs
+   `interpret()`, tol 1e-12 / 1e-3 for QP), then `stamp_deployment` +
+   `verify_deployment`.
+
+The `[compile]` section is the build spec: `n_x`/`n_u` (baked at trace time),
+`optimize` (`debug`/`release` → ReleaseFast only), `target` (cross-compile),
+`solver_dir` (required for QP graphs). Unknown keys and invalid `optimize`
+values are loud errors. Component swaps are TOML edits: change
+`[controller]`/`[estimator]` and re-run `make compile` — the graph is
+regenerated from scratch, and the C-ABI port layout (printed by the gen stage,
+recorded in the manifest) is the only thing the host must re-pack.
+
 ### Build manifest (audit trail)
 
 Every build writes a deterministic report next to the artifact

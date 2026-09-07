@@ -205,3 +205,56 @@ Config hashes are hermetic: they cover the raw bytes of the resolved config
 file (no preprocessing — `config_resolver.py` is path-only), and
 `.gitattributes` pins TOML checkouts to LF so the hashes are reproducible
 across platforms.
+
+## Compiling an arbitrary scenario (the e2e workflow)
+
+The shipped `make zig-build` path is welded to the KF+LQR base graph. For any
+other estimator/controller pair — a different robot, a PID instead of LQR, a
+Luenberger observer instead of a Kalman filter — use the two-script e2e
+pipeline, which is generic and never touches the shared paths:
+
+```bash
+make compile SCENARIO=tests/integration/scenarios/base_tracking.toml
+```
+
+This chains:
+
+1. `scripts/gen_scenario.py <scenario.toml> --out build/<name>/` — the
+   **zig-free** stage. Reads the scenario's `[controller]`/`[estimator]`
+   configs, `[scenario].input_limits`, and the `[compile]` section; traces +
+   composes the closed-loop step graph via the generic
+   `shinro.codegen.build_composed_graph` (two-pass state discovery — recurrent
+   state is found by attr-diff, not declared); lowers to an **isolated**
+   `build/<name>/graph_data.zig` + manifest. Records the scenario TOML's own
+   sha256 in provenance.
+2. `scripts/build_scenario.py build/<name> --scenario <scenario.toml>` — the
+   **zig** stage. Pre-flight zig check (exit 5), build flags from `[compile]`
+   (CLI > TOML > default), `zig build -Dgraph=<abs>`, then **verifies before
+   stamping**: re-gens the graph in-process and byte-compares manifests
+   (integrity — the `.so` was built from exactly this scenario's graph), then
+   runs the ctypes oracle (`shinro_step` vs `interpret()` on N random inputs,
+   tol 1e-12 / 1e-3 for QP), then `stamp_deployment` + `verify_deployment`.
+
+The scenario TOML's `[compile]` section is the build spec:
+
+```toml
+[compile]
+n_x = 3
+n_u = 3
+# optional:
+optimize = "debug"        # "debug" | "release" (→ -Doptimize=ReleaseFast)
+# target = "aarch64-linux-gnu"   # absent = native
+# solver_dir = "runtime/codegen/emosqp"  # required for QP (MPC) graphs
+```
+
+Exit codes: 0 ok · 1 untraceable · 2 usage/config · 3 oracle mismatch · 4
+build/verify failure · 5 zig missing. Omitting `--scenario` on the build
+script is allowed but prints a loud warning — the artifact is built and
+stamped but **not** oracle-verified.
+
+Component swaps are just TOML edits: change `[controller]`/`[estimator]` and
+re-run `make compile`. The graph is regenerated from scratch (determinism is
+the increment mechanism); the C-ABI port layout may change, which the gen
+stage prints and the manifest records. A controller input name that doesn't
+map to a known role, an untraceable op, or a QP graph without a matching bake
+all fail loudly rather than silently mis-wiring.

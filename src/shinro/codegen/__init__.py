@@ -24,6 +24,7 @@ Public API:
 See ``lab-notes/daily/`` for the design narrative.
 """
 
+from shinro.codegen.build import build_composed_graph
 from shinro.codegen.interpreter import interpret, interpret_step
 from shinro.codegen.lower_zig import lower_zig
 from shinro.codegen.ops import available_ops, has_op, register_op
@@ -39,6 +40,7 @@ __all__ = [
     "TraceBackend",
     "Tracer",
     "available_ops",
+    "build_composed_graph",
     "has_op",
     "interpret",
     "interpret_step",
