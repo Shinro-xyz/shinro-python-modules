@@ -14,16 +14,18 @@ import json
 import shutil
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
 
-from scripts.gen_scenario import load_scenario
+from scripts.gen_scenario import _COMPILE_KEYS, load_scenario
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 GEN = REPO_ROOT / "scripts" / "gen_scenario.py"
 BUILD = REPO_ROOT / "scripts" / "build_scenario.py"
 SCENARIO = REPO_ROOT / "tests" / "integration" / "scenarios" / "base_tracking.toml"
+TEMPLATE = REPO_ROOT / "src" / "shinro" / "configs" / "scenarios" / "_template.toml"
 
 
 def _run(script: Path, *args: str) -> subprocess.CompletedProcess:
@@ -83,6 +85,24 @@ def test_gen_scenario_exit_codes(tmp_path):
     assert _run(GEN, str(tmp_path / "missing.toml"), "--out", str(tmp_path)).returncode == 2
     bad = _scenario_toml(tmp_path, '[compile]\nn_x = 3\nn_u = 3\noptimize = "release-safe"\n')
     assert _run(GEN, str(bad), "--out", str(tmp_path)).returncode == 2
+
+
+# ─── scenario template drift guard ──────────────────────────────────────────
+
+
+def test_scenario_template_stays_in_sync_with_compile_schema():
+    """The template must parse, use only known [compile] keys, and document
+    every schema key (active or commented) — so a schema addition forces the
+    template to teach it."""
+    text = TEMPLATE.read_text()
+    cfg = tomllib.loads(text)
+
+    compile_cfg = cfg.get("compile", {})
+    assert set(compile_cfg) <= _COMPILE_KEYS, (
+        f"template [compile] has keys outside the schema: {set(compile_cfg) - _COMPILE_KEYS}"
+    )
+    for key in _COMPILE_KEYS:
+        assert key in text, f"template does not document [compile] key '{key}'"
 
 
 # ─── e2e build stage (zig-gated) ───────────────────────────────────────────

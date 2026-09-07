@@ -258,3 +258,7 @@ the increment mechanism); the C-ABI port layout may change, which the gen
 stage prints and the manifest records. A controller input name that doesn't
 map to a known role, an untraceable op, or a QP graph without a matching bake
 all fail loudly rather than silently mis-wiring.
+
+Start from `src/shinro/configs/scenarios/_template.toml` — a commented
+scenario skeleton with placeholders for your robot's controller, estimator,
+and `[compile]` dims. Copy it, fill in the values, and run `make compile`.

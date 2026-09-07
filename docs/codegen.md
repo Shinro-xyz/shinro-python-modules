@@ -320,6 +320,10 @@ values are loud errors. Component swaps are TOML edits: change
 regenerated from scratch, and the C-ABI port layout (printed by the gen stage,
 recorded in the manifest) is the only thing the host must re-pack.
 
+Start from `src/shinro/configs/scenarios/_template.toml` — a commented
+scenario skeleton with placeholders for your robot's controller, estimator,
+and `[compile]` dims. Copy it, fill in the values, and run `make compile`.
+
 ### Build manifest (audit trail)
 
 Every build writes a deterministic report next to the artifact

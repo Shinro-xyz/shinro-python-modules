@@ -1,0 +1,57 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Scenario template — copy me, fill in your robot's values.
+#
+# A scenario declares every role of a control loop in one TOML. Two consumers
+# read this file:
+#
+#   • Simulation:  ScenarioFactory.build() + run_scenario() — needs the
+#     [sim] / [plant] / [trajectory] sections at the bottom.
+#   • Compilation: make compile SCENARIO=<this file> — needs ONLY
+#     [controller], [estimator], and [compile]. Delete the sim block for a
+#     compile-only robot (no MuJoCo, no LeKiwi).
+#
+# Sections marked REQUIRED are needed by both pipelines. Values in angle
+# brackets (<...>) are placeholders — replace them with your robot's values.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# REQUIRED — the controller. `type` is any registered controller
+# (PID, LQR, MPC_LTI, MPC_DeltaU, ...); `config` is its TOML.
+[controller]
+type = "PID"
+config = "configs/controllers/<my_controller>.toml"
+
+# REQUIRED — the estimator. `type` is any registered estimator
+# (KalmanFilter, LuenbergerObserver, ...); `config` is its TOML.
+[estimator]
+type = "KalmanFilter"
+config = "configs/estimators/<my_estimator>.toml"
+
+# OPTIONAL — input clipping applied to the controller output. Both pipelines
+# read this; omit the whole section for unconstrained control.
+[scenario]
+name = "<my_robot>"
+input_limits = { min = [-1.0, -1.0], max = [1.0, 1.0] }
+
+# REQUIRED for compilation — the build spec for `make compile`.
+# n_x / n_u are your plant's state / input dimensions. They are BAKED into
+# the graph at trace time ("fixed as compiled"): change them → re-run
+# `make compile`. The estimator/controller configs must agree with these dims.
+[compile]
+n_x = 2                 # <fill in: plant state dimension>
+n_u = 2                 # <fill in: plant input dimension>
+optimize = "debug"        # "debug" | "release" (release → -Doptimize=ReleaseFast)
+# target = "aarch64-linux-gnu"   # cross-compile for the robot board; omit = native
+# solver_dir = "runtime/codegen/emosqp"  # REQUIRED for MPC controllers only
+
+# ── SIMULATION-ONLY — delete this block for a compile-only robot ─────────────
+# [physics]
+# free_joint = false
+# [plant]
+# name = "base"
+# [sim]
+# config = "robot_config.toml"
+# [trajectory]
+# type = "waypoints"
+# config = "configs/trajectories/<my_trajectory>.toml"
+# [noise.measurement]
+# std = [0.01]
