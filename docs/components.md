@@ -57,8 +57,8 @@ implement `estimate(measurement, control_input)` and `reset()`.
 
 | Registered name | Class | File | Config |
 |-----------------|-------|------|--------|
-| `KalmanFilter` | `KalmanFilter` | `estimators/kalman_filter.py` | `configs/estimators/kalman_base.toml`, `kalman_arm.toml` |
-| `LuenbergerObserver` | `LuenbergerObserver` | `estimators/luenberger_observer.py` | `configs/estimators/luenberger_base.toml` |
+| `KalmanFilter` | `KalmanFilter` | `estimators/kalman_filter.py` | `configs/estimators/kalman_base.toml`, `kalman_arm.toml`, `kalman_pendulum.toml`, `kalman_cartpole.toml` |
+| `LuenbergerObserver` | `LuenbergerObserver` | `estimators/luenberger_observer.py` | `configs/estimators/luenberger_base.toml`, `luenberger_arm.toml`, `luenberger_pendulum.toml`, `luenberger_cartpole.toml` |
 
 ## Trajectories
 

@@ -192,6 +192,25 @@ def _build_pid_composed_graph():
     return compose(kf_graph, pid_graph, plant_dims={"n_x": 3, "n_u": 3}, input_limits=limits)
 
 
+def _build_luenberger_composed_graph():
+    """Luenberger + LQR composed graph via the generic builder.
+
+    Exercises the estimator-swap path end to end: the two-pass trace discovers
+    the Luenberger observer's recurrent ``x_hat`` (no ``P`` covariance, unlike
+    the KF), and the composed graph is solver-free (no ``.solve_qp`` node).
+    """
+    from shinro.codegen.build import build_composed_graph
+
+    limits = (np.array([-0.5, -0.5, -1.0]), np.array([0.5, 0.5, 1.0]))
+    return build_composed_graph(
+        estimator_config="configs/estimators/luenberger_base.toml",
+        controller_config="configs/controllers/lqr_base.toml",
+        n_x=3,
+        n_u=3,
+        input_limits=limits,
+    )
+
+
 def _build_mpc_deltau_composed_graph():
     """KF + MPC_DeltaU composed graph (n_vars=45 bake required).
 
@@ -236,6 +255,12 @@ def mpc_composed_so(tmp_path_factory):
 def pid_composed_so(tmp_path_factory):
     """Build the .so from the composed KF + PID graph (recurrent integral + anti-windup)."""
     return _build_so(_build_pid_composed_graph(), tmp_path_factory.mktemp("zig-build-pid-composed"))
+
+
+@pytest.fixture(scope="session")
+def luenberger_composed_so(tmp_path_factory):
+    """Build the .so from the composed Luenberger + LQR graph (recurrent x_hat)."""
+    return _build_so(_build_luenberger_composed_graph(), tmp_path_factory.mktemp("zig-build-luenberger-composed"))
 
 
 @pytest.fixture(scope="session")
@@ -660,6 +685,61 @@ class TestPidComposedOracle:
         assert saw_saturation, "oracle never saturated — anti-windup path untested"
         assert max_err < 1e-10, (
             f".so diverged from live KF+PID over 100 ticks: max abs err = {max_err:.3e}"
+        )
+
+
+class TestLuenbergerComposedOracle:
+    """The composed Luenberger + LQR .so matches a live numpy closed loop.
+
+    The estimator-swap regression test: the Luenberger observer's recurrent
+    ``x_hat`` must thread across ticks (the two-pass trace discovers it, no
+    ``P`` covariance like the KF), and the composed graph must be solver-free.
+    """
+
+    def test_so_matches_live_luenberger_lqr(self, luenberger_composed_so):
+        lib, cg = luenberger_composed_so
+        rng = np.random.default_rng(37)
+        n_out, n_state = _output_split(cg)
+        sl = _state_slices(cg)
+
+        luen = EstimatorFactory("configs/estimators/luenberger_base.toml").create(backend=NumpyBackend())
+        lqr = ControllerFactory("configs/controllers/lqr_base.toml").create(backend=NumpyBackend())
+        limits = (np.array([-0.5, -0.5, -1.0]), np.array([0.5, 0.5, 1.0]))
+
+        x_hat_so = np.zeros((3, 1))
+        x_hat_np = np.zeros((3, 1))
+        u_prev_so = np.zeros(3)
+        u_prev_np = np.zeros(3)
+
+        max_err = 0.0
+        for _ in range(100):
+            y = rng.normal(0.0, 0.1, (3,))
+            x_ref = rng.normal(0.0, 0.05, (3,))
+
+            # Live numpy oracle: Luenberger step, then LQR with its own state.
+            luen.x_hat = x_hat_np.copy()
+            x_hat_np = luen.estimate(y.reshape(-1, 1), u_prev_np.reshape(-1, 1))
+            u_np = np.clip(lqr.compute(x_hat_np.ravel(), x_ref), limits[0], limits[1])
+
+            inputs = _pack_arrays(
+                cg,
+                {
+                    "y": y,
+                    "x_ref": x_ref,
+                    "u_prev": u_prev_so,
+                    "state_x_hat": x_hat_so.ravel(),
+                },
+            )
+            out, state = _step(lib, cg, inputs, n_out, n_state)
+            max_err = max(max_err, float(np.max(np.abs(out - u_np))))
+
+            # Each loop evolves its own state.
+            x_hat_so = state[sl["state_x_hat"][0] : sl["state_x_hat"][1]].reshape(3, 1)
+            u_prev_so = out
+            u_prev_np = u_np
+
+        assert max_err < 1e-10, (
+            f".so diverged from live Luenberger+LQR over 100 ticks: max abs err = {max_err:.3e}"
         )
 
 

@@ -19,7 +19,16 @@ COMMANDS = {
     "--quick": [
         "python3", "-m", "pytest",
         "tests/test_mcp_server.py",
-        "-v", "--tb=short", "-k", "not test_very_large_horizon_mpc_times_out",
+        "tests/test_controllers.py",
+        "tests/test_estimators.py",
+        "tests/test_trajectories.py",
+        "tests/test_plants.py",
+        "tests/test_factories.py",
+        "tests/test_components.py",
+        "tests/test_array_backend.py",
+        "tests/test_batched_adapter.py",
+        "tests/test_controllability_checker.py",
+        "-v", "--tb=short",
     ],
     "--func":  [
         "python3", "-m", "pytest",

@@ -1,4 +1,6 @@
 
+from pathlib import Path
+
 import pytest
 
 
@@ -220,3 +222,38 @@ class TestFactoryBackendPassthrough:
         factory = EstimatorFactory(str(config))
         est = factory.create(backend=bk)
         assert est.bk is bk
+
+
+class TestEstimatorConfigParity:
+    """Every shipped KalmanFilter config has a matching LuenbergerObserver twin.
+
+    The integration suite exercises both estimators per plant (base, arm,
+    pendulum, cartpole). A new ``kalman_*.toml`` without a ``luenberger_*.toml``
+    twin would silently leave that plant's Luenberger variant untested, so this
+    drift guard fails loudly instead.
+    """
+
+    ESTIMATOR_DIR = (
+        Path(__file__).resolve().parents[1] / "src" / "shinro" / "configs" / "estimators"
+    )
+
+    def test_every_kalman_config_has_luenberger_twin(self):
+        """Each kalman_<X>.toml has a luenberger_<X>.toml with matching dt and dims."""
+        import tomllib
+
+        kalman_cfgs = sorted(self.ESTIMATOR_DIR.glob("kalman_*.toml"))
+        assert kalman_cfgs, f"no kalman configs found in {self.ESTIMATOR_DIR}"
+        for kf_path in kalman_cfgs:
+            twin = self.ESTIMATOR_DIR / f"luenberger_{kf_path.stem[len('kalman_'):]}.toml"
+            assert twin.exists(), (
+                f"{kf_path.name} has no Luenberger twin {twin.name} — "
+                "add one so the plant's Luenberger variant stays tested."
+            )
+            with open(kf_path, "rb") as f:
+                kf = tomllib.load(f)
+            with open(twin, "rb") as f:
+                lue = tomllib.load(f)
+            assert lue["dt"] == kf["dt"], f"{twin.name} dt differs from {kf_path.name}"
+            assert len(lue["observer_gain"]) == len(kf["process_noise"]), (
+                f"{twin.name} observer_gain dims differ from {kf_path.name} process_noise"
+            )

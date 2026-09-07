@@ -8,8 +8,8 @@ The suite is built on **pytest**. Configuration lives in [`pyproject.toml`](../p
 
 - `testpaths = ["tests"]` — pytest runs the `tests/` directory by default.
 - `python_files = ["test_*.py"]` — only files named `test_*.py` are collected.
-- `pythonpath = ["src"]` — the `src/` layout is on the import path, so components are imported as `shinro.*` (e.g. `from shinro.plants.armrobot import ArmRobot`).
-- `addopts = "-m 'not integration'"` — integration tests (marked `@pytest.mark.integration`) are excluded by default; run them with `make test-integration` (see below).
+- `pythonpath = ["src", "."]` — the `src/` layout is on the import path, so components are imported as `shinro.*` (e.g. `from shinro.plants.armrobot import ArmRobot`); `"."` lets config paths resolve from the repo root.
+- `addopts = "-m 'not integration and not mcp'"` — integration and MCP-functional tests (marked `@pytest.mark.integration` / `@pytest.mark.mcp`) are excluded by default; run them with `make test-integration` / `make test-functional` (see below).
 
 All test files live in `tests/`, with one file per component group. Integration tests live in
 `tests/integration/`. There is also a standalone demo script, `demo_codegen.py`, at the repo root.
@@ -81,7 +81,7 @@ python3 run_tests.py --int       # integration suite (MuJoCo required, opt-in)
 ## Integration Tests
 
 Tests under `tests/integration/` run full closed-loop simulations against MuJoCo and are marked
-`@pytest.mark.integration`. Because pytest is configured with `addopts = "-m 'not integration'"`,
+`@pytest.mark.integration`. Because pytest is configured with `addopts = "-m 'not integration and not mcp'"`,
 they are **excluded by default** — run them explicitly:
 
 ```bash
@@ -94,20 +94,10 @@ suite, and they are intentionally not part of CI.
 
 ## CI
 
-`.github/workflows/ci.yml` runs on push/PR to `main`:
-
-1. Checkout + set up Python 3.12.
-2. `pip install -r requirements.txt` and `requirements-dev.txt`.
-3. `pip install torch` (CPU index) so torch-backend tests run.
-4. `pytest tests/ -v --tb=short` — no keyword filter.
-
-To run the CI test job locally with [act](https://github.com/nektos/act):
-
-```bash
-act -j test --container-architecture linux/amd64
-```
-
-(the `test` job name is `test` in `ci.yml`).
+There is currently **no CI configuration in this repository** — the `.github/`
+directory is absent. The `addopts` marker exclusions apply to any plain
+`pytest tests/` invocation, so integration and MCP-functional tests are opt-in
+everywhere (CI or local) unless the runner clears `addopts` explicitly.
 
 ## Fixtures
 
@@ -138,3 +128,10 @@ The tests fall into four groups:
 3. Update `test-quick` in the Makefile and `--quick` in `run_tests.py` if the new group is unit-level.
 4. If the tests are full-loop physics-backed, put them in `tests/integration/` and mark them
    `@pytest.mark.integration` instead.
+
+## Agent Workflow
+
+For the agent-facing operational guide (which suite to run for a given change,
+the silent-skip gotchas, and how to interpret results), load the
+[`shinro-testing` skill](../.opencode/skills/shinro-testing/SKILL.md). This
+document is the human reference; the skill is the decision procedure.

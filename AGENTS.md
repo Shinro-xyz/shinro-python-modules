@@ -116,3 +116,7 @@ file on push to main.)
 ## Porting Numpy Scripts to the Framework
 
 See the `port-numpy-component` skill (`.opencode/skills/port-numpy-component/SKILL.md`) — it loads on-demand via the `skill` tool when porting a raw numpy implementation into the framework.
+
+## Running and Debugging Tests
+
+See the `shinro-testing` skill (`.opencode/skills/shinro-testing/SKILL.md`) — it loads on-demand via the `skill` tool when running the suite, debugging a test failure, or verifying a change. It encodes the marker/zig/optional-extra silent-skip gotchas and which Make target to use per change surface.
