@@ -144,9 +144,9 @@ class PIDController(Controller):
                 bk.array(output_limits["max"]),
             )
         return cls(
-            kp=bk.from_numpy(config.get("kp", [1.0] * n)),
-            ki=bk.from_numpy(config.get("ki", [0.0] * n)),
-            kd=bk.from_numpy(config.get("kd", [0.0] * n)),
+            kp=bk.array(config.get("kp", [1.0] * n)),
+            ki=bk.array(config.get("ki", [0.0] * n)),
+            kd=bk.array(config.get("kd", [0.0] * n)),
             dt=config["dt"],
             output_limits=limits,
             backend=bk,

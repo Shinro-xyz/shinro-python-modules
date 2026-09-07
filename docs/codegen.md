@@ -67,6 +67,7 @@ The pipeline lives in `src/shinro/codegen/`; the Zig VM lives in `runtime/`
 | `demo_codegen.py` (repo root) | Runnable demo: traces KF+LQR for the base and cartpole plants, composes, and verifies each stage against a live numpy loop. |
 | `runtime/` (Zig) | `build.zig` (build script), `lower.zig` (comptime-unrolled VM), `linalg.zig` (shared linear-algebra kernels), `graph_data.zig` (generated graph). |
 | `scripts/gen_base.py` | Serializes the `base_tracking` composed graph to `runtime/graph_data.zig` (the `make zig-gen` target). |
+| `scripts/trace_component.py` | Standalone "does my component trace?" gate: inventory of registered components, inferred trace contract (`--list`), and trace + interpret-vs-live oracle check (bit-exact) for any config TOML. |
 
 ## The tracing model
 
