@@ -26,42 +26,25 @@ pub fn build(b: *std.Build) void {
     // (runtime/graph_data.zig + runtime/codegen/emosqp/); passing either lets
     // a build consume a different graph/solver pair without clobbering the
     // shared paths (e.g. the MPC_DeltaU bake, n_vars=45).
+    //
+    // The graph declares whether it actually contains a .solve_qp node. For
+    // non-QP graphs (LQR, PID, ...) the generated OSQP C sources are omitted
+    // from the shared library entirely.
     const graph_path = b.option(
         []const u8,
         "graph",
         "Path to the generated graph_data.zig (default: graph_data.zig)",
     ) orelse "graph_data.zig";
-    const solver_dir = b.option(
+    const solver_dir_opt = b.option(
         []const u8,
         "solver_dir",
         "Directory of the baked OSQP codegen solver (default: codegen/emosqp)",
-    ) orelse "codegen/emosqp";
-
-    // Generated OSQP codegen static solver (runtime/codegen/emosqp/ by
-    // default). The deployment path: the generated C is compiled straight
-    // into the binaries (no libosqp.so, no malloc). Regenerated for a
-    // specific MPC problem by scripts/gen_emosqp_test.py — the `.solve_qp`
-    // VM op's q length must match the baked n_vars (enforced at comptime via
-    // solver_meta.zig).
-    const emosqp_include_public = lazyPath(b, b.pathJoin(&.{ solver_dir, "inc", "public" }));
-    const emosqp_include_private = lazyPath(b, b.pathJoin(&.{ solver_dir, "inc", "private" }));
-    const emosqp_inc = lazyPath(b, solver_dir);
-    const emosqp_srcs = [_][]const u8{
-        b.pathJoin(&.{ solver_dir, "workspace.c" }),
-        b.pathJoin(&.{ solver_dir, "src", "algebra_libs.c" }),
-        b.pathJoin(&.{ solver_dir, "src", "auxil.c" }),
-        b.pathJoin(&.{ solver_dir, "src", "csc_math.c" }),
-        b.pathJoin(&.{ solver_dir, "src", "csc_utils.c" }),
-        b.pathJoin(&.{ solver_dir, "src", "error.c" }),
-        b.pathJoin(&.{ solver_dir, "src", "kkt.c" }),
-        b.pathJoin(&.{ solver_dir, "src", "matrix.c" }),
-        b.pathJoin(&.{ solver_dir, "src", "osqp_api.c" }),
-        b.pathJoin(&.{ solver_dir, "src", "qdldl.c" }),
-        b.pathJoin(&.{ solver_dir, "src", "qdldl_interface.c" }),
-        b.pathJoin(&.{ solver_dir, "src", "scaling.c" }),
-        b.pathJoin(&.{ solver_dir, "src", "util.c" }),
-        b.pathJoin(&.{ solver_dir, "src", "vector.c" }),
-    };
+    );
+    const has_solve_qp = graphHasSolveQp(b, graph_path);
+    const solver_dir: ?[]const u8 = if (has_solve_qp)
+        (solver_dir_opt orelse "codegen/emosqp")
+    else
+        null;
 
     // The Zig-side emosqp oracle test is pinned to the SHIPPED default bake
     // (runtime/codegen/emosqp/): its oracle vectors (tests/emosqp_data.zig)
@@ -94,7 +77,8 @@ pub fn build(b: *std.Build) void {
     // lower.zig is the module root; @import("linalg.zig") and @import("qp.zig")
     // resolve next to it, while the generated graph and the bake's n_vars
     // arrive as anonymous imports selected by -Dgraph / -Dsolver_dir. The
-    // `.solve_qp` op compiles the codegen static solver into the library.
+    // `.solve_qp` op compiles the codegen static solver into the library,
+    // but only when the lowered graph contains that op.
     const lib_mod = b.createModule(.{
         .root_source_file = b.path("lower.zig"),
         .target = target,
@@ -105,15 +89,43 @@ pub fn build(b: *std.Build) void {
         .strip = optimize != .Debug,
     });
     lib_mod.addAnonymousImport("graph_data", .{ .root_source_file = lazyPath(b, graph_path) });
-    lib_mod.addAnonymousImport("solver_meta", .{ .root_source_file = lazyPath(b, b.pathJoin(&.{ solver_dir, "solver_meta.zig" })) });
-    lib_mod.addIncludePath(emosqp_include_public);
-    lib_mod.addIncludePath(emosqp_include_private);
-    lib_mod.addIncludePath(emosqp_inc);
-    // addCSourceFile (not addCSourceFiles) so an absolute solver_dir (e.g. a
-    // pytest tmp bake) is accepted — addCSourceFiles requires relative paths.
-    for (emosqp_srcs) |src| {
-        lib_mod.addCSourceFile(.{ .file = lazyPath(b, src), .flags = &.{} });
+
+    if (solver_dir) |dir| {
+        // Generated OSQP codegen static solver. The deployment path compiles
+        // the generated C straight into the binary (no libosqp.so, no malloc).
+        // The `.solve_qp` VM op's q length must match the baked n_vars
+        // (enforced at comptime via solver_meta.zig).
+        const emosqp_include_public = lazyPath(b, b.pathJoin(&.{ dir, "inc", "public" }));
+        const emosqp_include_private = lazyPath(b, b.pathJoin(&.{ dir, "inc", "private" }));
+        const emosqp_inc = lazyPath(b, dir);
+        const emosqp_srcs = [_][]const u8{
+            b.pathJoin(&.{ dir, "workspace.c" }),
+            b.pathJoin(&.{ dir, "src", "algebra_libs.c" }),
+            b.pathJoin(&.{ dir, "src", "auxil.c" }),
+            b.pathJoin(&.{ dir, "src", "csc_math.c" }),
+            b.pathJoin(&.{ dir, "src", "csc_utils.c" }),
+            b.pathJoin(&.{ dir, "src", "error.c" }),
+            b.pathJoin(&.{ dir, "src", "kkt.c" }),
+            b.pathJoin(&.{ dir, "src", "matrix.c" }),
+            b.pathJoin(&.{ dir, "src", "osqp_api.c" }),
+            b.pathJoin(&.{ dir, "src", "qdldl.c" }),
+            b.pathJoin(&.{ dir, "src", "qdldl_interface.c" }),
+            b.pathJoin(&.{ dir, "src", "scaling.c" }),
+            b.pathJoin(&.{ dir, "src", "util.c" }),
+            b.pathJoin(&.{ dir, "src", "vector.c" }),
+        };
+
+        lib_mod.addAnonymousImport("solver_meta", .{ .root_source_file = lazyPath(b, b.pathJoin(&.{ dir, "solver_meta.zig" })) });
+        lib_mod.addIncludePath(emosqp_include_public);
+        lib_mod.addIncludePath(emosqp_include_private);
+        lib_mod.addIncludePath(emosqp_inc);
+        // addCSourceFile (not addCSourceFiles) so an absolute solver_dir (e.g.
+        // a pytest tmp bake) is accepted — addCSourceFiles requires relative paths.
+        for (emosqp_srcs) |src| {
+            lib_mod.addCSourceFile(.{ .file = lazyPath(b, src), .flags = &.{} });
+        }
     }
+
     const lib = b.addLibrary(.{
         .name = "base",
         .root_module = lib_mod,
@@ -134,6 +146,8 @@ pub fn build(b: *std.Build) void {
 
     // OSQP codegen static solver test — compiles the generated C
     // (runtime/codegen/emosqp/) into the test and drives the static solver.
+    // This remains in the test step even when the deployment graph is
+    // solver-free; it verifies the shipped default MPC bake itself.
     const emosqp_test_mod = b.createModule(.{
         .root_source_file = b.path("tests/emosqp.zig"),
         .target = target,
@@ -175,6 +189,23 @@ fn readFile(b: *std.Build, path: []const u8) []const u8 {
     };
 }
 
+/// Detect whether the lowered graph contains a `.solve_qp` node. The
+/// generator emits an explicit bool so build.zig does not parse the node
+/// table itself. Fail hard on graphs emitted by an older lower_zig.
+fn graphHasSolveQp(b: *std.Build, graph_path: []const u8) bool {
+    const text = readFile(b, resolvePath(b, graph_path));
+    const marker = "pub const has_solve_qp = ";
+    const pos = std.mem.indexOf(u8, text, marker) orelse {
+        std.debug.print(
+            "error: {s} has no has_solve_qp flag; regenerate it with shinro.codegen.lower_zig\n",
+            .{graph_path},
+        );
+        @panic("outdated graph_data.zig");
+    };
+    const after = text[pos + marker.len ..];
+    return std.mem.startsWith(u8, after, "true");
+}
+
 /// Lowercase hex sha256 of a file's bytes ("" if unreadable).
 fn sha256Hex(b: *std.Build, path: []const u8) []const u8 {
     const bytes = readFile(b, path);
@@ -199,6 +230,14 @@ fn jsonEscape(b: *std.Build, s: []const u8) []const u8 {
         }
     }
     return out.items;
+}
+
+/// Render an optional build path as a JSON string or JSON null.
+fn jsonOptionalString(b: *std.Build, value: ?[]const u8) []const u8 {
+    return if (value) |v|
+        std.fmt.allocPrint(b.allocator, "\"{s}\"", .{jsonEscape(b, v)}) catch @panic("OOM")
+    else
+        "null";
 }
 
 /// Parse the bake's solver_meta.zig into a JSON object string fragment
@@ -268,17 +307,24 @@ fn writeManifest(
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     graph_path: []const u8,
-    solver_dir: []const u8,
+    solver_dir: ?[]const u8,
 ) void {
     const target_triple = target.result.zigTriple(b.allocator) catch @panic("OOM");
     const optimize_name = @tagName(optimize);
     const zig_version = @import("builtin").zig_version_string;
 
     const graph_sha = sha256Hex(b, resolvePath(b, graph_path));
-    const ws = std.fs.path.join(b.allocator, &.{ resolvePath(b, solver_dir), "workspace.c" }) catch @panic("OOM");
-    const solver_sha = sha256Hex(b, ws);
+    const solver_dir_text = jsonOptionalString(b, solver_dir);
+    const solver_sha_text = if (solver_dir) |dir| blk: {
+        const ws = std.fs.path.join(b.allocator, &.{ resolvePath(b, dir), "workspace.c" }) catch @panic("OOM");
+        break :blk std.fmt.allocPrint(b.allocator, "\"{s}\"", .{sha256Hex(b, ws)}) catch @panic("OOM");
+    } else "null";
     const graph_json = graphManifestJson(b, graph_path);
-    const solver_json = solverMetaJson(b, solver_dir);
+    const solver_json = if (solver_dir) |dir| solverMetaJson(b, dir) else "";
+    const solver_field = if (solver_json.len > 0)
+        std.fmt.allocPrint(b.allocator, "{{ {s} }}", .{solver_json}) catch @panic("OOM")
+    else
+        "null";
     const graph_field = if (graph_json.len > 0) graph_json else "null";
 
     const json_text = std.fmt.allocPrint(
@@ -292,11 +338,11 @@ fn writeManifest(
             "  \"float_type\": \"f64\",\n" ++
             "  \"provenance\": {{\n" ++
             "    \"graph_path\": \"{s}\",\n" ++
-            "    \"solver_dir\": \"{s}\",\n" ++
+            "    \"solver_dir\": {s},\n" ++
             "    \"graph_sha256\": \"{s}\",\n" ++
-            "    \"solver_sha256\": \"{s}\"\n" ++
+            "    \"solver_sha256\": {s}\n" ++
             "  }},\n" ++
-            "  \"solver\": {{ {s} }},\n" ++
+            "  \"solver\": {s},\n" ++
             "  \"graph\": {s}\n" ++
             "}}\n",
         .{
@@ -305,10 +351,10 @@ fn writeManifest(
             if (optimize == .Debug) "false" else "true",
             jsonEscape(b, zig_version),
             jsonEscape(b, graph_path),
-            jsonEscape(b, solver_dir),
+            solver_dir_text,
             graph_sha,
-            solver_sha,
-            solver_json,
+            solver_sha_text,
+            solver_field,
             graph_field,
         },
     ) catch @panic("OOM");

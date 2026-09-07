@@ -17,6 +17,7 @@ pub const Node = struct {
 };
 
 pub const buf_len = 318;
+pub const has_solve_qp = false;
 pub const n_outputs = 1;
 
 pub const offsets = [_]usize{

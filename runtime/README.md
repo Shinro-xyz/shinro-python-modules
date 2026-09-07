@@ -12,12 +12,12 @@ and the XLA-fidelity model.
 
 | File | Role |
 |------|------|
-| `build.zig` | Build script. Produces `libbase.so` from `lower.zig` + `graph_data.zig`, compiling the generated OSQP codegen solver into it. |
+| `build.zig` | Build script. Produces `libbase.so` from `lower.zig` + `graph_data.zig`; it links the generated OSQP codegen solver **only when the graph contains `.solve_qp`**. |
 | `build.zig.zon` | Package/dependency manifest for the Zig build. |
 | `lower.zig` | The comptime VM. Exports the `shinro_step` C-ABI function: one `inline for` over the node table, dispatching each node's op with `rows`/`cols` as comptime constants. |
 | `linalg.zig` | Shared linear-algebra kernels (matmul, elementwise ops, `inv`, ...) used by the VM. |
 | `qp.zig` | The `.solve_qp` op wrapper: drives the generated static OSQP solver (update q → solve → copy solution out). |
-| `graph_data.zig` | **Generated** — the graph as Zig constants (op enum, node table, offsets, `const_blob`). Produced by `scripts/gen_base.py` / `shinro.codegen.lower_zig`. Not hand-edited. |
+| `graph_data.zig` | **Generated** — the graph as Zig constants (op enum, node table, offsets, `const_blob`, `has_solve_qp`). Produced by `scripts/gen_base.py` / `shinro.codegen.lower_zig`. Not hand-edited. |
 | `codegen/emosqp/` | **Generated** — the statically-allocated OSQP solver for the base MPC problem (no malloc, no libosqp). Emitted by `scripts/gen_emosqp_test.py`. |
 | `tests/linalg.zig` | Zig unit tests for the linear-algebra kernels. |
 | `tests/emosqp.zig` | Handwritten Zig test driving the codegen static solver, compared against the Python oracle. |
@@ -45,6 +45,11 @@ problem data (P, A, l, u) and the pre-factorized KKT matrix are baked in at
 generation time — only the linear cost `q` is updated per tick, so there is no
 per-tick heap allocator and no `libosqp.so` dependency. The op's output size
 must match the baked problem's `n_vars`.
+
+The OSQP C code is **graph-conditional**: `lower_zig` writes
+`pub const has_solve_qp` into `graph_data.zig`, and `build.zig` adds the OSQP
+sources, headers, and `solver_meta` module only for QP graphs. LQR, PID, and
+other non-QP graphs therefore produce a smaller solver-free `.so`.
 
 ## Building and testing
 
@@ -97,7 +102,8 @@ zig build --build-file runtime/build.zig --prefix build/ \
 - `-Dsolver_dir` — the baked OSQP codegen solver tree (default
   `codegen/emosqp`). The C sources and include paths are rooted there, and the
   bake's `solver_meta.zig` (`pub const n_vars`) is imported for the comptime
-  check below.
+  check below. It is used **only when the graph declares `has_solve_qp =
+  true`**; for LQR/PID graphs it is ignored and the solver is omitted.
 
 This is how the MPC_DeltaU `.so` coexists with the shipped MPC_LTI one: bake
 DeltaU into a second directory (`scripts/gen_emosqp_test.py --config
@@ -123,10 +129,11 @@ browse which controller combinations were built and when:
 
 - `<prefix>/lib/libbase.manifest.json` — the report: build facts (resolved
   target triple, optimize mode, zig version, libc, `float_type`), provenance
-  (`-Dgraph`/`-Dsolver_dir` paths + sha256 of `graph_data.zig` and the bake's
-  `workspace.c`), solver facts (baked `n_vars`/`n_cons`/`eps`/`config` from
+  (`-Dgraph`/`-Dsolver_dir` paths + sha256 of `graph_data.zig` and, for QP
+  graphs, the bake's `workspace.c`), solver facts (`null` for solver-free
+  graphs; otherwise baked `n_vars`/`n_cons`/`eps`/`config` from
   `solver_meta.zig`), and the graph content (op histogram, port layout,
-  `buf_len`, the `.solve_qp` n_vars the graph expects).
+  `buf_len`, `has_solve_qp`, and the `.solve_qp` n_vars the graph expects).
 - `<prefix>/manifests/<UTC>-<graphsha8>.json` — the archive copy. The
   timestamp lives in the **filename only**, never in the report, so the report
   is a pure function of its inputs: identical inputs ⇒ byte-identical report.

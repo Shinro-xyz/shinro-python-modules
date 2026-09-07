@@ -46,7 +46,8 @@ def _build_so(composed, build_dir, graph_path=None, solver_dir=None):
     in one session without clobbering each other. ``solver_dir`` selects the
     baked OSQP solver to compile in (default: the shipped
     ``runtime/codegen/emosqp/`` bake) — pass a DeltaU bake to build a graph
-    whose ``.solve_qp`` node has n_vars=45.
+    whose ``.solve_qp`` node has n_vars=45. Graphs without a ``.solve_qp``
+    node (LQR, PID, ...) are built solver-free.
     """
     if shutil.which("zig") is None:
         pytest.skip("zig not on PATH; skipping Zig lowering oracle")
@@ -441,6 +442,7 @@ def test_lower_zig_emits_valid_data_table():
     assert "pub const nodes = [_]Node{" in text
     assert "pub const const_blob" in text
     assert "pub const buf_len" in text
+    assert "pub const has_solve_qp = false;" in text
     assert "pub const n_outputs = 1;" in text
     assert all(op in text for op in ("matmul", "inv", "clip", "reshape"))
 
@@ -812,17 +814,16 @@ class TestBuildManifest:
 
         prov = report["provenance"]
         assert prov["graph_sha256"]
-        assert prov["solver_sha256"]
+        assert prov["solver_sha256"] is None
 
-        # solver facts from the bake
-        assert report["solver"]["n_vars"] == 30
-        assert report["solver"]["n_cons"] == 60
-        assert report["solver"]["config"].endswith("mpc_lti_base.toml")
+        # no solver facts: the base graph has no bake compiled into the .so
+        assert report["solver"] is None
 
         # graph facts: op histogram matches the composed graph, ports match
         g = report["graph"]
         assert g["nodes_total"] == len(build_base_graph().graph.nodes)
         assert g["buf_len"] > 0
+        assert g["has_solve_qp"] is False
         assert g["solve_qp"] is None  # base graph has no QP node
         expected = {}
         for n in build_base_graph().graph.nodes:
@@ -849,7 +850,9 @@ class TestBuildManifest:
         base = self._report(base_dir)
         deltau = self._report(deltau_dir)
 
+        assert deltau["graph"]["has_solve_qp"] is True
         assert deltau["graph"]["solve_qp"] == {"expected_n_vars": 45}
+        assert deltau["provenance"]["solver_sha256"]
         assert deltau["solver"]["n_vars"] == 45
         assert "solve_qp" in deltau["graph"]["ops"]
         assert "solve_qp" not in base["graph"]["ops"]

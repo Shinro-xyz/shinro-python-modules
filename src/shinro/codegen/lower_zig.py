@@ -14,6 +14,12 @@ The generated file ``runtime/graph_data.zig`` contains:
 - ``buf_len``: total f64 buffer size for one step.
 - ``const_blob``: all baked constants, one flat row-major f64 array.
 - ``clip_lo``/``clip_hi``: clip bounds, one flat array each.
+- ``has_solve_qp``: whether any node performs QP, used by the Zig build to
+  decide whether to link the OSQP codegen bake.
+- ``has_solve_qp``: whether any node performs QP, used by the Zig build to
+  decide whether to link the OSQP codegen bake.
+- ``has_solve_qp``: whether any node performs QP, used by the Zig build to
+  decide whether to link the OSQP codegen bake.
 - ``n_outputs``, ``output_offsets``, ``state_offsets``: port packing into the
   C-ABI ``shinro_step(inputs, outputs, state_out)`` buffers.
 
@@ -111,6 +117,8 @@ def lower_zig(cg: ComposedGraph, out_path: str = "runtime/graph_data.zig") -> No
     lines.append("};")
     lines.append("")
     lines.append(f"pub const buf_len = {buf_len};")
+    # The Zig build reads this flag and links the OSQP solver only when needed.
+    lines.append("pub const has_solve_qp = " + ("true" if any(n.op == "solve_qp" for n in g.nodes) else "false") + ";")
     lines.append(f"pub const n_outputs = {len(cg.outputs)};")
     lines.append("")
     lines.append("pub const offsets = [_]usize{")
@@ -166,7 +174,8 @@ def _graph_manifest(
     Describes what the compiled ``.so`` contains (the node table the VM
     executes): op histogram, the ordered node list (dual Python/Zig op names,
     wiring, shape, buffer offset, aux), the C-ABI port layout, buffer sizes,
-    and the ``.solve_qp`` n_vars the graph expects. No timestamps — the
+    whether the graph contains a ``.solve_qp`` node, and, when present, the
+    n_vars that node expects. No timestamps — the
     manifest is a pure function of the graph, so identical inputs produce
     identical bytes.
 
@@ -224,6 +233,7 @@ def _graph_manifest(
         "float_type": "f64",
         "buf_len": buf_len,
         "const_blob_len": const_blob_len,
+        "has_solve_qp": solve_qp is not None,
         "nodes_total": len(g.nodes),
         "nodes": nodes,
         "ops": sorted(op_histogram),

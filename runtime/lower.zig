@@ -23,9 +23,12 @@ const std = @import("std");
 // build.zig from -Dgraph / -Dsolver_dir (defaults: runtime/graph_data.zig and
 // runtime/codegen/emosqp/solver_meta.zig).
 const g = @import("graph_data");
-const sm = @import("solver_meta");
+// OSQP is deliberately conditional: the generated graph declares whether it
+// contains a .solve_qp node. Non-QP graphs (LQR, PID, ...) build without the
+// OSQP C sources, headers, or solver_meta module at all.
+const sm = if (g.has_solve_qp) @import("solver_meta") else struct {};
 const la = @import("linalg.zig");
-const qp = @import("qp.zig");
+const qp = if (g.has_solve_qp) @import("qp.zig") else struct {};
 
 /// Run one tick of the closed-loop step through the generated node table.
 ///

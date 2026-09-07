@@ -2,6 +2,7 @@
   "buf_len": 318,
   "const_blob_len": 126,
   "float_type": "f64",
+  "has_solve_qp": false,
   "inputs": [
     {
       "name": "y",

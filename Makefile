@@ -92,7 +92,8 @@ test-integration:
 # To build a different graph/solver pair without clobbering the shared paths,
 # pass -Dgraph=<path> and -Dsolver_dir=<dir> to `zig build` (e.g. the
 # MPC_DeltaU bake); a graph whose .solve_qp node doesn't match the bake's
-# n_vars is rejected at compile time.
+# n_vars is rejected at compile time. Graphs without .solve_qp (LQR, PID,
+# ...) omit the OSQP solver from libbase.so entirely.
 # ───────────────────────────────────────────────────────────────────────────
 zig-gen:
 	mkdir -p build
