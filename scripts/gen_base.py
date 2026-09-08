@@ -1,4 +1,4 @@
-"""Generate ``runtime/graph_data.zig`` for the base_tracking closed-loop step.
+"""Generate ``src/shinro/runtime/graph_data.zig`` for the base_tracking closed-loop step.
 
 Entry point: ``python scripts/gen_base.py`` (wired to ``make zig-gen``).
 
@@ -10,12 +10,13 @@ Builds the base_tracking composed graph (KalmanFilter + LQR on the 3-DOF
 holonomic base, with the scenario's input clip) via the generic
 :func:`shinro.codegen.build.build_composed_graph`, serializes it through
 :func:`shinro.codegen.lower_zig.lower_zig`, and writes the Zig data table that
-``runtime/lower.zig`` compiles against.
+``src/shinro/runtime/lower.zig`` compiles against.
 
-Note: ``runtime/graph_data.zig`` is a shared generated path — this script,
-``scripts/gen_mpc.py``, and the pytest fixtures in ``tests/test_zig_lowering.py``
-all overwrite it, so the shipped graph is whichever ran last. Re-run this
-script (or ``make zig-gen``) to restore the shipped KF + LQR base graph.
+Note: ``src/shinro/runtime/graph_data.zig`` is a shared generated path — this
+script, ``scripts/gen_mpc.py``, and the pytest fixtures in
+``tests/test_zig_lowering.py`` all overwrite it, so the shipped graph is
+whichever ran last. Re-run this script (or ``make zig-gen``) to restore the
+shipped KF + LQR base graph.
 """
 
 from __future__ import annotations
@@ -61,7 +62,7 @@ def build_base_graph():
 
 
 def main() -> None:
-    """Generate ``runtime/graph_data.zig`` from the base_tracking graph.
+    """Generate ``src/shinro/runtime/graph_data.zig`` from the base_tracking graph.
 
     Entry point for ``python scripts/gen_base.py`` (wired to
     ``make zig-gen``). Serializes the composed graph and prints a summary of
@@ -70,7 +71,7 @@ def main() -> None:
     composed = build_base_graph()
     lower_zig(
         composed,
-        "runtime/graph_data.zig",
+        "src/shinro/runtime/graph_data.zig",
         provenance={
             "configs": {
                 "configs/estimators/kalman_base.toml": _sha256("configs/estimators/kalman_base.toml"),
@@ -81,7 +82,7 @@ def main() -> None:
         },
     )
     n = len(composed.graph.nodes)
-    print(f"wrote runtime/graph_data.zig ({n} nodes, inputs={composed.inputs})")
+    print(f"wrote src/shinro/runtime/graph_data.zig ({n} nodes, inputs={composed.inputs})")
 
 
 if __name__ == "__main__":

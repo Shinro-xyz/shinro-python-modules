@@ -80,39 +80,40 @@ test-integration:
 
 # ───────────────────────────────────────────────────────────────────────────
 # Zig lowering (slice b): serialize the base_tracking composed graph to
-# runtime/graph_data.zig, compile the comptime VM via runtime/build.zig into
-# build/lib/libbase.so, then cross-check the .so against the Python
-# interpreter (ctypes oracle). Requires `zig` on PATH (see runtime/README.md).
-# build/ is gitignored.
+# src/shinro/runtime/graph_data.zig, compile the comptime VM via
+# src/shinro/runtime/build.zig into build/lib/libbase.so, then cross-check the
+# .so against the Python interpreter (ctypes oracle). Requires `zig` on PATH
+# (see src/shinro/runtime/README.md). build/ is gitignored.
 #
 # Shared generated paths, last build wins: graph_data.zig and
-# runtime/codegen/emosqp/ are overwritten by whichever generator ran last
-# (gen_base.py / gen_mpc.py / the pytest fixtures / gen_emosqp_test.py).
-# Restore the shipped default (KF+LQR graph, mpc_lti_base.toml bake) with
-# `make zig-gen` + re-running gen_emosqp_test.py — see runtime/README.md.
-# To build a different graph/solver pair without clobbering the shared paths,
-# pass -Dgraph=<path> and -Dsolver_dir=<dir> to `zig build` (e.g. the
-# MPC_DeltaU bake); a graph whose .solve_qp node doesn't match the bake's
-# n_vars is rejected at compile time. Graphs without .solve_qp (LQR, PID,
-# ...) omit the OSQP solver from libbase.so entirely.
+# src/shinro/runtime/codegen/emosqp/ are overwritten by whichever generator
+# ran last (gen_base.py / gen_mpc.py / the pytest fixtures /
+# gen_emosqp_test.py). Restore the shipped default (KF+LQR graph,
+# mpc_lti_base.toml bake) with `make zig-gen` + re-running gen_emosqp_test.py
+# — see src/shinro/runtime/README.md. To build a different graph/solver pair
+# without clobbering the shared paths, pass -Dgraph=<path> and
+# -Dsolver_dir=<dir> to `zig build` (e.g. the MPC_DeltaU bake); a graph whose
+# .solve_qp node doesn't match the bake's n_vars is rejected at compile time.
+# Graphs without .solve_qp (LQR, PID, ...) omit the OSQP solver from
+# libbase.so entirely.
 # ───────────────────────────────────────────────────────────────────────────
 zig-gen:
 	mkdir -p build
 	python3 scripts/gen_base.py
 
 zig-build: zig-gen
-	zig build --build-file runtime/build.zig --prefix build/
+	zig build --build-file src/shinro/runtime/build.zig --prefix build/
 	python3 scripts/stamp_deployment.py --prefix build/
 
 test-zig: zig-build
-	zig build test --build-file runtime/build.zig
+	zig build test --build-file src/shinro/runtime/build.zig
 	python3 -m pytest tests/test_zig_lowering.py -v --tb=short
 
 # ───────────────────────────────────────────────────────────────────────────
 # E2E scenario compilation: gen_scenario.py (zig-free) → build_scenario.py
 # (zig + oracle + stamp + verify). The scenario TOML's [compile] section is
 # the build spec (n_x/n_u, optimize, target, solver_dir); CLI overrides pass
-# through via FLAGS. Output lands in build/<name>/ — runtime/graph_data.zig
+# through via FLAGS. Output lands in build/<name>/ — src/shinro/runtime/graph_data.zig
 # is never touched, so compiling a custom scenario never clobbers the
 # shipped graph. Requires `zig` on PATH for the build stage.
 # ───────────────────────────────────────────────────────────────────────────

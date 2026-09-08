@@ -1,10 +1,10 @@
 """Zig lowering oracle: the compiled .so must match the Python interpreter.
 
-The MVP acceptance test for slice b. It generates ``runtime/graph_data.zig``
+The MVP acceptance test for slice b. It generates ``src/shinro/runtime/graph_data.zig``
 from the base_tracking composed graph (KF + LQR, input-clipped), compiles the
-comptime VM with ``zig build`` (runtime/build.zig), loads ``libbase.so`` via
-ctypes, and asserts the C-ABI ``shinro_step`` output equals ``interpret()`` to
-float-exactness across 50 seeded random inputs.
+comptime VM with ``zig build`` (src/shinro/runtime/build.zig), loads
+``libbase.so`` via ctypes, and asserts the C-ABI ``shinro_step`` output equals
+``interpret()`` to float-exactness across 50 seeded random inputs.
 
 Requires ``zig`` on PATH. Skipped cleanly if it's unavailable.
 """
@@ -34,22 +34,23 @@ from shinro.factories.estimator_factory import EstimatorFactory
 from shinro.utils.array_backend import NumpyBackend
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-RUNTIME = REPO_ROOT / "runtime"
+RUNTIME = REPO_ROOT / "src/shinro/runtime"
 BUILD = REPO_ROOT / "build"
 
 
 def _build_so(composed, build_dir, graph_path=None, solver_dir=None, provenance=None):
     """Lower a composed graph, compile the comptime VM, and load libbase.so.
 
-    Each call lowers ``composed`` to ``runtime/graph_data.zig`` (or
+    Each call lowers ``composed`` to ``src/shinro/runtime/graph_data.zig`` (or
     ``graph_path`` when given) and builds a fresh ``libbase.so`` into the
     given (unique) prefix directory, so multiple graphs can be cross-checked
     in one session without clobbering each other. ``solver_dir`` selects the
     baked OSQP solver to compile in (default: the shipped
-    ``runtime/codegen/emosqp/`` bake) — pass a DeltaU bake to build a graph
-    whose ``.solve_qp`` node has n_vars=45. Graphs without a ``.solve_qp``
-    node (LQR, PID, ...) are built solver-free. ``provenance`` is forwarded
-    to ``lower_zig`` (config hashes + tool versions recorded in the manifest).
+    ``src/shinro/runtime/codegen/emosqp/`` bake) — pass a DeltaU bake to build
+    a graph whose ``.solve_qp`` node has n_vars=45. Graphs without a
+    ``.solve_qp`` node (LQR, PID, ...) are built solver-free. ``provenance``
+    is forwarded to ``lower_zig`` (config hashes + tool versions recorded in
+    the manifest).
     """
     if shutil.which("zig") is None:
         pytest.skip("zig not on PATH; skipping Zig lowering oracle")
@@ -143,7 +144,7 @@ def _build_mpc_graph():
 
     The traced compute() is: x0 → q = Fᵀ x0 (matmul) → solve_qp → u[:3]
     (slice). The ``solve_qp`` node drives the codegen static solver baked into
-    libbase.so (runtime/codegen/emosqp/), whose problem must match the
+    libbase.so (src/shinro/runtime/codegen/emosqp/), whose problem must match the
     ``mpc_lti_base.toml`` bake (n_vars=30).
     """
     ctrl = ControllerFactory(
@@ -269,7 +270,7 @@ def deltau_bake(tmp_path_factory):
 
     A second bake alongside the shipped mpc_lti_base.toml one — the whole
     point of the -Dsolver_dir build option. Never touches the shared
-    runtime/codegen/emosqp/ tree.
+    src/shinro/runtime/codegen/emosqp/ tree.
     """
     from scripts.gen_emosqp_test import bake
 

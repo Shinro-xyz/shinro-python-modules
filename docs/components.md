@@ -107,7 +107,7 @@ walkthrough.
 | `compose` | `codegen/compose.py` | Merge per-component graphs into one closed-loop tick |
 | `interpret`, `interpret_step` | `codegen/interpreter.py` | Replay a graph on real numpy inputs (correctness oracle) |
 | `register_op`, `available_ops` | `codegen/ops.py` | Op-handler registry |
-| `lower_zig` | `codegen/lower_zig.py` | Serialize a composed graph to `runtime/graph_data.zig` |
+| `lower_zig` | `codegen/lower_zig.py` | Serialize a composed graph to `src/shinro/runtime/graph_data.zig` |
 
 ## Simulation & MCP
 

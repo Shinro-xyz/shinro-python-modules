@@ -119,8 +119,8 @@ python scripts/generate_robot_config.py lekiwi-sim/mjcf_lcmm_robot.xml > robot_c
   plus `factories/` (registry + config-driven construction), `simulation/`,
   `physics_engine/`, `mcp/`, `utils/`, and `codegen/` (trace → lower pipeline).
   The full annotated catalog is in [`docs/components.md`](./docs/components.md).
-- `runtime/` — the Zig comptime VM that executes lowered graphs
-  (see [`runtime/README.md`](./runtime/README.md)).
+- `src/shinro/runtime/` — the Zig comptime VM that executes lowered graphs
+  (see [`src/shinro/runtime/README.md`](./src/shinro/runtime/README.md)).
 - `demos/` — runnable example scenarios (`python -m demos.demo_*`).
 - `tests/` — pytest suite (see [`docs/testing.md`](./docs/testing.md)).
 - `lab-notes/daily/` — dated engineering notes and design narrative.

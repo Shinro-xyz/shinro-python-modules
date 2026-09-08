@@ -146,7 +146,7 @@ comptime-unrolled VM exposed as a `.so`. The full walkthrough is
 
 ```bash
 python demo_codegen.py     # trace → compose → interpret, PASS/FAIL per stage
-make test-zig              # + serialize to runtime/graph_data.zig, build .so,
+make test-zig              # + serialize to src/shinro/runtime/graph_data.zig, build .so,
                            #   cross-check against the interpreter (needs zig)
 ```
 

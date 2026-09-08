@@ -1,12 +1,12 @@
-# runtime/ — the Zig lowering VM
+# src/shinro/src/shinro/runtime/ — the Zig lowering VM
 
 This directory holds the Zig half of the codegen pipeline: a comptime-unrolled
 virtual machine that executes a generated control-loop graph as native code.
 The graph is serialized from Python by `shinro.codegen.lower_zig`; the VM that
 runs it is handwritten here once and never regenerated.
 
-See [`../docs/codegen.md`](../docs/codegen.md) for the full pipeline narrative
-and the XLA-fidelity model.
+See [`../../../docs/codegen.md`](../../../docs/codegen.md) for the full
+pipeline narrative and the XLA-fidelity model.
 
 ## Files
 
@@ -62,8 +62,8 @@ make test-zig    # zig-gen → zig-build → zig test → pytest tests/test_zig_
 Individual steps:
 
 ```bash
-make zig-gen     # python3 scripts/gen_base.py → rewrites runtime/graph_data.zig
-make zig-build   # zig build --build-file runtime/build.zig --prefix build/
+make zig-gen     # python3 scripts/gen_base.py → rewrites src/shinro/runtime/graph_data.zig
+make zig-build   # zig build --build-file src/shinro/runtime/build.zig --prefix build/
 ```
 
 The resulting `libbase.so` lands in `build/` (gitignored); the cross-check
@@ -79,20 +79,20 @@ shipped content is always "whichever generator ran last":
 
 | Artifact | Written by | Restore shipped default |
 |---|---|---|
-| `runtime/graph_data.zig` | `scripts/gen_base.py` (KF+LQR), `scripts/gen_mpc.py` (KF+MPC_LTI / KF+MPC_DeltaU), and the pytest fixtures in `tests/test_zig_lowering.py` | `make zig-gen` |
-| `runtime/codegen/emosqp/` | `scripts/gen_emosqp_test.py` — bakes the whole static solver tree for one MPC problem | re-run the script (default: `mpc_lti_base.toml`) |
-| `runtime/tests/emosqp_data.zig` | `scripts/gen_emosqp_test.py` (oracle vectors for the same bake) | re-run the script |
+| `src/shinro/runtime/graph_data.zig` | `scripts/gen_base.py` (KF+LQR), `scripts/gen_mpc.py` (KF+MPC_LTI / KF+MPC_DeltaU), and the pytest fixtures in `tests/test_zig_lowering.py` | `make zig-gen` |
+| `src/shinro/runtime/codegen/emosqp/` | `scripts/gen_emosqp_test.py` — bakes the whole static solver tree for one MPC problem | re-run the script (default: `mpc_lti_base.toml`) |
+| `src/shinro/runtime/tests/emosqp_data.zig` | `scripts/gen_emosqp_test.py` (oracle vectors for the same bake) | re-run the script |
 
 The committed default is the shipped bring-up pair: **KF + LQR graph +
 `mpc_lti_base.toml` bake (n_vars=30)**.
 
 ### Building a different graph/solver pair without clobbering
 
-`runtime/build.zig` takes two build options that select which generated graph
+`src/shinro/runtime/build.zig` takes two build options that select which generated graph
 and which baked solver a build compiles in, without touching the shared paths:
 
 ```bash
-zig build --build-file runtime/build.zig --prefix build/ \
+zig build --build-file src/shinro/runtime/build.zig --prefix build/ \
     -Dgraph=<path-to-graph_data.zig> -Dsolver_dir=<path-to-bake-dir>
 ```
 
@@ -244,7 +244,7 @@ n_u = 3
 # optional:
 optimize = "debug"        # "debug" | "release" (→ -Doptimize=ReleaseFast)
 # target = "aarch64-linux-gnu"   # absent = native
-# solver_dir = "runtime/codegen/emosqp"  # required for QP (MPC) graphs
+# solver_dir = "src/shinro/runtime/codegen/emosqp"  # required for QP (MPC) graphs
 ```
 
 Exit codes: 0 ok · 1 untraceable · 2 usage/config · 3 oracle mismatch · 4

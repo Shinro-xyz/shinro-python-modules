@@ -76,10 +76,10 @@ run actually means the tests ran.
 5. **`bk` runs every test twice.** The `bk` fixture is parametrized over numpy
    and torch, so a test written against `bk` executes once per backend. Counts
    are ×2; a torch-only failure is a real failure.
-6. **`runtime/graph_data.zig` is generated, last-build-wins.** `scripts/gen_base.py`,
+6. **`src/shinro/runtime/graph_data.zig` is generated, last-build-wins.** `scripts/gen_base.py`,
    `scripts/gen_mpc.py`, and the zig test fixtures all overwrite it. After any
    zig test run, re-run `make zig-gen` to restore the shipped KF+LQR graph.
-   Never hand-edit it or the `runtime/codegen/emosqp/` bake.
+   Never hand-edit it or the `src/shinro/runtime/codegen/emosqp/` bake.
 7. **Lint scope is partial.** `make lint` runs pyright only on `utils/`,
    `components.py`, `controllers/`, `estimators/`, `trajectories/`, `plants/`.
    Code in `codegen/`, `mcp/`, `simulation/` is not typechecked — lint won't
@@ -119,7 +119,7 @@ run actually means the tests ran.
 
 ### MUST NOT DO
 - Treat silent skips (markers, zig absent, extras absent) as passes
-- Hand-edit generated `runtime/graph_data.zig` or the `runtime/codegen/emosqp/`
+- Hand-edit generated `src/shinro/runtime/graph_data.zig` or the `src/shinro/runtime/codegen/emosqp/`
   solver bake
 - Add a new test group without wiring the `Makefile` target and `.PHONY` entry
 - Query or re-index the stale `.codebase/` SQLite index

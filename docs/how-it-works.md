@@ -145,7 +145,7 @@ backend with zero changes — and this same seam is what makes tracing possible
 
 The most distinctive piece is `src/shinro/codegen/`. Its goal: turn a
 closed-loop step into a **static computation graph** that is compiled to a
-native `.so` (via a Zig comptime-unrolled VM in `runtime/`) that provably
+native `.so` (via a Zig comptime-unrolled VM in `src/shinro/runtime/`) that provably
 matches the Python math.
 
 The mechanism is **tracing** (JAX/XLA style). See [`codegen.md`](./codegen.md)
@@ -159,10 +159,10 @@ for the full walkthrough. The short version:
 3. **Interpret** — replay the graph on real numpy inputs. If the replay
    matches the live numpy loop to `1e-12`, the trace is proven correct.
 4. **Lower** — emit the graph as Zig compile-time constants
-   (`runtime/graph_data.zig`) and run it through the comptime VM
-   (`runtime/lower.zig`) to produce `base.so`. The VM is fixed at compile time:
+   (`src/shinro/runtime/graph_data.zig`) and run it through the comptime VM
+   (`src/shinro/runtime/lower.zig`) to produce `base.so`. The VM is fixed at compile time:
    shapes and constants are baked, no heap allocation, no runtime dispatch.
-   See [`codegen.md`](./codegen.md) and [`runtime/README.md`](../runtime/README.md).
+   See [`codegen.md`](./codegen.md) and [`src/shinro/runtime/README.md`](../src/shinro/runtime/README.md).
 
 Because the graph *is* a transcription of the Python execution, the only thing
 that can go wrong at deployment is the small set of primitive operations —

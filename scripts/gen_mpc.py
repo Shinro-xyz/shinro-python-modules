@@ -1,4 +1,4 @@
-"""Generate ``runtime/graph_data.zig`` for the KF + MPC closed-loop step.
+"""Generate ``src/shinro/runtime/graph_data.zig`` for the KF + MPC closed-loop step.
 
 Alternative deployment target to ``scripts/gen_base.py`` (KF + LQR): swaps the
 controller for an MPC regulator — ``MPC_LTI`` from ``mpc_lti_base.toml`` by
@@ -8,13 +8,13 @@ regulator, so regulating it to zero tracks ``x_ref`` (exact for the base
 plant, A = I; general A would need an ``(A - I) x_ref`` feedforward — see
 ``docs/codegen.md``).
 
-The emosqp bake in ``runtime/codegen/emosqp/`` is generated for the MPC_LTI
-config (``mpc_lti_base.toml``, n_vars=30), so no solver regeneration is
-needed for the default. A DeltaU graph (n_vars=45) must be built against a
+The emosqp bake in ``src/shinro/runtime/codegen/emosqp/`` is generated for the
+MPC_LTI config (``mpc_lti_base.toml``, n_vars=30), so no solver regeneration
+is needed for the default. A DeltaU graph (n_vars=45) must be built against a
 DeltaU bake via ``zig build -Dgraph=... -Dsolver_dir=...`` — see
-``runtime/README.md``. Both gen scripts write the same
-``runtime/graph_data.zig`` — the shipped graph is whichever ran last (re-run
-``make zig-gen`` for the KF + LQR base graph).
+``src/shinro/runtime/README.md``. Both gen scripts write the same
+``src/shinro/runtime/graph_data.zig`` — the shipped graph is whichever ran
+last (re-run ``make zig-gen`` for the KF + LQR base graph).
 
 Run: ``python3 scripts/gen_mpc.py``
 """
@@ -67,7 +67,7 @@ def build_mpc_composed_graph(controller_config: str = "configs/controllers/mpc_l
 
 
 def main() -> None:
-    """Generate ``runtime/graph_data.zig`` from the KF + MPC_LTI graph.
+    """Generate ``src/shinro/runtime/graph_data.zig`` from the KF + MPC_LTI graph.
 
     Entry point for ``python scripts/gen_mpc.py``. Serializes the composed
     graph and prints a summary of the node count and input ports.
@@ -76,7 +76,7 @@ def main() -> None:
     composed = build_mpc_composed_graph(controller_config)
     lower_zig(
         composed,
-        "runtime/graph_data.zig",
+        "src/shinro/runtime/graph_data.zig",
         provenance={
             "configs": {
                 "configs/estimators/kalman_base.toml": _sha256("configs/estimators/kalman_base.toml"),
@@ -87,7 +87,7 @@ def main() -> None:
         },
     )
     n = len(composed.graph.nodes)
-    print(f"wrote runtime/graph_data.zig ({n} nodes, inputs={composed.inputs})")
+    print(f"wrote src/shinro/runtime/graph_data.zig ({n} nodes, inputs={composed.inputs})")
 
 
 if __name__ == "__main__":

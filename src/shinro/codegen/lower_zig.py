@@ -3,9 +3,10 @@
 This is Option B of the lowering design: Python emits **data only** — the node
 table, the packed constants, and the port layout — never Zig statements. The
 actual program (the comptime graph VM) is handwritten once in
-``runtime/lower.zig`` and specialized at compile time over this table.
+``src/shinro/runtime/lower.zig`` and specialized at compile time over this
+table.
 
-The generated file ``runtime/graph_data.zig`` contains:
+The generated file ``src/shinro/runtime/graph_data.zig`` contains:
 
 - ``nodes``: the flat list of :class:`Node` records — op enum + input ids +
   rows/cols + an ``aux`` index whose meaning depends on the op.
@@ -14,10 +15,6 @@ The generated file ``runtime/graph_data.zig`` contains:
 - ``buf_len``: total f64 buffer size for one step.
 - ``const_blob``: all baked constants, one flat row-major f64 array.
 - ``clip_lo``/``clip_hi``: clip bounds, one flat array each.
-- ``has_solve_qp``: whether any node performs QP, used by the Zig build to
-  decide whether to link the OSQP codegen bake.
-- ``has_solve_qp``: whether any node performs QP, used by the Zig build to
-  decide whether to link the OSQP codegen bake.
 - ``has_solve_qp``: whether any node performs QP, used by the Zig build to
   decide whether to link the OSQP codegen bake.
 - ``n_outputs``, ``output_offsets``, ``state_offsets``: port packing into the
@@ -30,7 +27,7 @@ holds across the language boundary.
 Usage:
 
     from shinro.codegen.lower_zig import lower_zig
-    lower_zig(composed, out_path="runtime/graph_data.zig")
+    lower_zig(composed, out_path="src/shinro/runtime/graph_data.zig")
 """
 
 from __future__ import annotations
@@ -44,7 +41,7 @@ from shinro.codegen.tracing import Graph, Node
 
 def lower_zig(
     cg: ComposedGraph,
-    out_path: str = "runtime/graph_data.zig",
+    out_path: str = "src/shinro/runtime/graph_data.zig",
     provenance: dict | None = None,
 ) -> None:
     """Serialize a composed graph into a Zig data table at ``out_path``.

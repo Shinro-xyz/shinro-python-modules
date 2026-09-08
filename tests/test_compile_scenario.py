@@ -147,8 +147,8 @@ def test_e2e_stale_graph_rejected(tmp_path):
 
 @pytest.mark.skipif(shutil.which("zig") is None, reason="zig not on PATH")
 def test_e2e_shared_graph_untouched(tmp_path):
-    """Compiling a scenario never clobbers the shipped runtime/graph_data.zig."""
-    shipped = REPO_ROOT / "runtime" / "graph_data.zig"
+    """Compiling a scenario never clobbers the shipped src/shinro/runtime/graph_data.zig."""
+    shipped = REPO_ROOT / "src/shinro/runtime" / "graph_data.zig"
     before = shipped.read_bytes()
     out = tmp_path / "scenario"
     assert _run(GEN, str(SCENARIO), "--out", str(out)).returncode == 0

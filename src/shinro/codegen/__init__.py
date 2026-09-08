@@ -17,9 +17,15 @@ Public API:
   real numpy inputs (the correctness oracle).
 - :func:`~shinro.codegen.ops.register_op` — register a handler for a new op.
 - :func:`~shinro.codegen.lower_zig.lower_zig` — serialize a composed graph to
-  a Zig data table (``runtime/graph_data.zig``); ``make zig-build`` compiles
-  it to ``build/base.so`` with the handwritten comptime VM in
-  ``runtime/lower.zig``.
+  a Zig data table (``src/shinro/runtime/graph_data.zig``); ``make zig-build``
+  compiles it to ``build/base.so`` with the handwritten comptime VM in
+  ``src/shinro/runtime/lower.zig``.
+- :func:`~shinro.codegen.scenario_gen.gen_scenario` — trace + compose + lower
+  a scenario TOML into an isolated graph pair (zig-free stage).
+- :func:`~shinro.codegen.scenario_build.build_scenario` — compile a generated
+  graph into a verified, stamped ``libbase.so`` (zig stage).
+- :func:`~shinro.codegen.cli.main` — the ``shinro-compile`` console entry
+  point chaining the two stages.
 
 See ``lab-notes/daily/`` for the design narrative.
 """

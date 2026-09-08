@@ -56,37 +56,37 @@ joint space**.
   `scripts/gen_scenario.py` (zig-free: trace+compose+lower to an isolated
   path) then `scripts/build_scenario.py` (zig build + oracle + stamp + verify).
   The scenario TOML's `[compile]` section (`n_x`, `n_u`, `optimize`, `target`,
-  `solver_dir`) is the build spec; never clobbers `runtime/graph_data.zig`.
+  `solver_dir`) is the build spec; never clobbers `src/shinro/runtime/graph_data.zig`.
 
 ## Zig lowering (codegen → `.so`)
 
 - Requires `zig` on PATH. Artifacts land in `build/` (gitignored).
   `make test-zig` chains: gen → build → `zig build test` → pytest
   `tests/test_zig_lowering.py`.
-- **Shared generated paths, last build wins:** `runtime/graph_data.zig` is
+- **Shared generated paths, last build wins:** `src/shinro/runtime/graph_data.zig` is
   overwritten by `scripts/gen_base.py`, `scripts/gen_mpc.py`, *and* the pytest
-  fixtures in `tests/test_zig_lowering.py`; `runtime/codegen/emosqp/` likewise
+  fixtures in `tests/test_zig_lowering.py`; `src/shinro/runtime/codegen/emosqp/` likewise
   holds one MPC bake. After running the test suite, re-run `make zig-gen` to
   restore the shipped KF+LQR graph.
 - Build an alternate graph/solver pair without clobbering the shared paths via
   `zig build -Dgraph=<path> -Dsolver_dir=<dir>`. A `.solve_qp` node whose
   output size doesn't match the bake's `n_vars` is rejected at compile time.
-- `runtime/graph_data.zig` and the solver bake are **generated** — never
-  hand-edit. `runtime/lower.zig` (the comptime VM) is handwritten and never
-  regenerated. See `runtime/README.md` for the build-manifest audit trail.
+- `src/shinro/runtime/graph_data.zig` and the solver bake are **generated** — never
+  hand-edit. `src/shinro/runtime/lower.zig` (the comptime VM) is handwritten and never
+  regenerated. See `src/shinro/runtime/README.md` for the build-manifest audit trail.
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
 | `src/shinro/components.py` | The five ABCs |
-| `src/shinro/codegen/` | Trace → compose → interpret → lower pipeline; `lower_zig.py` serializes a graph to `runtime/graph_data.zig` |
+| `src/shinro/codegen/` | Trace → compose → interpret → lower pipeline; `lower_zig.py` serializes a graph to `src/shinro/runtime/graph_data.zig` |
 | `src/shinro/factories/registry.py` | Component registry + config-driven factory |
 | `src/shinro/utils/array_backend.py` | NumpyBackend / TorchBackend abstraction |
 | `src/shinro/mcp/server.py` | MCP server (`shinro-mcp` console command, wired in `.mcp.json`) |
 | `src/shinro/simulation/robotsim.py` | Config-driven robot simulation factory |
 | `tests/integration/` | Full-loop physics-backed tests (MuJoCo, opt-in) |
-| `runtime/` | Zig comptime VM + linalg kernels + generated graph |
+| `src/shinro/runtime/` | Zig comptime VM + linalg kernels + generated graph |
 
 ## Lab Notebooks
 
