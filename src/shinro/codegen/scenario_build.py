@@ -18,7 +18,11 @@ and — when ``--scenario`` is given — verifies the result before stamping:
    from exactly the graph this scenario produces (deterministic lowering).
 5. **Oracle B** — loads the ``.so`` via ctypes and compares ``shinro_step``
    against ``interpret()`` on N random inputs across every output and state
-   port (tolerance 1e-12; 1e-3 for QP graphs). Mismatch → exit 3.
+   port (tolerance 1e-12; 1e-3 for QP graphs). Mismatch → exit 3. Skipped
+   for non-native targets — a cross-compiled ``.so`` cannot be dlopen'd on
+   the host, so the oracle only runs when the target matches the host
+   architecture (``native`` or an explicit host triple); the integrity
+   check still runs either way.
 6. **Stamp + verify** — writes the deployment record (master hash over
    config/graph/solver/binary) and re-hashes the artifacts against it.
 
@@ -313,16 +317,23 @@ def build_scenario(
         except NotImplementedError as e:
             print(f"TRACE FAILED: {e}", file=sys.stderr)
             return EXIT_USAGE
-        tol = TOL_QP if manifest["has_solve_qp"] else TOL_NON_QP
-        lib = _load_so(prefix_path)
-        max_err = _oracle(lib, fresh_cg, samples, seed, tol)
-        if max_err >= tol:
+        if tgt == "native":
+            tol = TOL_QP if manifest["has_solve_qp"] else TOL_NON_QP
+            lib = _load_so(prefix_path)
+            max_err = _oracle(lib, fresh_cg, samples, seed, tol)
+            if max_err >= tol:
+                print(
+                    f"ORACLE MISMATCH: .so diverged from interpreter (max abs err {max_err:.3e} >= {tol})",
+                    file=sys.stderr,
+                )
+                return EXIT_ORACLE
+            print(f"oracle B (.so vs interpret): {samples} random inputs, max abs err {max_err:.3e} ✓")
+        else:
             print(
-                f"ORACLE MISMATCH: .so diverged from interpreter (max abs err {max_err:.3e} >= {tol})",
+                f"NOTE: target '{tgt}' is not native — skipping host oracle "
+                f"(cannot dlopen a cross-compiled .so); integrity check passed.",
                 file=sys.stderr,
             )
-            return EXIT_ORACLE
-        print(f"oracle B (.so vs interpret): {samples} random inputs, max abs err {max_err:.3e} ✓")
     else:
         print(
             "WARNING: --scenario omitted — skipping oracle + integrity checks; "
