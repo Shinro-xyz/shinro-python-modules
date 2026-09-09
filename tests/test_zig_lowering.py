@@ -342,6 +342,86 @@ def _step(lib, cg, inputs, n_out, n_state):
     return out, state
 
 
+def _build_matmul_shapes_graph():
+    """A graph exercising every matmul shape the VM dispatch must handle.
+
+    Regression for the single-input (n_u=1) bug: a ``(2,1) @ (1,1)`` matmul
+    (a 2-D column times a scalar-width matrix — e.g. the estimator's ``B·u``
+    term) was misclassified as vecmat (1-D @ 2-D), reading out of bounds and
+    producing garbage. Each shape is a named output so the ``.so`` can be
+    compared per-case against numpy.
+    """
+    g = Graph()
+    a = g.input("a", (2, 2))
+    v = g.input("v", (2,))
+    vcol = g.input("vcol", (2, 1))
+    scol = g.input("scol", (1, 1))
+    row = g.input("row", (1, 2))
+
+    cases = {
+        "matmul2d": g.emit("matmul", [a, a], (2, 2)),  # (2,2)@(2,2)
+        "matvec_col": g.emit("matmul", [a, vcol], (2, 1)),  # (2,2)@(2,1)
+        "vecmat": g.emit("matmul", [v, a], (2,)),  # (2,)@(2,2)
+        "col_x_scalar": g.emit("matmul", [vcol, scol], (2, 1)),  # (2,1)@(1,1) <- the bug
+        "matvec_row": g.emit("matmul", [row, v], (1,)),  # (1,2)@(2,)
+    }
+    for name, src in cases.items():
+        g.output(name, src)
+    return ComposedGraph(
+        graph=g,
+        inputs=["a", "v", "vcol", "scol", "row"],
+        outputs=list(cases),
+    )
+
+
+def _build_single_input_kf_lqr_graph(tmp_path):
+    """A composed single-input (n_x=2, n_u=1) KF+LQR graph.
+
+    The exact shape that regressed: with one control input, the estimator's
+    ``B·u`` term is a ``(2,1)@(1,1)`` matmul. Uses explicit linearized
+    inverted-pendulum dynamics so the estimator/controller carry a real
+    ``B_dynamics`` of width 1.
+    """
+    from shinro.codegen.build import build_composed_graph
+
+    est = tmp_path / "kalman_pendulum.toml"
+    est.write_text(
+        'type = "KalmanFilter"\n'
+        'name = "kalman_pendulum"\n'
+        "dt = 0.01\n"
+        "process_noise = [0.001, 0.01]\n"
+        "measurement_noise = [0.005, 0.05]\n"
+        "A_dynamics = [[1.0, 0.01], [0.1962, 1.0]]\n"
+        "B_dynamics = [[0.0], [0.4]]\n"
+    )
+    ctrl = tmp_path / "lqr_pendulum.toml"
+    ctrl.write_text(
+        'type = "LQR"\n'
+        'name = "lqr_pendulum"\n'
+        "dt = 0.01\n"
+        "state_cost = [50.0, 10.0]\n"
+        "control_cost = [0.5]\n"
+        "A_dynamics = [[1.0, 0.01], [0.1962, 1.0]]\n"
+        "B_dynamics = [[0.0], [0.4]]\n"
+    )
+    return build_composed_graph(str(est), str(ctrl), n_x=2, n_u=1)
+
+
+@pytest.fixture(scope="module")
+def matmul_shapes_so(tmp_path_factory):
+    """A compiled .so for the matmul shape-dispatch matrix."""
+    d = tmp_path_factory.mktemp("zig-matmul-shapes")
+    return _build_so(_build_matmul_shapes_graph(), d / "build", graph_path=d / "graph_data.zig")
+
+
+@pytest.fixture(scope="module")
+def single_input_kf_lqr_so(tmp_path_factory):
+    """A compiled .so for the single-input KF+LQR oracle test."""
+    d = tmp_path_factory.mktemp("zig-single-input")
+    cg = _build_single_input_kf_lqr_graph(d)
+    return _build_so(cg, d / "build", graph_path=d / "graph_data.zig")
+
+
 class TestZigLowering:
     def test_so_matches_interpreter_50_inputs(self, base_so):
         """The .so's shinro_step equals interpret() on 50 random inputs."""
@@ -460,6 +540,218 @@ class TestZigLowering:
         assert max_err < 1e-10, (
             f".so diverged from live KalmanFilter over 100 ticks: max abs err = {max_err:.3e}"
         )
+
+
+class TestMatmulShapeDispatch:
+    def test_so_matches_numpy_for_every_shape(self, matmul_shapes_so):
+        """The compiled .so equals numpy for every matmul shape the dispatch
+        must route: 2-D matmul, matvec, vecmat, and the single-input
+        column-times-scalar-width (m,1)@(1,1) case that was misrouted."""
+        lib, cg = matmul_shapes_so
+        rng = np.random.default_rng(7)
+        n_out, _ = _output_split(cg)
+
+        offsets = {}
+        off = 0
+        for name in cg.outputs:
+            size = next(
+                int(np.prod(n.shape))
+                for n in cg.graph.nodes
+                if n.op == "output" and n.attrs["name"] == name
+            )
+            offsets[name] = (off, off + size)
+            off += size
+
+        refs = {
+            "matmul2d": lambda a, v, vcol, scol, row: a @ a,
+            "matvec_col": lambda a, v, vcol, scol, row: a @ vcol,
+            "vecmat": lambda a, v, vcol, scol, row: v @ a,
+            "col_x_scalar": lambda a, v, vcol, scol, row: vcol @ scol,
+            "matvec_row": lambda a, v, vcol, scol, row: row @ v,
+        }
+        max_err = 0.0
+        for _ in range(30):
+            a = rng.normal(0.0, 0.1, (2, 2))
+            v = rng.normal(0.0, 0.1, (2,))
+            vcol = rng.normal(0.0, 0.1, (2, 1))
+            scol = rng.normal(0.0, 0.1, (1, 1))
+            row = rng.normal(0.0, 0.1, (1, 2))
+            inputs = _pack_arrays(
+                cg,
+                {
+                    "a": a.ravel(),
+                    "v": v.ravel(),
+                    "vcol": vcol.ravel(),
+                    "scol": scol.ravel(),
+                    "row": row.ravel(),
+                },
+            )
+            out, _ = _step(lib, cg, inputs, n_out, 1)
+            for name in cg.outputs:
+                got = out[offsets[name][0] : offsets[name][1]]
+                exp = np.asarray(refs[name](a, v, vcol, scol, row)).ravel()
+                max_err = max(max_err, float(np.max(np.abs(got - exp))))
+        assert max_err < 1e-12, f"matmul shape dispatch diverged: max abs err = {max_err:.3e}"
+
+
+class TestSingleInputKfLqr:
+    def test_so_matches_interpret_single_input(self, single_input_kf_lqr_so):
+        """A single-input (n_u=1) KF+LQR .so equals interpret().
+
+        Regression for the compiled-kernel bug: with one control input the
+        estimator's B·u is a (2,1)@(1,1) matmul, which the VM misclassified
+        as vecmat (garbage in release, an OOB panic in debug). This is the
+        shape every n_u=1 plant (inverted pendulum, cartpole, ...) hits.
+        """
+        lib, cg = single_input_kf_lqr_so
+        rng = np.random.default_rng(3)
+        n_out, n_state = _output_split(cg)
+        sl = _state_slices(cg)
+        max_err = 0.0
+        for _ in range(30):
+            y = rng.normal(0.0, 0.1, (2,))
+            x_ref = rng.normal(0.0, 0.1, (2,))
+            u_prev = rng.normal(0.0, 0.1, (1,))
+            x_hat = rng.normal(0.0, 0.1, (2, 1))
+            P = rng.normal(0.0, 0.1, (2, 2))
+            P = P @ P.T + 0.1 * np.eye(2)
+
+            inputs = _pack_inputs(cg, y, x_ref, u_prev, x_hat, P)
+            out, state = _step(lib, cg, inputs, n_out, n_state)
+            traced = interpret(
+                cg.graph,
+                {
+                    "y": y,
+                    "x_ref": x_ref,
+                    "u_prev": u_prev,
+                    "state_x_hat": x_hat,
+                    "state_P": P,
+                },
+            )
+            off = 0
+            for name in cg.outputs:
+                exp = np.asarray(traced[name]).ravel()
+                max_err = max(max_err, float(np.max(np.abs(out[off : off + exp.size] - exp))))
+                off += exp.size
+            for name in cg.state_outputs:
+                exp = np.asarray(traced[name]).ravel()
+                start, stop = sl[name]
+                max_err = max(max_err, float(np.max(np.abs(state[start:stop] - exp))))
+        assert max_err < 1e-12, f"single-input KF+LQR .so diverged: max abs err = {max_err:.3e}"
+
+
+#: Every standalone-instantiable packaged plant (name, cfg, n_x, n_u, dt),
+#: plus a synthetic high-dim case at the Quadrotor's documented dims (the
+#: real Quadrotor is an unimplemented placeholder). Compiling KF+LQR for each
+#: catches shape-classification bugs in the VM matmul dispatch (e.g. the
+#: n_u=1 ``(m,1)@(1,1)`` misroute) that the n_u=3 base graph alone misses.
+PLANT_SCAN_CASES = [
+    ("CartPole", "configs/plants/cartpole.toml", 4, 1, 0.01),
+    ("InvertedPendulum", "configs/plants/inverted_pendulum.toml", 2, 1, 0.01),
+    ("DoublePendulum", "configs/plants/double_pendulum.toml", 4, 2, 0.01),
+    ("HolonomicMobileRobot", "configs/plants/holonomic_base.toml", 3, 3, 0.02),
+    ("Quadrotor_synthetic", None, 12, 4, 0.01),
+]
+
+
+def _plant_model(name, cfg, n_x, n_u, dt):
+    """Discrete (A_d, B_d) for a plant: linearized dynamics where possible,
+    the plant's own discrete model otherwise, and the documented dims for the
+    synthetic quadrotor."""
+    if cfg is None:
+        return 0.99 * np.eye(n_x), 0.01 * np.eye(n_x)[:, :n_u]
+
+    import tomllib
+
+    from shinro.factories.registry import _PLANT_REGISTRY
+    from shinro.utils.array_backend import NumpyBackend
+    from shinro.utils.config_resolver import resolve_config_path
+    from shinro.utils.linearization import discretize_euler, linearize_plant
+
+    with open(resolve_config_path(cfg), "rb") as f:
+        plant = _PLANT_REGISTRY[name].from_config(tomllib.load(f), backend=NumpyBackend())
+    try:
+        A_c, B_c = linearize_plant(plant, u0=plant.bk.zeros(n_u))
+        A_d, B_d = discretize_euler(A_c, B_c, plant.dt, backend=plant.bk)
+    except Exception:
+        A_d, B_d = plant.get_model()
+    return np.asarray(A_d), np.asarray(B_d)
+
+
+def _plant_kf_lqr_graph(tmp_path, name, cfg, n_x, n_u, dt):
+    """A composed KF+LQR graph for a plant's dims, with its (A_d, B_d)."""
+    from shinro.codegen.build import build_composed_graph
+
+    A_d, B_d = _plant_model(name, cfg, n_x, n_u, dt)
+    est = tmp_path / f"kalman_{name}.toml"
+    est.write_text(
+        f'type = "KalmanFilter"\nname = "kalman_{name}"\ndt = {dt}\n'
+        f"process_noise = {[1e-3] * n_x}\n"
+        f"measurement_noise = {[1e-3] * n_x}\n"
+        f"A_dynamics = {np.round(A_d, 6).tolist()}\n"
+        f"B_dynamics = {np.round(B_d, 6).tolist()}\n"
+    )
+    ctrl = tmp_path / f"lqr_{name}.toml"
+    ctrl.write_text(
+        f'type = "LQR"\nname = "lqr_{name}"\ndt = {dt}\n'
+        f"state_cost = {[1.0] * n_x}\n"
+        f"control_cost = {[1.0] * n_u}\n"
+        f"A_dynamics = {np.round(A_d, 6).tolist()}\n"
+        f"B_dynamics = {np.round(B_d, 6).tolist()}\n"
+    )
+    return build_composed_graph(
+        str(est),
+        str(ctrl),
+        n_x=n_x,
+        n_u=n_u,
+        input_limits=(np.full(n_u, -10.0), np.full(n_u, 10.0)),
+    )
+
+
+@pytest.fixture(scope="module")
+def plant_so(tmp_path_factory, request):
+    """A compiled KF+LQR .so for one plant-scan case."""
+    name, cfg, n_x, n_u, dt = request.param
+    d = tmp_path_factory.mktemp(f"zig-plant-{name}")
+    cg = _plant_kf_lqr_graph(d, name, cfg, n_x, n_u, dt)
+    lib, cg = _build_so(cg, d / "build", graph_path=d / "graph_data.zig")
+    return lib, cg, n_x, n_u
+
+
+class TestPlantCompileScan:
+    """Every instantiable plant's compiled KF+LQR .so equals interpret()."""
+
+    @pytest.mark.parametrize("plant_so", PLANT_SCAN_CASES, indirect=True)
+    def test_so_matches_interpret_for_each_plant(self, plant_so):
+        lib, cg, n_x, n_u = plant_so
+        rng = np.random.default_rng(5)
+        n_out, n_state = _output_split(cg)
+        sl = _state_slices(cg)
+        max_err = 0.0
+        for _ in range(20):
+            y = rng.normal(0.0, 0.1, (n_x,))
+            x_ref = rng.normal(0.0, 0.1, (n_x,))
+            u_prev = rng.normal(0.0, 0.1, (n_u,))
+            x_hat = rng.normal(0.0, 0.1, (n_x, 1))
+            P = rng.normal(0.0, 0.1, (n_x, n_x))
+            P = P @ P.T + 0.1 * np.eye(n_x)
+
+            inputs = _pack_inputs(cg, y, x_ref, u_prev, x_hat, P)
+            out, state = _step(lib, cg, inputs, n_out, n_state)
+            traced = interpret(
+                cg.graph,
+                {"y": y, "x_ref": x_ref, "u_prev": u_prev, "state_x_hat": x_hat, "state_P": P},
+            )
+            off = 0
+            for name in cg.outputs:
+                exp = np.asarray(traced[name]).ravel()
+                max_err = max(max_err, float(np.max(np.abs(out[off : off + exp.size] - exp))))
+                off += exp.size
+            for name in cg.state_outputs:
+                exp = np.asarray(traced[name]).ravel()
+                start, stop = sl[name]
+                max_err = max(max_err, float(np.max(np.abs(state[start:stop] - exp))))
+        assert max_err < 1e-12, f"plant .so diverged: max abs err = {max_err:.3e}"
 
 
 def test_lower_zig_emits_valid_data_table():
@@ -846,9 +1138,9 @@ def manifests(tmp_path_factory, deltau_bake):
     return base_dir, deltau_dir
 
 
-# Each Zig node line: .{ .op = .matmul, .inputs = &.{6, 3}, .rows = 3, .cols = 3, .aux = 0 }
+# Each Zig node line: .{ .op = .matmul, .inputs = &.{6, 3}, .rows = 3, .cols = 3, .aux = 0 [, .vec = false] }
 _NODE_RE = re.compile(
-    r"\.\{ \.op = \.(\w+), \.inputs = &\.\{([^}]*)\}, \.rows = (\d+), \.cols = (\d+), \.aux = (\d+) \}"
+    r"\.\{ \.op = \.(\w+), \.inputs = &\.\{([^}]*)\}, \.rows = (\d+), \.cols = (\d+), \.aux = (\d+)(?:, \.vec = (?:true|false))? \}"
 )
 
 

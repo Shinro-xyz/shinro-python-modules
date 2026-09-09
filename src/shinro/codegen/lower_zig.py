@@ -121,6 +121,7 @@ def lower_zig(
     lines.append("    rows: usize,")
     lines.append("    cols: usize,")
     lines.append("    aux: usize,")
+    lines.append("    vec: bool,")
     lines.append("};")
     lines.append("")
     lines.append(f"pub const buf_len = {buf_len};")
@@ -302,7 +303,7 @@ def _node_line(
     inputs = "&.{" + ", ".join(str(x) for x in node.inputs) + "}"
     op, aux = _node_vm_info(g, i, node, const_offsets, clip_offsets, input_offsets, outputs, state_outputs)
 
-    return f".{{ .op = .{op}, .inputs = {inputs}, .rows = {rows}, .cols = {cols}, .aux = {aux} }}"
+    return f".{{ .op = .{op}, .inputs = {inputs}, .rows = {rows}, .cols = {cols}, .aux = {aux}, .vec = {str(len(node.shape) == 1).lower()} }}"
 
 
 def _node_vm_info(

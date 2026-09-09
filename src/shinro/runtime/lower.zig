@@ -51,6 +51,7 @@ const qp = if (g.has_solve_qp) @import("qp.zig") else struct {};
 ///     state_out: Flat buffer where this tick's recurrent state outputs are
 ///         written (fed back as state inputs next tick).
 export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) void {
+    @setEvalBranchQuota(1_000_000);
     var buf: [g.buf_len]f64 align(16) = undefined;
 
     inline for (g.nodes, 0..) |node, i| {
@@ -74,17 +75,19 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
             .matmul => {
                 const a = node_input(g.nodes[0..], node, &buf);
                 const b = node_input_at(g.nodes[0..], node.inputs[1], &buf);
-                if (node.cols == 1 and g.nodes[node.inputs[0]].cols == 1) {
-                    // vecmat: (k,) @ (k, n) -> (n,)
-                    const r = la.vecmat(g.nodes[node.inputs[0]].rows, node.rows, a, b);
+                const left = g.nodes[node.inputs[0]];
+                const right = g.nodes[node.inputs[1]];
+                if (left.vec) {
+                    // vecmat: (k,) @ (k, n) -> (n,) — a genuinely 1-D left operand
+                    const r = la.vecmat(left.rows, node.rows, a, b);
                     inline for (0..node.rows * node.cols) |j| out[j] = r[j];
-                } else if (node.cols == 1) {
+                } else if (right.vec) {
                     // matvec: (m, k) @ (k,) -> (m,)
-                    const r = la.matvec(node.rows, g.nodes[node.inputs[1]].rows, a, b);
+                    const r = la.matvec(node.rows, right.rows, a, b);
                     inline for (0..node.rows * node.cols) |j| out[j] = r[j];
                 } else {
-                    // matmul: (m, k) @ (k, n) -> (m, n)
-                    const r = la.matmul(node.rows, g.nodes[node.inputs[0]].cols, node.cols, a, b);
+                    // matmul: (m, k) @ (k, n) -> (m, n); also covers (m,1)@(1,n) (k=1)
+                    const r = la.matmul(node.rows, left.cols, node.cols, a, b);
                     inline for (0..node.rows * node.cols) |j| out[j] = r[j];
                 }
             },
