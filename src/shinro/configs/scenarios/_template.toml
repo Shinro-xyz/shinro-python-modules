@@ -42,6 +42,7 @@ n_u = 2                 # <fill in: plant input dimension>
 optimize = "debug"        # "debug" | "release" (release → -Doptimize=ReleaseFast)
 # target = "aarch64-linux-gnu"   # cross-compile for the robot board; omit = native
 # solver_dir = "src/shinro/runtime/codegen/emosqp"  # REQUIRED for MPC controllers only
+# oracle_tol = 1e-3             # override the numeric oracle tolerance (QP graphs default 1e-3)
 
 # ── SIMULATION-ONLY — delete this block for a compile-only robot ─────────────
 # [physics]
