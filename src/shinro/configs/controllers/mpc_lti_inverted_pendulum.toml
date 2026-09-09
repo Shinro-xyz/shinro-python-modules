@@ -1,10 +1,12 @@
 # MPC regulator for the InvertedPendulum (n_x=2, n_u=1), linearized about
-# the inverted equilibrium at dt=0.01. N=20 (0.2s preview) stabilizes.
+# the inverted equilibrium at dt=0.01.
+# Horizon: the unstable pole (|lam|~1.044/step, tau~0.23s) needs N=100 (1s)
+# for long-horizon stability (N=20 was marginal over 10k-tick loops).
 type = "MPC_LTI"
 name = "mpc_inverted_pendulum"
 dt = 0.01
-horizon = 20
-state_cost = [10.0, 10.0]
+horizon = 100
+state_cost = [5.0, 5.0]
 control_cost = [0.1]
 A_dynamics = [[1.0, 0.01], [0.1962, 1.0]]
 B_dynamics = [[0.0], [0.4]]
@@ -13,6 +15,5 @@ B_dynamics = [[0.0], [0.4]]
 # F = [I(n_u); -I(n_u)] on the control sequence — explicit because the
 # from_config fallback builds I(n_x), which is wrong when n_x != n_u.
 matrix = [[1.0], [-1.0]]
-# F = [I; -I] -> 2*n_u rows, so upper/lower must have length 2*n_u.
-upper = [10.0, 10.0]
-lower = [-10.0, -10.0]
+upper = [2.0, 2.0]
+lower = [-2.0, -2.0]

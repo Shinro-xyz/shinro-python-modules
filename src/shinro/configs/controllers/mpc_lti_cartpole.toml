@@ -1,12 +1,13 @@
 # MPC regulator for the CartPole (n_x=4, n_u=1), linearized about the
-# inverted equilibrium at dt=0.01. The unstable pole (|lam|~1.05/step,
-# tau~0.21s) needs a preview horizon of several time constants — N=50
-# (0.5s) stabilizes; N<30 does not.
+# inverted equilibrium at dt=0.01.
+# Horizon: the unstable pole (|lam|~1.05/step, tau~0.21s) needs a preview of
+# several time constants — N=100 (1s, ~5 taus) is REQUIRED for long-horizon
+# stability; N<100 is slowly destabilizing over 10k-tick loops (verified).
 type = "MPC_LTI"
 name = "mpc_cartpole"
 dt = 0.01
-horizon = 50
-state_cost = [50.0, 50.0, 50.0, 50.0]
+horizon = 100
+state_cost = [5.0, 5.0, 5.0, 5.0]
 control_cost = [0.1]
 A_dynamics = [[1.0, 0.01, 0.0, 0.0], [0.0, 1.0, -0.01962, 0.0], [0.0, 0.0, 1.0, 0.01], [0.0, 0.0, 0.23544, 1.0]]
 B_dynamics = [[0.0], [0.02], [0.0], [-0.04]]
@@ -15,6 +16,5 @@ B_dynamics = [[0.0], [0.02], [0.0], [-0.04]]
 # F = [I(n_u); -I(n_u)] on the control sequence — explicit because the
 # from_config fallback builds I(n_x), which is wrong when n_x != n_u.
 matrix = [[1.0], [-1.0]]
-# F = [I; -I] -> 2*n_u rows, so upper/lower must have length 2*n_u.
-upper = [10.0, 10.0]
-lower = [-10.0, -10.0]
+upper = [2.0, 2.0]
+lower = [-2.0, -2.0]
