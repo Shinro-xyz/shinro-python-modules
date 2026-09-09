@@ -249,7 +249,6 @@ def _boundary_feeds(specs: dict) -> list[tuple[str, dict[str, np.ndarray]]]:
     overflows exp (inf agreement), ±1e-6 probes denormal-adjacent scaling.
     Bit-equal twins (same32 == x32, v4c == v4) exercise ne's equality branch.
     """
-    ext = [0.0, 0.5, -0.5, 1e3, -1e3, 1e-6, -1e-6, 1.0]
     feeds = []
 
     def build(free_fill):

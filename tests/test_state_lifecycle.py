@@ -22,19 +22,12 @@ the remaining state-lifecycle gaps:
 from __future__ import annotations
 
 import zlib
-from pathlib import Path
 
 import numpy as np
 import pytest
-
-from shinro.codegen import interpret
-from shinro.codegen.compose import ComposedGraph
-from shinro.codegen.interpreter import interpret_step
-from shinro.codegen.trace_node import trace_node
 from test_zig_lowering import (
     ALL_SCAN_CASES,
     NumpyBackend,
-    PIDController,
     _build_so,
     _output_split,
     _pack_arrays,
@@ -42,6 +35,10 @@ from test_zig_lowering import (
     _state_slices,
     _step,
 )
+
+from shinro.codegen import interpret
+from shinro.codegen.compose import ComposedGraph
+from shinro.codegen.trace_node import trace_node
 
 N_TICKS = 100
 TOL = 1e-12

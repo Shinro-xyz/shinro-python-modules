@@ -318,7 +318,10 @@ def build_scenario(
             print(f"TRACE FAILED: {e}", file=sys.stderr)
             return EXIT_USAGE
         if tgt == "native":
-            tol = TOL_QP if manifest["has_solve_qp"] else TOL_NON_QP
+            tier_tol = TOL_QP if manifest["has_solve_qp"] else TOL_NON_QP
+            # [compile].oracle_tol overrides the tier default for QP graphs
+            # whose settling at this problem size is coarser than 1e-3.
+            tol = spec["compile"].get("oracle_tol") or tier_tol
             lib = _load_so(prefix_path)
             max_err = _oracle(lib, fresh_cg, samples, seed, tol)
             if max_err >= tol:

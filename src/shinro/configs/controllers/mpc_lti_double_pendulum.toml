@@ -1,0 +1,18 @@
+# MPC regulator for the DoublePendulum (n_x=4, n_u=2), linearized at
+# dt=0.01. N=20 (0.2s preview) stabilizes both coupled pendula.
+type = "MPC_LTI"
+name = "mpc_double_pendulum"
+dt = 0.01
+horizon = 20
+state_cost = [10.0, 10.0, 10.0, 10.0]
+control_cost = [0.1, 0.1]
+A_dynamics = [[1.0, 0.0, 0.01, 0.0], [0.0, 1.0, 0.0, 0.01], [-0.3924, 0.1962, 1.0, 0.0], [0.3924, -0.3924, 0.0, 1.0]]
+B_dynamics = [[0.0, 0.0], [0.0, 0.0], [0.4, -0.4], [-0.4, 0.8]]
+
+[constraints]
+# F = [I(n_u); -I(n_u)] on the control sequence — explicit because the
+# from_config fallback builds I(n_x), which is wrong when n_x != n_u.
+matrix = [[1.0, 0.0], [0.0, 1.0], [-1.0, 0.0], [0.0, -1.0]]
+# F = [I; -I] -> 2*n_u rows, so upper/lower must have length 2*n_u.
+upper = [10.0, 10.0, 10.0, 10.0]
+lower = [-10.0, -10.0, -10.0, -10.0]

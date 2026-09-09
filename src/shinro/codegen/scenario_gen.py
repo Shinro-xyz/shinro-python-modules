@@ -38,7 +38,7 @@ EXIT_OK = 0
 EXIT_UNTRACEABLE = 1
 EXIT_USAGE = 2
 
-_COMPILE_KEYS = {"n_x", "n_u", "optimize", "target", "solver_dir"}
+_COMPILE_KEYS = {"n_x", "n_u", "optimize", "target", "solver_dir", "oracle_tol"}
 _ALLOWED_OPTIMIZE = {"debug", "release"}
 
 
@@ -80,6 +80,11 @@ def _validate_compile(compile_cfg: dict | None, scenario_path: str) -> dict:
         "optimize": optimize,
         "target": compile_cfg.get("target", "native"),
         "solver_dir": compile_cfg.get("solver_dir"),
+        # Optional oracle-B override for QP graphs whose realistic solution
+        # settles more coarsely than the tier default at this problem size
+        # (two independent OSQP runs — C-baked vs Python — agree to solver
+        # settling, which grows with n_vars and constraint activity).
+        "oracle_tol": float(compile_cfg["oracle_tol"]) if "oracle_tol" in compile_cfg else None,
     }
 
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -29,7 +30,12 @@ TEMPLATE = REPO_ROOT / "src" / "shinro" / "configs" / "scenarios" / "_template.t
 
 
 def _run(script: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, str(script), *args], capture_output=True, text=True)
+    # Subprocesses must import shinro from the SOURCE tree (src/), matching
+    # the pytest run's pythonpath — otherwise config-hash tests tamper the
+    # repo copy while the subprocess resolves the installed wheel's copy
+    # (untampered) and staleness goes undetected.
+    env = {**os.environ, "PYTHONPATH": f"{REPO_ROOT / 'src'}{os.pathsep}{REPO_ROOT}"}
+    return subprocess.run([sys.executable, str(script), *args], capture_output=True, text=True, env=env)
 
 
 # ─── [compile] validation (no zig) ─────────────────────────────────────────
