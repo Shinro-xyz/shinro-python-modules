@@ -1626,3 +1626,27 @@ class TestDeploymentRecord:
         assert manifest["provenance"]["configs"]["configs/controllers/lqr_base.toml"] == "abc123"
         assert manifest["provenance"]["python_version"] == "3.12"
 
+
+
+class TestSolverBakeMismatch:
+    """Building a solve_qp graph against the WRONG bake must fail loudly.
+
+    The comptime n_vars check (lower.zig) exists so a graph lowered for one
+    QP size can never silently link a shape-mismatched static solver — the
+    most confusing failure an MPC user can hit. This pins the error text.
+    """
+
+    def test_nvars_mismatch_names_the_problem(self, deltau_bake, tmp_path):
+        from scripts.gen_mpc import build_mpc_composed_graph
+
+        # MPC_LTI graph (n_vars=30) built against the MPC_DeltaU bake (45).
+        with pytest.raises(BaseException) as ei:  # _build_so converts build failures to skip
+            _build_so(
+                build_mpc_composed_graph(),
+                tmp_path / "build",
+                graph_path=tmp_path / "graph_data.zig",
+                solver_dir=deltau_bake,
+            )
+        msg = str(ei.value)
+        assert "does not match baked solver n_vars" in msg, msg[:400]
+        assert "30" in msg and "45" in msg, f"error must name both sizes: {msg[:400]}"

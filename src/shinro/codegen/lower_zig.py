@@ -61,6 +61,18 @@ def lower_zig(
     """
     g = cg.graph
 
+    # Dimensionality contract: the VM is a flat 2-D row-major machine. A
+    # rank-3+ shape would silently collapse to (1, 1) in _rows_cols — one f64
+    # slot for a whole tensor, every downstream node misaligned, exit 0,
+    # garbage everywhere. Refuse loudly instead.
+    for i, node in enumerate(g.nodes):
+        if len(node.shape) > 2:
+            raise ValueError(
+                f"node {i} ({node.op}) has rank-{len(node.shape)} shape "
+                f"{tuple(node.shape)} — the lowered VM supports 1-D and 2-D "
+                f"tensors only"
+            )
+
     # --- buffer layout: each node owns a slot sized by its shape ---
     offsets: list[int] = []
     total = 0
