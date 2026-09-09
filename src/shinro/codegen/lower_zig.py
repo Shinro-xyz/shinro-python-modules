@@ -35,6 +35,8 @@ from __future__ import annotations
 import json
 import os
 
+import numpy as np
+
 from shinro.codegen.compose import ComposedGraph
 from shinro.codegen.tracing import Graph, Node
 
@@ -87,8 +89,21 @@ def lower_zig(
             const_blob.extend(float(v) for v in node.attrs["value"].ravel())
         elif node.op == "clip":
             clip_offsets[i] = len(clip_lo)
-            clip_lo.extend(float(v) for v in node.attrs["lo"].ravel())
-            clip_hi.extend(float(v) for v in node.attrs["hi"].ravel())
+            n_elems = _size(node.shape)
+            bounds: dict[str, list[float]] = {"lo": clip_lo, "hi": clip_hi}
+            for attr, blob in bounds.items():
+                vals = np.asarray(node.attrs[attr], dtype=np.float64).ravel()
+                if vals.size == 1 and n_elems > 1:
+                    # Scalar bound: numpy broadcasts it; the VM's flat blob
+                    # indexing needs one element per output element.
+                    vals = np.full(n_elems, float(vals[0]))
+                if vals.size != n_elems:
+                    raise ValueError(
+                        f"clip node {i}: {attr!r} bound shape {node.attrs[attr].shape} "
+                        f"cannot broadcast against clip shape {node.shape} in the "
+                        f"lowered VM (supported: same-size or scalar bounds)"
+                    )
+                blob.extend(float(v) for v in vals)
 
     # --- output port packing: separate zero-indexed offsets per buffer ---
     # `outputs` and `state_out` are separate C-ABI buffers, so each needs its
@@ -302,8 +317,9 @@ def _node_line(
     rows, cols = _rows_cols(node.shape)
     inputs = "&.{" + ", ".join(str(x) for x in node.inputs) + "}"
     op, aux = _node_vm_info(g, i, node, const_offsets, clip_offsets, input_offsets, outputs, state_outputs)
+    vec = str(len(node.shape) == 1).lower()
 
-    return f".{{ .op = .{op}, .inputs = {inputs}, .rows = {rows}, .cols = {cols}, .aux = {aux}, .vec = {str(len(node.shape) == 1).lower()} }}"
+    return f".{{ .op = .{op}, .inputs = {inputs}, .rows = {rows}, .cols = {cols}, .aux = {aux}, .vec = {vec} }}"
 
 
 def _node_vm_info(

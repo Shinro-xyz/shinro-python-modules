@@ -823,6 +823,122 @@ def plant_so(tmp_path_factory, request):
     return lib, cg, n_x, n_u, case_name
 
 
+# ─── glue-op shape semantics: the VM must reproduce numpy for every shape ───
+
+
+def _glue_probe_case(name):
+    """(builder, in_specs, feed) for one glue-op shape probe."""
+    if name == "transpose-nonsquare":
+        def build(g):
+            return {"t": g.emit("transpose", [g.input("x", (2, 3))], (3, 2))}
+        return build, [("x", (2, 3))], {"x": np.arange(6, dtype=float).reshape(2, 3)}
+    if name == "clip-scalar-bounds":
+        def build(g):
+            x = g.input("x", (4,))
+            return {"c": g.emit("clip", [x], (4,), lo=np.float64(-0.5), hi=np.float64(0.5))}
+        return build, [("x", (4,))], {"x": np.array([-2.0, -0.1, 0.1, 2.0])}
+    if name == "where-scalar-branch":
+        def build(g):
+            x = g.input("x", (3,))
+            one = g.emit("const", [], (), value=np.float64(1.0))
+            zero = g.emit("const", [], (), value=np.float64(0.0))
+            cond = g.emit("ne", [x, zero], (3,))
+            return {"w": g.emit("where", [cond, one, x], (3,))}
+        return build, [("x", (3,))], {"x": np.array([0.0, 1.0, 2.0])}
+    if name == "where-row-broadcast":
+        def build(g):
+            x = g.input("x", (3, 2))
+            bias = g.emit("const", [], (1, 2), value=np.array([[1.0, 2.0]]))
+            zero = g.emit("const", [], (1, 2), value=np.zeros((1, 2)))
+            cond = g.emit("ne", [x, zero], (3, 2))
+            return {"w": g.emit("where", [cond, bias, x], (3, 2))}
+        return build, [("x", (3, 2))], {"x": np.arange(6, dtype=float).reshape(3, 2)}
+    if name == "ew2-row-broadcast":
+        def build(g):
+            x = g.input("x", (3, 2))
+            bias = g.emit("const", [], (1, 2), value=np.array([[10.0, 20.0]]))
+            return {"s": g.emit("add", [x, bias], (3, 2))}
+        return build, [("x", (3, 2))], {"x": np.ones((3, 2))}
+    if name == "ew2-col-broadcast":
+        def build(g):
+            x = g.input("x", (3, 2))
+            scale = g.emit("const", [], (3, 1), value=np.array([[2.0], [3.0], [4.0]]))
+            return {"s": g.emit("mul", [x, scale], (3, 2))}
+        return build, [("x", (3, 2))], {"x": np.full((3, 2), 1.5)}
+    if name == "slice-2d-rows":
+        def build(g):
+            x = g.input("x", (4, 2))
+            return {"s": g.emit("slice", [x], (2, 2), start=1, stop=3)}
+        return build, [("x", (4, 2))], {"x": np.arange(8, dtype=float).reshape(4, 2)}
+    if name == "slice-1d-control":
+        def build(g):
+            x = g.input("x", (6,))
+            return {"s": g.emit("slice", [x], (3,), start=2, stop=5)}
+        return build, [("x", (6,))], {"x": np.arange(6, dtype=float)}
+    if name == "transcendentals":
+        def build(g):
+            x = g.input("x", (8,))
+            return {
+                "tanh": g.emit("tanh", [x], (8,)),
+                "exp": g.emit("exp", [x], (8,)),
+                "sin": g.emit("sin", [x], (8,)),
+                "cos": g.emit("cos", [x], (8,)),
+            }
+        rng = np.random.default_rng(7)
+        return build, [("x", (8,))], {"x": rng.normal(0, 2, 8)}
+    raise ValueError(name)
+
+
+GLUE_CASES = [
+    # the five found-bug cells ...
+    "transpose-nonsquare",      # VM had square-only stride symmetry -> silent garbage
+    "clip-scalar-bounds",       # scalar bounds -> flat-blob comptime OOB
+    "where-scalar-branch",      # scalar branch -> runtime OOB panic
+    "ew2-row-broadcast",        # (1,2)+(3,2) -> runtime OOB panic
+    "slice-2d-rows",            # flat-offset indexing on a row slice -> silent garbage
+    # ... and broadcast/shape cells adjacent to them
+    "where-row-broadcast",
+    "ew2-col-broadcast",
+    "slice-1d-control",
+    "transcendentals",
+]
+
+
+class TestGlueOpShapeSemantics:
+    """The lowered VM must reproduce numpy's op semantics for every shape
+    class, not just the same-shape ones the control configs generate.
+
+    Regression class for the 2026-09-09 audit: transpose scrambled non-square
+    inputs, clip/where/ew2 only handled same-shape or size-1 operands (numpy
+    broadcasts scalars and (1, m) rows), and slice treated a row offset as a
+    flat element offset on 2-D sources. All five failed silently (wrong
+    values) or panicked in debug / corrupted in release.
+    """
+
+    @pytest.mark.parametrize("name", GLUE_CASES)
+    def test_so_matches_numpy(self, tmp_path, name):
+        build, in_specs, feed = _glue_probe_case(name)
+        g = Graph()
+        outs = build(g)
+        for oname, src in outs.items():
+            g.output(oname, src)
+        cg = ComposedGraph(graph=g, inputs=[n for n, _ in in_specs], outputs=list(outs))
+        d = tmp_path / name
+        d.mkdir()
+        lib, cg2 = _build_so(cg, d / "build", graph_path=d / "graph_data.zig")
+        n_out, n_state = _output_split(cg2)
+        inp = np.concatenate([np.asarray(feed[k]).ravel() for k, _ in in_specs])
+        out, _ = _step(lib, cg2, inp, n_out, n_state)
+        traced = interpret(cg2.graph, dict(feed))
+        off = 0
+        max_err = 0.0
+        for oname in cg2.outputs:
+            exp = np.asarray(traced[oname]).ravel()
+            max_err = max(max_err, float(np.max(np.abs(out[off : off + exp.size] - exp))))
+            off += exp.size
+        assert max_err < 1e-12, f"{name}: .so diverged from numpy: max abs err = {max_err:.3e}"
+
+
 class TestPlantCompileScan:
     """Every instantiable plant's compiled estimator+controller .so equals
     interpret() — compilation fidelity across the full (op, shape) surface."""

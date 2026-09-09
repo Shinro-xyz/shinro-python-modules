@@ -102,10 +102,12 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
             },
             .transpose => {
                 const s = node_input(g.nodes[0..], node, &buf);
-                const r = g.nodes[node.inputs[0]].rows;
-                const c = g.nodes[node.inputs[0]].cols;
-                inline for (0..c) |row| {
-                    inline for (0..r) |col| out[col * c + row] = s[row * r + col];
+                // True 2-D transpose: out (node.rows, node.cols) = src.T, so
+                // out[i][j] = src[j][i] — flat out[i*node.cols + j] =
+                // s[j*src.cols + i]. (The old form baked in the square case's
+                // stride symmetry and silently scrambled non-square inputs.)
+                inline for (0..node.rows) |oi| {
+                    inline for (0..node.cols) |oj| out[oi * node.cols + oj] = s[oj * g.nodes[node.inputs[0]].cols + oi];
                 }
             },
             .inv => {
@@ -127,7 +129,18 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
                 const cond = node_input(g.nodes[0..], node, &buf);
                 const a = node_input_at(g.nodes[0..], node.inputs[1], &buf);
                 const b = node_input_at(g.nodes[0..], node.inputs[2], &buf);
-                inline for (0..node.rows * node.cols) |j| out[j] = if (cond[j] != 0.0) a[j] else b[j];
+                const cond_n = g.nodes[node.inputs[0]];
+                const a_n = g.nodes[node.inputs[1]];
+                const b_n = g.nodes[node.inputs[2]];
+                inline for (0..node.rows) |oi| {
+                    inline for (0..node.cols) |oj| {
+                        const f = oi * node.cols + oj;
+                        const c = cond[if (cond_n.rows * cond_n.cols == 1) 0 else f];
+                        const av = a[bcast_flat(a_n, a_n.vec, node.rows, node.cols, oi, oj)];
+                        const bv = b[bcast_flat(b_n, b_n.vec, node.rows, node.cols, oi, oj)];
+                        out[f] = if (c != 0.0) av else bv;
+                    }
+                }
             },
             .any => {
                 const s = node_input(g.nodes[0..], node, &buf);
@@ -187,7 +200,17 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
             },
             .slice => {
                 const s = node_input(g.nodes[0..], node, &buf);
-                inline for (0..node.rows * node.cols) |j| out[j] = s[node.aux + j];
+                const src = g.nodes[node.inputs[0]];
+                if (src.vec) {
+                    // 1-D source: aux is the flat element offset.
+                    inline for (0..node.rows * node.cols) |j| out[j] = s[node.aux + j];
+                } else {
+                    // 2-D source: the interpreter slices ROWS (x[start:stop]
+                    // along axis 0), so out[i][j] = src[start + i][j].
+                    inline for (0..node.rows) |oi| {
+                        inline for (0..node.cols) |oj| out[oi * node.cols + oj] = s[(node.aux + oi) * src.cols + oj];
+                    }
+                }
             },
             // stack([a, b, ...]) along a new leading axis (numpy axis=0). Each
             // input contributes its flat length to consecutive output rows; all
@@ -232,14 +255,28 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
 
 const BinOp = enum { add, sub, mul, div, ne };
 
-/// Elementwise binary op with broadcast: each operand is either the same
-/// length as the output, or a single element (0-d / size-1 broadcast).
-/// inline so the comptime-known node bounds reach the inline-for.
-/// Elementwise binary op with broadcast.
+/// Flat index of operand element (i, j) under numpy broadcasting.
 ///
-/// Each operand is either the same length as the output or a single element
-/// (0-d / size-1 broadcast), mirroring numpy's broadcasting for the shapes
-/// the tracer allows. `inline` so the comptime-known node bounds reach the
+/// The tracer only captures numpy-valid broadcasts, so at comptime the
+/// operand shape must fall into one of: scalar, same shape, (1, m) row
+/// broadcast, (n, 1) column broadcast, or a genuinely 1-D (`vec`) operand
+/// right-aligned to the output's columns. The old code only handled
+/// same-shape and size-1 — a (1, m)-against-(n, m) add or a scalar `where`
+/// branch read out of bounds (panic in debug, garbage in release).
+inline fn bcast_flat(op: g.Node, op_vec: bool, out_r: usize, out_c: usize, i: usize, j: usize) usize {
+    if (op.rows * op.cols == 1) return 0; // scalar broadcast
+    if (op_vec and op.rows == out_c) return j; // (m,) right-aligns to the last axis
+    if (op.rows == out_r and op.cols == out_c) return i * out_c + j; // same shape
+    if (op.rows == 1 and op.cols == out_c) return j; // (1, m) row broadcast
+    if (op.cols == 1 and op.rows == out_r) return i; // (n, 1) col broadcast
+    return i * out_c + j; // unreachable for numpy-valid traces
+}
+
+/// Elementwise binary op with numpy broadcasting.
+///
+/// Each operand is indexed through `bcast_flat`: same shape, scalar,
+/// (1, m) row, (n, 1) column, or a 1-D (`vec`) operand right-aligned to the
+/// output's columns. `inline` so the comptime-known node bounds reach the
 /// `inline for`.
 ///
 /// Args:
@@ -247,25 +284,27 @@ const BinOp = enum { add, sub, mul, div, ne };
 ///     node: The current add/sub/mul/div/ne node.
 ///     self_idx: The node's index in `nodes` (its buffer offset).
 ///     buf: The shared step buffer (written at the node's offset).
-///     op: Which binary op to apply (add, sub, mul, div).
+///     op: Which binary op to apply (add, sub, mul, div, ne).
 inline fn ew2(nodes: []const g.Node, node: g.Node, self_idx: usize, buf: *[g.buf_len]f64, op: BinOp) void {
     const a = node_input_at(nodes, node.inputs[0], buf);
     const b = node_input_at(nodes, node.inputs[1], buf);
-    const na = nodes[node.inputs[0]].rows * nodes[node.inputs[0]].cols;
-    const nb = nodes[node.inputs[1]].rows * nodes[node.inputs[1]].cols;
+    const a_n = nodes[node.inputs[0]];
+    const b_n = nodes[node.inputs[1]];
     var out = buf.*[g.offsets[self_idx] ..][0 .. node.rows * node.cols];
-    inline for (0..node.rows * node.cols) |j| {
-        const av = if (na == 1) a[0] else a[j];
-        const bv = if (nb == 1) b[0] else b[j];
-        out[j] = switch (op) {
-            .add => av + bv,
-            .sub => av - bv,
-            .mul => av * bv,
-            .div => av / bv,
-            // Inequality as a 1.0/0.0 flag — the graph's boolean repr,
-            // consumed by where_op downstream (e.g. PID anti-windup).
-            .ne => if (av != bv) 1.0 else 0.0,
-        };
+    inline for (0..node.rows) |i| {
+        inline for (0..node.cols) |j| {
+            const av = a[bcast_flat(a_n, a_n.vec, node.rows, node.cols, i, j)];
+            const bv = b[bcast_flat(b_n, b_n.vec, node.rows, node.cols, i, j)];
+            out[i * node.cols + j] = switch (op) {
+                .add => av + bv,
+                .sub => av - bv,
+                .mul => av * bv,
+                .div => av / bv,
+                // Inequality as a 1.0/0.0 flag — the graph's boolean repr,
+                // consumed by where_op downstream (e.g. PID anti-windup).
+                .ne => if (av != bv) 1.0 else 0.0,
+            };
+        }
     }
 }
 
