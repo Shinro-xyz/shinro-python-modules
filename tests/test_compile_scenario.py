@@ -129,6 +129,24 @@ def test_e2e_compile_verified(tmp_path):
 
 
 @pytest.mark.skipif(shutil.which("zig") is None, reason="zig not on PATH")
+def test_e2e_cross_compile_skips_oracle(tmp_path):
+    """A non-native target skips the host oracle (can't dlopen a cross .so)
+    but keeps the integrity check, stamp, and verify."""
+    out = tmp_path / "scenario"
+    assert _run(GEN, str(SCENARIO), "--out", str(out)).returncode == 0
+
+    build = _run(BUILD, str(out), "--scenario", str(SCENARIO), "--target", "aarch64-linux-gnu")
+    assert build.returncode == 0, build.stderr
+    assert "skipping host oracle" in build.stderr
+    assert "oracle B" not in build.stdout
+
+    so = out / "lib" / "libbase.so"
+    assert so.exists()
+    record = out / "lib" / "libbase.deployment.json"
+    assert record.exists()
+
+
+@pytest.mark.skipif(shutil.which("zig") is None, reason="zig not on PATH")
 def test_e2e_stale_graph_rejected(tmp_path):
     """Building a graph that no longer matches the scenario fails loudly."""
     out = tmp_path / "scenario"
