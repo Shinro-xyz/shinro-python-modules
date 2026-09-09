@@ -640,24 +640,58 @@ class TestSingleInputKfLqr:
         assert max_err < 1e-12, f"single-input KF+LQR .so diverged: max abs err = {max_err:.3e}"
 
 
-#: Every standalone-instantiable packaged plant (name, cfg, n_x, n_u, dt),
-#: plus a synthetic high-dim case at the Quadrotor's documented dims (the
-#: real Quadrotor is an unimplemented placeholder). Compiling KF+LQR for each
-#: catches shape-classification bugs in the VM matmul dispatch (e.g. the
-#: n_u=1 ``(m,1)@(1,1)`` misroute) that the n_u=3 base graph alone misses.
-PLANT_SCAN_CASES = [
+# ─── plant compile-scan: (op, shape) surface across the whole zoo ────────────
+#
+# The one-step oracle verifies compilation fidelity: the .so's shinro_step
+# must compute the same graph math as interpret(), for every shape class and
+# op mix the plants generate. Dimensions drive the matmul-dispatch shape
+# classes (the n_u=1 (m,1)@(1,1) misroute only exists at one control input);
+# the controller/estimator choice drives the op set (PID adds where/ne +
+# three recurrent state ports; Luenberger drops the inv and the P port).
+
+#: Standalone-instantiable packaged plants: (name, cfg, n_x, n_u, dt).
+PLANT_DIMS = [
     ("CartPole", "configs/plants/cartpole.toml", 4, 1, 0.01),
     ("InvertedPendulum", "configs/plants/inverted_pendulum.toml", 2, 1, 0.01),
     ("DoublePendulum", "configs/plants/double_pendulum.toml", 4, 2, 0.01),
     ("HolonomicMobileRobot", "configs/plants/holonomic_base.toml", 3, 3, 0.02),
-    ("Quadrotor_synthetic", None, 12, 4, 0.01),
+]
+#: Controllers/estimators that trace without a solver bake. MPC stays at the
+#: base dims (existing suite) — every QP size needs its own baked solver.
+#: PID is square-systems-only: its per-channel gains (n_u,) broadcast against
+#: the (n_x,) error, so for n_x != n_u the traced output/clip/anti-windup
+#: shapes are inconsistent (comptime OOB in the clip lowering, or a runtime
+#: panic in the where dispatch — both observed before the guard below).
+#: compose() now rejects those with a loud ValueError.
+SCAN_CONTROLLERS = ("LQR", "PID")
+SCAN_ESTIMATORS = ("KalmanFilter", "LuenbergerObserver")
+
+#: 4 plants x 2 estimators x (LQR) + square plants x 2 estimators x (PID).
+PLANT_SCAN_CASES = [
+    (f"{plant}-{ctrl}-{est}", plant, cfg, n_x, n_u, dt, ctrl, est)
+    for plant, cfg, n_x, n_u, dt in PLANT_DIMS
+    for ctrl in SCAN_CONTROLLERS
+    if ctrl == "LQR" or n_x == n_u  # PID: square systems only
+    for est in SCAN_ESTIMATORS
 ]
 
+#: Synthetic dimensionality sweep at the Quadrotor-scale: n_x x n_u combos
+#: beyond any named plant, LQR+KF. Exercises large matmuls and the n_x x n_x
+#: Kalman inverse (12x12, 24x24) the named plants never reach.
+DIM_SWEEP_CASES = [
+    (f"synth{nx}x{nu}", "synthetic", None, nx, nu, 0.01, "LQR", "KalmanFilter")
+    for nx in (6, 12, 24)
+    for nu in (1, 3, 4)
+]
 
-def _plant_model(name, cfg, n_x, n_u, dt):
+ALL_SCAN_CASES = PLANT_SCAN_CASES + DIM_SWEEP_CASES
+
+
+def _plant_model(plant_name, cfg, n_x, n_u, dt):
     """Discrete (A_d, B_d) for a plant: linearized dynamics where possible,
-    the plant's own discrete model otherwise, and the documented dims for the
-    synthetic quadrotor."""
+    the plant's own discrete model otherwise, and a diagonally-stable
+    synthetic model for the dim-sweep cases (A=I would make the LQR DARE
+    infeasible with a truncated B)."""
     if cfg is None:
         return 0.99 * np.eye(n_x), 0.01 * np.eye(n_x)[:, :n_u]
 
@@ -669,7 +703,7 @@ def _plant_model(name, cfg, n_x, n_u, dt):
     from shinro.utils.linearization import discretize_euler, linearize_plant
 
     with open(resolve_config_path(cfg), "rb") as f:
-        plant = _PLANT_REGISTRY[name].from_config(tomllib.load(f), backend=NumpyBackend())
+        plant = _PLANT_REGISTRY[plant_name].from_config(tomllib.load(f), backend=NumpyBackend())
     try:
         A_c, B_c = linearize_plant(plant, u0=plant.bk.zeros(n_u))
         A_d, B_d = discretize_euler(A_c, B_c, plant.dt, backend=plant.bk)
@@ -678,80 +712,175 @@ def _plant_model(name, cfg, n_x, n_u, dt):
     return np.asarray(A_d), np.asarray(B_d)
 
 
-def _plant_kf_lqr_graph(tmp_path, name, cfg, n_x, n_u, dt):
-    """A composed KF+LQR graph for a plant's dims, with its (A_d, B_d)."""
+def _controller_config_toml(kind, name, n_x, n_u, dt, A_d, B_d, out_dir):
+    """Write a controller config TOML for the scan (LQR or PID)."""
+    path = out_dir / f"ctrl_{kind.lower()}_{name}.toml"
+    if kind == "LQR":
+        path.write_text(
+            f'type = "LQR"\nname = "lqr_{name}"\ndt = {dt}\n'
+            f"state_cost = {[1.0] * n_x}\n"
+            f"control_cost = {[1.0] * n_u}\n"
+            f"A_dynamics = {np.round(A_d, 6).tolist()}\n"
+            f"B_dynamics = {np.round(B_d, 6).tolist()}\n"
+        )
+    elif kind == "PID":
+        # output_limits force the branch-free anti-windup (ne mask + where
+        # back-calculation) into the graph at every dim.
+        path.write_text(
+            f'type = "PID"\nname = "pid_{name}"\ndt = {dt}\n'
+            f"kp = {[2.0] * n_u}\nki = {[0.5] * n_u}\nkd = {[0.5] * n_u}\n"
+            f"output_limits = {{ min = {[-10.0] * n_u}, max = {[10.0] * n_u} }}\n"
+        )
+    else:
+        raise ValueError(f"unknown controller kind {kind!r}")
+    return str(path)
+
+
+def _estimator_config_toml(kind, name, n_x, n_u, dt, A_d, B_d, out_dir):
+    """Write an estimator config TOML for the scan (KF or Luenberger).
+
+    B_dynamics is always explicit: the dt*I default is (n_x, n_x), which
+    mismatches the (n_u, 1) control_input port whenever n_u < n_x.
+    """
+    path = out_dir / f"est_{kind.lower()}_{name}.toml"
+    A = np.round(A_d, 6).tolist()
+    B = np.round(B_d, 6).tolist()
+    if kind == "KalmanFilter":
+        path.write_text(
+            f'type = "KalmanFilter"\nname = "kf_{name}"\ndt = {dt}\n'
+            f"process_noise = {[1e-3] * n_x}\n"
+            f"measurement_noise = {[1e-3] * n_x}\n"
+            f"A_dynamics = {A}\nB_dynamics = {B}\n"
+        )
+    elif kind == "LuenbergerObserver":
+        path.write_text(
+            f'type = "LuenbergerObserver"\nname = "luen_{name}"\ndt = {dt}\n'
+            f"observer_gain = {[0.5] * n_x}\n"
+            f"A_dynamics = {A}\nB_dynamics = {B}\n"
+        )
+    else:
+        raise ValueError(f"unknown estimator kind {kind!r}")
+    return str(path)
+
+
+def _plant_graph(tmp_path, case_name, plant_name, plant_cfg, n_x, n_u, dt, controller, estimator):
+    """A composed estimator+controller graph for a plant's dims."""
     from shinro.codegen.build import build_composed_graph
 
-    A_d, B_d = _plant_model(name, cfg, n_x, n_u, dt)
-    est = tmp_path / f"kalman_{name}.toml"
-    est.write_text(
-        f'type = "KalmanFilter"\nname = "kalman_{name}"\ndt = {dt}\n'
-        f"process_noise = {[1e-3] * n_x}\n"
-        f"measurement_noise = {[1e-3] * n_x}\n"
-        f"A_dynamics = {np.round(A_d, 6).tolist()}\n"
-        f"B_dynamics = {np.round(B_d, 6).tolist()}\n"
-    )
-    ctrl = tmp_path / f"lqr_{name}.toml"
-    ctrl.write_text(
-        f'type = "LQR"\nname = "lqr_{name}"\ndt = {dt}\n'
-        f"state_cost = {[1.0] * n_x}\n"
-        f"control_cost = {[1.0] * n_u}\n"
-        f"A_dynamics = {np.round(A_d, 6).tolist()}\n"
-        f"B_dynamics = {np.round(B_d, 6).tolist()}\n"
-    )
+    A_d, B_d = _plant_model(plant_name, plant_cfg, n_x, n_u, dt)
+    est = _estimator_config_toml(estimator, case_name, n_x, n_u, dt, A_d, B_d, tmp_path)
+    ctrl = _controller_config_toml(controller, case_name, n_x, n_u, dt, A_d, B_d, tmp_path)
     return build_composed_graph(
-        str(est),
-        str(ctrl),
+        est,
+        ctrl,
         n_x=n_x,
         n_u=n_u,
         input_limits=(np.full(n_u, -10.0), np.full(n_u, 10.0)),
     )
 
 
+def _random_spd(rng, n):
+    """A random well-conditioned SPD matrix (innovation covariances must stay
+    invertible for both the Zig LU and numpy's LAPACK inv)."""
+    P = rng.normal(0.0, 0.1, (n, n))
+    return P @ P.T + 0.1 * np.eye(n)
+
+
+def _scan_input_ports(cg, n_x, n_u, rng):
+    """Random host inputs for a scan graph, keyed by port name.
+
+    y/x_ref/u_prev/state_x_hat/state_P get random values (state_P as a random
+    SPD matrix); any further recurrent state ports — e.g. PID's
+    _integral/_prev_error/_has_run — are zero-filled, which is also the
+    semantically correct first tick (has_run=0 gates the D-term via where).
+    """
+    known = {
+        "y": rng.normal(0.0, 0.1, (n_x,)),
+        "x_ref": rng.normal(0.0, 0.1, (n_x,)),
+        "u_prev": rng.normal(0.0, 0.1, (n_u,)),
+        "state_x_hat": rng.normal(0.0, 0.1, (n_x, 1)),
+        "state_P": _random_spd(rng, n_x),
+    }
+    ports = {}
+    for name in cg.inputs:
+        if name in known:
+            ports[name] = known[name]
+        else:
+            shape = next(
+                n.shape for n in cg.graph.nodes if n.op == "input" and n.attrs["name"] == name
+            )
+            ports[name] = np.zeros(tuple(shape))
+    return ports
+
+
 @pytest.fixture(scope="module")
 def plant_so(tmp_path_factory, request):
-    """A compiled KF+LQR .so for one plant-scan case."""
-    name, cfg, n_x, n_u, dt = request.param
-    d = tmp_path_factory.mktemp(f"zig-plant-{name}")
-    cg = _plant_kf_lqr_graph(d, name, cfg, n_x, n_u, dt)
+    """A compiled scan .so for one (plant x controller x estimator) case."""
+    case_name, plant_name, plant_cfg, n_x, n_u, dt, controller, estimator = request.param
+    d = tmp_path_factory.mktemp(f"zig-plant-{case_name}")
+    cg = _plant_graph(d, case_name, plant_name, plant_cfg, n_x, n_u, dt, controller, estimator)
     lib, cg = _build_so(cg, d / "build", graph_path=d / "graph_data.zig")
-    return lib, cg, n_x, n_u
+    return lib, cg, n_x, n_u, case_name
 
 
 class TestPlantCompileScan:
-    """Every instantiable plant's compiled KF+LQR .so equals interpret()."""
+    """Every instantiable plant's compiled estimator+controller .so equals
+    interpret() — compilation fidelity across the full (op, shape) surface."""
 
-    @pytest.mark.parametrize("plant_so", PLANT_SCAN_CASES, indirect=True)
+    @pytest.mark.parametrize("plant_so", ALL_SCAN_CASES, indirect=True, ids=[c[0] for c in ALL_SCAN_CASES])
     def test_so_matches_interpret_for_each_plant(self, plant_so):
-        lib, cg, n_x, n_u = plant_so
+        lib, cg, n_x, n_u, name = plant_so
         rng = np.random.default_rng(5)
         n_out, n_state = _output_split(cg)
         sl = _state_slices(cg)
         max_err = 0.0
         for _ in range(20):
-            y = rng.normal(0.0, 0.1, (n_x,))
-            x_ref = rng.normal(0.0, 0.1, (n_x,))
-            u_prev = rng.normal(0.0, 0.1, (n_u,))
-            x_hat = rng.normal(0.0, 0.1, (n_x, 1))
-            P = rng.normal(0.0, 0.1, (n_x, n_x))
-            P = P @ P.T + 0.1 * np.eye(n_x)
-
-            inputs = _pack_inputs(cg, y, x_ref, u_prev, x_hat, P)
+            ports = _scan_input_ports(cg, n_x, n_u, rng)
+            inputs = _pack_arrays(cg, {k: v.ravel() for k, v in ports.items()})
             out, state = _step(lib, cg, inputs, n_out, n_state)
-            traced = interpret(
-                cg.graph,
-                {"y": y, "x_ref": x_ref, "u_prev": u_prev, "state_x_hat": x_hat, "state_P": P},
-            )
+            traced = interpret(cg.graph, ports)
             off = 0
-            for name in cg.outputs:
-                exp = np.asarray(traced[name]).ravel()
+            for pname in cg.outputs:
+                exp = np.asarray(traced[pname]).ravel()
                 max_err = max(max_err, float(np.max(np.abs(out[off : off + exp.size] - exp))))
                 off += exp.size
-            for name in cg.state_outputs:
-                exp = np.asarray(traced[name]).ravel()
-                start, stop = sl[name]
+            for pname in cg.state_outputs:
+                exp = np.asarray(traced[pname]).ravel()
+                start, stop = sl[pname]
                 max_err = max(max_err, float(np.max(np.abs(state[start:stop] - exp))))
-        assert max_err < 1e-12, f"plant .so diverged: max abs err = {max_err:.3e}"
+        assert max_err < 1e-12, f"{name}: .so diverged from interpreter: max abs err = {max_err:.3e}"
+
+
+def test_compose_rejects_nonsquare_pid(tmp_path):
+    """compose() raises loudly when the controller's traced output is not (n_u,).
+
+    Regression for the malformed-graph class: a PID with fewer gain channels
+    than state dimensions broadcasts its gains against the error vector, so
+    the traced output/clip/anti-windup shapes disagree (previously: comptime
+    OOB in the clip lowering for some dims, a runtime panic in the where
+    dispatch for others — both silent-in-release).
+    """
+    import pytest as _pytest
+
+    from shinro.codegen.build import build_composed_graph
+
+    est = tmp_path / "kf_cartpole.toml"
+    est.write_text(
+        'type = "KalmanFilter"\nname = "kf"\ndt = 0.01\n'
+        "process_noise = [0.001, 0.001, 0.001, 0.001]\n"
+        "measurement_noise = [0.005, 0.005, 0.005, 0.005]\n"
+        "A_dynamics = [[1.0, 0.01, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0],"
+        " [0.0, 0.0, 1.0, 0.01], [0.0, 0.0, 0.0, 1.0]]\n"
+        "B_dynamics = [[0.0], [0.05], [0.0], [0.3]]\n"
+    )
+    ctrl = tmp_path / "pid_cartpole.toml"
+    ctrl.write_text(
+        'type = "PID"\nname = "pid"\ndt = 0.01\n'
+        "kp = [2.0]\nki = [0.5]\nkd = [0.5]\n"
+        "output_limits = { min = [-10.0], max = [10.0] }\n"
+    )
+    with _pytest.raises(ValueError, match="control dimension"):
+        build_composed_graph(str(est), str(ctrl), n_x=4, n_u=1)
 
 
 def test_lower_zig_emits_valid_data_table():

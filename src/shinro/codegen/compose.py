@@ -252,6 +252,22 @@ def compose(
 
     # The controller's output (u) — clip if input_limits provided, then emit.
     ctrl_out_src_node = controller.graph.nodes[controller.output_nodes["out"]]
+    if tuple(ctrl_out_src_node.shape) != (n_u,):
+        # A controller whose traced output is not the control vector cannot be
+        # composed: the output/clip wiring below declares (n_u,) ports around
+        # it, and a shape mismatch here produces a malformed graph (comptime
+        # OOB in the lowered VM, or silently-wrong clip bounds). Concrete
+        # case: per-channel PID gains (n_u,) broadcast against the (n_x,)
+        # error, so PIDController is only valid for square systems
+        # (n_x == n_u).
+        raise ValueError(
+            f"controller output shape {tuple(ctrl_out_src_node.shape)} does not "
+            f"match the plant's control dimension (n_u,)={n_u}. A controller "
+            f"whose compute() output is not the control vector (e.g. PID with "
+            f"fewer gain channels than state dimensions — its gains broadcast "
+            f"against the error) is only valid for square systems "
+            f"(n_x == n_u)."
+        )
     if ctrl_out_src_node.op == "input":
         # Stateless controller whose output is a direct input — unusual but
         # handled for robustness.
