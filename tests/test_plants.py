@@ -112,18 +112,20 @@ class TestInvertedPendulum:
         pend = InvertedPendulum(backend=bk)
         A, _ = pend.get_model()
         eigs = np.linalg.eigvals(_to_np(A, bk))
-        assert np.any(np.real(eigs) > 0)
+        assert np.any(np.abs(eigs) > 1)  # discrete-time instability
 
     def test_get_model_upright_matches_analytic(self, bk):
-        """get_model() at default upright equals the closed-form Jacobians."""
+        """get_model() at default upright equals the discretized Jacobians."""
         from shinro.plants.inverted_pendulum import InvertedPendulum
         pend = InvertedPendulum(mass=0.1, length=0.5, gravity=9.81, dt=0.01, backend=bk)
         A, B = pend.get_model()
-        expected_A = np.array([
+        expected_A_c = np.array([
             [0.0, 1.0],
             [pend.g / pend.l, -pend.b / (pend.m * pend.l**2)],
         ])
-        expected_B = np.array([[0.0], [1.0 / (pend.m * pend.l**2)]])
+        expected_B_c = np.array([[0.0], [1.0 / (pend.m * pend.l**2)]])
+        expected_A = np.eye(2) + pend.dt * expected_A_c
+        expected_B = pend.dt * expected_B_c
         assert np.allclose(_to_np(A, bk), expected_A, atol=1e-6)
         assert np.allclose(_to_np(B, bk), expected_B, atol=1e-6)
 
@@ -203,21 +205,23 @@ class TestCartPole:
         cp = CartPole(backend=bk)
         A, _ = cp.get_model()
         eigs = np.linalg.eigvals(_to_np(A, bk))
-        assert np.any(np.real(eigs) > 0)
+        assert np.any(np.abs(eigs) > 1)  # discrete-time instability
 
     def test_get_model_upright_matches_analytic(self, bk):
-        """get_model() at default upright equals the closed-form Jacobians."""
+        """get_model() at default upright equals the discretized Jacobians."""
         from shinro.plants.cartpole import CartPole
         cp = CartPole(cart_mass=0.5, pole_mass=0.1, pole_length=0.5, gravity=9.81, dt=0.01, backend=bk)
         M, m, pole_len, g, b = cp.M, cp.m, cp.l, cp.g, cp.b
         A, B = cp.get_model()
-        expected_A = np.array([
+        expected_A_c = np.array([
             [0.0, 1.0, 0.0, 0.0],
             [0.0, 0.0, -m * g / M, 0.0],
             [0.0, 0.0, 0.0, 1.0],
             [0.0, 0.0, (M + m) * g / (M * pole_len), -b / (M * pole_len**2)],
         ])
-        expected_B = np.array([[0.0], [1.0 / M], [0.0], [-1.0 / (M * pole_len)]])
+        expected_B_c = np.array([[0.0], [1.0 / M], [0.0], [-1.0 / (M * pole_len)]])
+        expected_A = np.eye(4) + cp.dt * expected_A_c
+        expected_B = cp.dt * expected_B_c
         assert np.allclose(_to_np(A, bk), expected_A, atol=1e-6)
         assert np.allclose(_to_np(B, bk), expected_B, atol=1e-6)
 
@@ -348,12 +352,13 @@ class TestDoublePendulum:
         assert _to_np(B, bk).shape == (4, 2)
 
     def test_get_model_at_rest_matches_analytic(self, bk):
-        """At rest the linearized model matches the closed-form Jacobian.
+        """At rest the linearized model matches the discretized Jacobian.
 
         At theta=0, omega=0, the manipulator equation gives
         thetaddot = M(0)^{-1} (tau - C*omega - G(0)), where C*omega = 0 and
         G(0) = 0. So B rows 2-3 equal M(0)^{-1} and A rows 2-3 (theta cols)
-        equal -M(0)^{-1} dG/dtheta|_0.
+        equal -M(0)^{-1} dG/dtheta|_0, then Euler-discretized at the plant's
+        dt.
         """
         dp = self._make(bk)
         m1, m2, l1, l2, g = dp.m1, dp.m2, dp.l1, dp.l2, dp.g
@@ -363,12 +368,14 @@ class TestDoublePendulum:
         ])
         dG_dtheta = np.diag([(m1 + m2) * g * l1, m2 * g * l2])
         Minv = np.linalg.inv(M0)
-        expected_A = np.zeros((4, 4))
-        expected_A[0, 2] = 1.0
-        expected_A[1, 3] = 1.0
-        expected_A[2:, :2] = -Minv @ dG_dtheta
-        expected_B = np.zeros((4, 2))
-        expected_B[2:, :] = Minv
+        expected_A_c = np.zeros((4, 4))
+        expected_A_c[0, 2] = 1.0
+        expected_A_c[1, 3] = 1.0
+        expected_A_c[2:, :2] = -Minv @ dG_dtheta
+        expected_B_c = np.zeros((4, 2))
+        expected_B_c[2:, :] = Minv
+        expected_A = np.eye(4) + dp.dt * expected_A_c
+        expected_B = dp.dt * expected_B_c
         A, B = dp.get_model()
         assert np.allclose(_to_np(A, bk), expected_A, atol=1e-6)
         assert np.allclose(_to_np(B, bk), expected_B, atol=1e-6)

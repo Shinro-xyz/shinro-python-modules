@@ -1,7 +1,7 @@
 from shinro.components import PhysicsEngine, Plant
 from shinro.factories.registry import register_plant, register_plant_detector
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend
-from shinro.utils.linearization import linearize_plant
+from shinro.utils.linearization import discretize_euler, linearize_plant
 
 
 @register_plant("CartPole")
@@ -118,14 +118,15 @@ class CartPole(Plant):
         return self.bk.copy(self.state)
 
     def get_model(self, x0=None, u0=None, eps=1e-6):
-        """Get the linearized state-space model around an operating point.
+        """Get the discrete-time state-space model around an operating point.
 
         Linearizes the continuous-time dynamics :math:`f(x, u) = \\dot{x}`
         around ``(x0, u0)`` using central finite differences via
-        :func:`shinro.utils.linearization.linearize_plant`. When ``x0``/``u0``
-        are omitted, defaults to the upright equilibrium
+        :func:`shinro.utils.linearization.linearize_plant`, then
+        Euler-discretizes at the plant's ``dt``. When ``x0``/``u0`` are
+        omitted, defaults to the upright equilibrium
         :math:`(x=0, \\dot{x}=0, \\theta=0, \\dot{\\theta}=0)` with zero
-        control, matching the closed-form model previously returned.
+        control.
 
         Args:
             x0: Operating point state (4,) — [x, x_dot, theta, theta_dot].
@@ -134,9 +135,11 @@ class CartPole(Plant):
             eps: Step size for finite differences.
 
         Returns:
-            Tuple of (A, B) where A = ∂f/∂x is (4, 4) and B = ∂f/∂u is (4, 1).
+            Tuple of (A, B) where A = I + dt·∂f/∂x is (4, 4) and
+            B = dt·∂f/∂u is (4, 1).
         """
-        return linearize_plant(self, x0, u0, eps=eps)
+        A_c, B_c = linearize_plant(self, x0, u0, eps=eps)
+        return discretize_euler(A_c, B_c, self.dt, backend=self.bk)
 
     def _compute_accels(self, x, theta, x_dot, theta_dot, F):
         """Compute the accelerations from the equations of motion.

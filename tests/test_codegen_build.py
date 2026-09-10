@@ -122,6 +122,39 @@ def test_inject_model_derives_from_plant():
     assert "B_dynamics" not in cfg2
 
 
+def test_derive_model_falls_back_to_get_model():
+    """Velocity-commanded plants (no dynamics/input_dim) derive via get_model."""
+    from shinro.factories.registry import _PLANT_REGISTRY
+    from shinro.utils.array_backend import NumpyBackend
+    from shinro.utils.config_resolver import resolve_config_path
+    from shinro.utils.linearization import derive_model
+
+    with open(resolve_config_path("configs/plants/holonomic_base.toml"), "rb") as f:
+        plant = _PLANT_REGISTRY["HolonomicMobileRobot"].from_config(
+            tomllib.load(f), backend=NumpyBackend()
+        )
+    A_d, B_d = derive_model(plant)
+    assert np.asarray(A_d).shape == (3, 3)
+    assert np.asarray(B_d).shape == (3, 3)
+    assert np.allclose(A_d, np.eye(3))  # velocity-commanded: A = I, B = dt*I
+
+
+def test_derive_model_multi_input():
+    """Multi-input plants derive the right B shape (n_u > 1)."""
+    from shinro.factories.registry import _PLANT_REGISTRY
+    from shinro.utils.array_backend import NumpyBackend
+    from shinro.utils.config_resolver import resolve_config_path
+    from shinro.utils.linearization import derive_model
+
+    with open(resolve_config_path("configs/plants/double_pendulum.toml"), "rb") as f:
+        plant = _PLANT_REGISTRY["DoublePendulum"].from_config(
+            tomllib.load(f), backend=NumpyBackend()
+        )
+    A_d, B_d = derive_model(plant)
+    assert np.asarray(A_d).shape == (4, 4)
+    assert np.asarray(B_d).shape == (4, 2)  # n_u = 2, not the dt*I (4,4) default
+
+
 def test_derived_plant_scenario_matches_explicit(tmp_path):
     """A [plant] scenario (no A/B, no n_x/n_u) composes the SAME graph as the
     explicit-A/B path — the derivation is faithful, not a reimplementation."""

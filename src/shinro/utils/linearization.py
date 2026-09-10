@@ -145,22 +145,21 @@ def linearize_plant(plant, x0=None, u0=None, eps=1e-6):
 
 
 def derive_model(plant):
-    """Linearize a plant at its default operating point and Euler-discretize.
+    """Return the plant's discrete-time ``(A_d, B_d)`` model.
 
-    Returns the discrete-time ``(A_d, B_d)`` pair in the plant's backend type —
-    the model a controller/estimator needs when its config omits
-    ``A_dynamics``/``B_dynamics``. This is the single source of the derived
-    model shared by the simulation and compile paths.
+    Delegates to ``plant.get_model()``, which every plant implements as the
+    discrete-time model (analytical plants linearize + Euler-discretize at
+    their ``dt``; velocity-commanded plants return ``A = I, B = dt·I``
+    directly). This is the single source of the derived model shared by the
+    simulation and compile paths.
 
     Args:
-        plant: A plant with ``.dynamics``, ``.bk``, ``.dt``, ``.get_state()``,
-            and ``.input_dim``.
+        plant: A plant exposing ``get_model()``.
 
     Returns:
         Tuple ``(A_d, B_d)`` in the plant's backend native type.
     """
-    A_c, B_c = linearize_plant(plant)
-    return discretize_euler(A_c, B_c, plant.dt, backend=plant.bk)
+    return plant.get_model()
 
 
 def inject_model(cfg, plant) -> dict:
