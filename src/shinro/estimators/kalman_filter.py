@@ -1,8 +1,28 @@
+from dataclasses import dataclass
 from typing import Any
 
 from shinro.components import StateEstimator
 from shinro.factories.registry import register_estimator
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend, parse_matrix
+
+
+@dataclass(frozen=True)
+class KalmanFilterConfig:
+    """Strict TOML schema for :class:`KalmanFilter`.
+
+    ``dt`` / ``A_dynamics`` / ``B_dynamics`` are optional: scenario builds
+    inject them from the plant (see :mod:`shinro.utils.linearization`);
+    standalone use must supply ``B_dynamics`` or ``dt``.
+    """
+
+    process_noise: list[float] | list[list[float]]
+    measurement_noise: list[float] | list[list[float]]
+    dt: float | None = None
+    A_dynamics: Any = None
+    B_dynamics: Any = None
+    C: Any = None
+    D: Any = None
+    name: str = "kalman"
 
 
 @register_estimator("KalmanFilter")
@@ -99,9 +119,11 @@ class KalmanFilter(StateEstimator):
         self.x_hat = self.bk.zeros((self.A.shape[0], 1)) if x0 is None else self.bk.copy(x0)
         self.P = self.bk.eye(self.A.shape[0]) * 0.1
 
+    Config = KalmanFilterConfig
+
     @classmethod
     def from_config(cls, config, backend: ArrayBackend | None = None):
-        """Create a Kalman filter from a TOML config dict.
+        """Create a Kalman filter from a TOML config dict or :class:`KalmanFilterConfig`.
 
         Config fields:
             process_noise: Diagonal Q weights (n_x,) or full Q matrix (n_x, n_x).
@@ -113,25 +135,32 @@ class KalmanFilter(StateEstimator):
             D: Optional full D matrix (n_y, n_u). Defaults to zeros.
 
         Args:
-            config: TOML config dict.
+            config: TOML config dict or KalmanFilterConfig.
             backend: Array backend. Defaults to NumpyBackend.
 
         Returns:
             KalmanFilter instance.
         """
         bk = backend or NumpyBackend()
-        Q = parse_matrix(bk, config["process_noise"])
+        cfg = cls.parse_config(config)
+        Q = parse_matrix(bk, cfg.process_noise)
         n = Q.shape[0]
-        R = parse_matrix(bk, config["measurement_noise"])
+        R = parse_matrix(bk, cfg.measurement_noise)
         n_y = R.shape[0]
-        B = bk.array(config.get("B_dynamics", config["dt"] * bk.eye(n)))
+        A = bk.array(cfg.A_dynamics) if cfg.A_dynamics is not None else bk.eye(n)
+        if cfg.B_dynamics is not None:
+            B = bk.array(cfg.B_dynamics)
+        elif cfg.dt is not None:
+            B = cfg.dt * bk.eye(n)
+        else:
+            raise ValueError("KalmanFilter: no B_dynamics and no dt — standalone use requires one of them")
         return cls(
-            A=bk.array(config.get("A_dynamics", bk.eye(n))),
+            A=A,
             B=B,
             Q=Q,
             R=R,
-            C=bk.array(config["C"]) if "C" in config else bk.eye(n),
-            D=bk.array(config["D"]) if "D" in config else bk.zeros((n_y, B.shape[1])),
+            C=bk.array(cfg.C) if cfg.C is not None else bk.eye(n),
+            D=bk.array(cfg.D) if cfg.D is not None else bk.zeros((n_y, B.shape[1])),
             x0=bk.zeros((n, 1)),
             backend=bk,
         )

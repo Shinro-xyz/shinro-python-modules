@@ -1,9 +1,50 @@
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, ClassVar
 
 import numpy as np
 
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend
+
+
+class ConfigDriven:
+    """Mixin for components constructed from a TOML config.
+
+    Subclasses declare a frozen ``Config`` dataclass whose fields ARE the
+    config schema. :meth:`parse_config` strict-parses a raw TOML dict into it:
+    unknown keys, a wrong ``type`` value, and missing required fields are loud
+    errors naming the component, so authoring typos surface at parse time
+    instead of mid-simulation.
+    """
+
+    Config: ClassVar[Any] = None
+    """The component's strict config dataclass. Subclasses must override."""
+
+    @classmethod
+    def parse_config(cls, config: Any) -> Any:
+        """Strict-parse a TOML config dict into ``cls.Config``.
+
+        An already-built Config instance is passed through unchanged.
+
+        Args:
+            config: Raw TOML dict (with optional ``type`` key) or a ``Config``
+                instance.
+
+        Returns:
+            A ``cls.Config`` instance.
+
+        Raises:
+            NotImplementedError: If the subclass has not declared ``Config``.
+            ValueError: On unknown keys, a mismatched ``type`` key, or missing
+                required fields.
+        """
+        spec = cls.Config
+        if spec is None:
+            raise NotImplementedError(f"{cls.__name__} must define a Config dataclass")
+        from shinro.utils.config_spec import strict_from_dict
+
+        if isinstance(config, dict):
+            return strict_from_dict(spec, config, getattr(cls, "_registry_name", cls.__name__))
+        return config
 
 
 class PhysicsEngine(ABC):
@@ -116,7 +157,7 @@ class PhysicsEngine(ABC):
         return NumpyBackend()
 
 
-class Controller(ABC):
+class Controller(ConfigDriven, ABC):
     """
     Abstract base class for all controllers.
 
@@ -243,7 +284,7 @@ class Plant(ABC):
         """
         return None
 
-class StateEstimator(ABC):
+class StateEstimator(ConfigDriven, ABC):
     """
     Abstract base class for state estimators.
 

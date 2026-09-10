@@ -166,7 +166,7 @@ class PIDController(Controller):
             PIDController instance.
         """
         bk = backend or NumpyBackend()
-        cfg = strict_from_dict(PIDConfig, config, "PID") if isinstance(config, dict) else config
+        cfg = cls.parse_config(config)
         if cfg.dt is None:
             raise ValueError(
                 "PID: dt is required (runtime integration) — omit it only in scenario "

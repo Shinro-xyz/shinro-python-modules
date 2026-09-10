@@ -257,3 +257,48 @@ class TestEstimatorConfigParity:
             assert len(lue["observer_gain"]) == len(kf["process_noise"]), (
                 f"{twin.name} observer_gain dims differ from {kf_path.name} process_noise"
             )
+
+
+class TestRegistryConfigEnforcement:
+    """Registration requires a Config dataclass: strict for estimators, warning for controllers."""
+
+    def test_register_estimator_without_config_raises(self):
+        """Registering an estimator without a Config dataclass raises TypeError at import."""
+        from shinro.components import StateEstimator
+        from shinro.factories.registry import register_estimator
+
+        with pytest.raises(TypeError, match="Config dataclass"):
+
+            @register_estimator("ConfiglessTestEst")
+            class _Configless(StateEstimator):
+                def estimate(self, measurement, control_input):
+                    return measurement
+
+    def test_register_controller_without_config_warns(self):
+        """Registering a controller without Config warns (strict once adapters migrate)."""
+        from shinro.components import Controller
+        from shinro.factories.registry import (
+            _CONTROLLER_REGISTRY,
+            register_controller,
+        )
+
+        with pytest.warns(UserWarning, match="Config dataclass"):
+
+            @register_controller("ConfiglessTestCtrl")
+            class _Configless(Controller):
+                def compute(self, *args, **kwargs):
+                    return None
+
+        try:
+            assert _CONTROLLER_REGISTRY["ConfiglessTestCtrl"]._registry_name == "ConfiglessTestCtrl"
+        finally:
+            _CONTROLLER_REGISTRY.pop("ConfiglessTestCtrl", None)
+
+    def test_registered_components_all_have_config(self):
+        """Every built-in estimator (strictly) and controller (warning aside) declares Config."""
+        from shinro.factories.registry import _CONTROLLER_REGISTRY, _ESTIMATOR_REGISTRY
+
+        for name, cls in _ESTIMATOR_REGISTRY.items():
+            assert cls.Config is not None, f"estimator '{name}' has no Config dataclass"
+        for name in ("LQR", "PID", "MPC_LTI", "MPC_DeltaU", "SMC", "MPPI"):
+            assert _CONTROLLER_REGISTRY[name].Config is not None, f"controller '{name}' has no Config dataclass"

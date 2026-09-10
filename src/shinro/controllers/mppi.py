@@ -45,6 +45,7 @@ Usage:
     action = controller.compute(x0, x_ref=reference)
 """
 
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -52,6 +53,29 @@ import numpy as np
 from shinro.components import Controller
 from shinro.factories.registry import register_controller
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend
+
+
+@dataclass(frozen=True)
+class MPPIConfig:
+    """Strict TOML schema for :class:`MPPIController`.
+
+    ``dynamics_fn``/``cost_fn`` are not TOML-serializable: they are ``None``
+    at construction and injected afterwards (``attach_plant`` or direct
+    attribute assignment). ``dt`` is required at runtime (rollout stepping);
+    scenario builds inject it from the plant, so it may be omitted there.
+    """
+
+    num_samples: int
+    temperature: float
+    horizon: int
+    noise_sigma: list[float]
+    dt: float | None = None
+    u_min: list[float] | None = None
+    u_max: list[float] | None = None
+    seed: int | None = None
+    state_cost: Any = None
+    control_cost: Any = None
+    name: str = "mppi"
 
 
 @register_controller("MPPI")
@@ -277,16 +301,19 @@ class MPPIController(Controller):
         self._last_epsilon = None
         self._last_costs = None
 
+    Config = MPPIConfig
+
     @classmethod
     def from_config(cls, config, backend: ArrayBackend | None = None):
-        """Create an MPPI controller from a TOML config dict.
+        """Create an MPPI controller from a TOML config dict or :class:`MPPIConfig`.
 
         Config fields:
             num_samples: Number of sampled perturbations N.
             temperature: Softmax temperature.
-            dt: Time step.
             horizon: Prediction horizon K.
             noise_sigma: Per-channel perturbation std dev (D_u,).
+            dt: Time step. Required at runtime; injected from the plant in
+                scenario builds.
             u_min: Optional lower bound list (D_u,).
             u_max: Optional upper bound list (D_u,).
             seed: Optional RNG seed.
@@ -307,26 +334,32 @@ class MPPIController(Controller):
             ctrl.attach_plant(plant)
 
         Args:
-            config: TOML config dict.
+            config: TOML config dict or MPPIConfig.
             backend: Array backend. Defaults to NumpyBackend.
 
         Returns:
             MPPIController instance.
         """
         bk = backend or NumpyBackend()
+        cfg = cls.parse_config(config)
+        if cfg.dt is None:
+            raise ValueError(
+                "MPPI: dt is required (rollout stepping) — omit it only in scenario "
+                "builds, where the plant's dt is injected"
+            )
         ctrl = cls(
             dynamics_fn=None,
             cost_fn=None,
-            num_samples=config["num_samples"],
-            temperature=config["temperature"],
-            dt=config["dt"],
-            horizon=config["horizon"],
-            noise_sigma=config["noise_sigma"],
-            u_min=config.get("u_min"),
-            u_max=config.get("u_max"),
-            seed=config.get("seed"),
+            num_samples=cfg.num_samples,
+            temperature=cfg.temperature,
+            dt=cfg.dt,
+            horizon=cfg.horizon,
+            noise_sigma=cfg.noise_sigma,
+            u_min=cfg.u_min,
+            u_max=cfg.u_max,
+            seed=cfg.seed,
             backend=bk,
         )
-        ctrl._Q = bk.array(config["state_cost"]) if "state_cost" in config else None
-        ctrl._R = bk.array(config["control_cost"]) if "control_cost" in config else None
+        ctrl._Q = bk.array(cfg.state_cost) if cfg.state_cost is not None else None
+        ctrl._R = bk.array(cfg.control_cost) if cfg.control_cost is not None else None
         return ctrl

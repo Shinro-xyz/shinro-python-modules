@@ -20,11 +20,31 @@ Usage:
     #   alpha = 0.5
 """
 
+from dataclasses import dataclass
+
 import numpy as np
 
 from shinro.components import Controller
 from shinro.factories.registry import register_controller
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend
+
+
+@dataclass(frozen=True)
+class SMCConfig:
+    """Strict TOML schema for :class:`SlidingModeController`.
+
+    ``c`` must form a Hurwitz polynomial (validated at construction).
+    ``dt`` is accepted for TOML compatibility but unused by the control law.
+    """
+
+    c: list[float]
+    k1: float
+    phi: float = 0.0
+    k2: float = 0.0
+    smoother: str = "sat"
+    alpha: float = 0.0
+    dt: float | None = None
+    name: str = "smc"
 
 
 @register_controller("SMC")
@@ -165,9 +185,11 @@ class SlidingModeController(Controller):
     def reset(self):
         """No internal state to reset for SMC."""
 
+    Config = SMCConfig
+
     @classmethod
     def from_config(cls, config, backend: ArrayBackend | None = None):
-        """Create an SMC controller from a TOML config dict.
+        """Create an SMC controller from a TOML config dict or :class:`SMCConfig`.
 
         Config fields:
             c: List of sliding surface coefficients (n,).
@@ -179,19 +201,20 @@ class SlidingModeController(Controller):
             alpha: Fractional power exponent (default 0.0).
 
         Args:
-            config: TOML config dict.
+            config: TOML config dict or SMCConfig.
             backend: Array backend. Defaults to NumpyBackend.
 
         Returns:
             SlidingModeController instance.
         """
         bk = backend or NumpyBackend()
+        cfg = cls.parse_config(config)
         return cls(
-            c=bk.array(config["c"]),
-            k1=config["k1"],
-            phi=config.get("phi", 0.0),
-            k2=config.get("k2", 0.0),
-            smoother=config.get("smoother", "sat"),
-            alpha=config.get("alpha", 0.0),
+            c=bk.array(cfg.c),
+            k1=cfg.k1,
+            phi=cfg.phi,
+            k2=cfg.k2,
+            smoother=cfg.smoother,
+            alpha=cfg.alpha,
             backend=bk,
         )

@@ -6,7 +6,6 @@ from scipy.linalg import solve_discrete_are
 from shinro.components import Controller
 from shinro.factories.registry import register_controller
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend, parse_matrix
-from shinro.utils.config_spec import strict_from_dict
 
 
 @dataclass(frozen=True)
@@ -124,7 +123,7 @@ class LQR(Controller):
             LQR instance.
         """
         bk = backend or NumpyBackend()
-        cfg = strict_from_dict(LQRConfig, config, "LQR") if isinstance(config, dict) else config
+        cfg = cls.parse_config(config)
         Q = parse_matrix(bk, cfg.state_cost)
         n = Q.shape[0]
         A = bk.array(cfg.A_dynamics) if cfg.A_dynamics is not None else bk.eye(n)

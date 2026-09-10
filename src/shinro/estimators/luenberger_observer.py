@@ -1,8 +1,27 @@
+from dataclasses import dataclass
 from typing import Any
 
 from shinro.components import StateEstimator
 from shinro.factories.registry import register_estimator
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend, parse_matrix
+
+
+@dataclass(frozen=True)
+class LuenbergerObserverConfig:
+    """Strict TOML schema for :class:`LuenbergerObserver`.
+
+    ``dt`` / ``A_dynamics`` / ``B_dynamics`` are optional: scenario builds
+    inject them from the plant (see :mod:`shinro.utils.linearization`);
+    standalone use must supply ``B_dynamics`` or ``dt``.
+    """
+
+    observer_gain: list[float] | list[list[float]]
+    dt: float | None = None
+    A_dynamics: Any = None
+    B_dynamics: Any = None
+    C: Any = None
+    D: Any = None
+    name: str = "luenberger"
 
 
 @register_estimator("LuenbergerObserver")
@@ -84,9 +103,11 @@ class LuenbergerObserver(StateEstimator):
         """
         self.x_hat = self.bk.zeros((self.A.shape[0], 1)) if x0 is None else self.bk.copy(x0)
 
+    Config = LuenbergerObserverConfig
+
     @classmethod
     def from_config(cls, config, backend: ArrayBackend | None = None):
-        """Create a Luenberger observer from a TOML config dict.
+        """Create a Luenberger observer from a TOML config dict or :class:`LuenbergerObserverConfig`.
 
         Config fields:
             observer_gain: Diagonal gain weights (n_x,) or full gain matrix (n_x, n_y).
@@ -97,22 +118,29 @@ class LuenbergerObserver(StateEstimator):
             D: Optional full D matrix (n_y, n_u). Defaults to zeros.
 
         Args:
-            config: TOML config dict.
+            config: TOML config dict or LuenbergerObserverConfig.
             backend: Array backend. Defaults to NumpyBackend.
 
         Returns:
             LuenbergerObserver instance.
         """
         bk = backend or NumpyBackend()
-        gain = parse_matrix(bk, config["observer_gain"])
+        cfg = cls.parse_config(config)
+        gain = parse_matrix(bk, cfg.observer_gain)
         n = gain.shape[0]
-        B = bk.array(config.get("B_dynamics", config["dt"] * bk.eye(n)))
+        A = bk.array(cfg.A_dynamics) if cfg.A_dynamics is not None else bk.eye(n)
+        if cfg.B_dynamics is not None:
+            B = bk.array(cfg.B_dynamics)
+        elif cfg.dt is not None:
+            B = cfg.dt * bk.eye(n)
+        else:
+            raise ValueError("LuenbergerObserver: no B_dynamics and no dt — standalone use requires one of them")
         return cls(
-            A=bk.array(config.get("A_dynamics", bk.eye(n))),
+            A=A,
             B=B,
             observer_gain=gain,
-            C=bk.array(config["C"]) if "C" in config else bk.eye(n),
-            D=bk.array(config["D"]) if "D" in config else bk.zeros((n, B.shape[1])),
+            C=bk.array(cfg.C) if cfg.C is not None else bk.eye(n),
+            D=bk.array(cfg.D) if cfg.D is not None else bk.zeros((n, B.shape[1])),
             x0=bk.zeros((n, 1)),
             backend=bk,
         )

@@ -251,7 +251,7 @@ class MPC_LTI_DeltaU(MPC_LTI):
             MPC_LTI_DeltaU instance.
         """
         bk = backend or NumpyBackend()
-        cfg = strict_from_dict(MPCDeltaUConfig, config, "MPC_DeltaU") if isinstance(config, dict) else config
+        cfg = cls.parse_config(config)
         Q = parse_matrix(bk, cfg.state_cost)
         n = Q.shape[0]
         A = bk.array(cfg.A_dynamics) if cfg.A_dynamics is not None else bk.eye(n)
@@ -362,7 +362,7 @@ class MPC_LTI_Base(MPC_LTI):
             MPC_LTI instance.
         """
         bk = backend or NumpyBackend()
-        cfg = strict_from_dict(MPCConfig, config, "MPC_LTI") if isinstance(config, dict) else config
+        cfg = cls.parse_config(config)
         Q = parse_matrix(bk, cfg.state_cost)
         n = Q.shape[0]
         A = bk.array(cfg.A_dynamics) if cfg.A_dynamics is not None else bk.eye(n)
