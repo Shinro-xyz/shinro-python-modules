@@ -37,6 +37,14 @@ class Scenario:
     pick-and-place) ``controller`` and ``estimator`` are ``None`` and the
     schedule itself is the control. ``config`` is the raw TOML dict (used by
     the runner and the tests for tolerances, noise, etc.).
+
+    A scenario is a runnable simulation: :meth:`run` executes the whole loop
+    (closed-loop or feedforward, chosen by whether ``controller`` is set),
+    driven entirely by the TOML — duration, dt, noise, adversarial faults,
+    input limits and tolerances. :meth:`iter_run` yields one
+    :class:`~shinro.simulation.runner.StepRecord` per step for live rendering
+    or early stopping; :meth:`reset` restores the TOML initial state and
+    clears controller/estimator state.
     """
 
     sim: RobotSim | None
@@ -45,6 +53,54 @@ class Scenario:
     estimator: StateEstimator | None
     trajectory: TrajectoryGenerator | Any
     config: dict[str, Any] = field(default_factory=dict)
+
+    def run(self, steps: int | None = None, seed: int | None = None):
+        """Run the scenario to completion.
+
+        Args:
+            steps: Number of steps. Defaults to ``[scenario].duration / dt``.
+            seed: Noise RNG seed. Overrides ``[noise.measurement].seed``.
+
+        Returns:
+            A :class:`~shinro.simulation.runner.SimResult` — one
+            :class:`~shinro.simulation.runner.StepRecord` per step, plus
+            ``check()`` tolerance reporting against the scenario TOML.
+        """
+        from shinro.simulation.runner import run_phase_schedule, run_scenario
+
+        if self.controller is None:
+            return run_phase_schedule(self, steps=steps)
+        return run_scenario(self, steps=steps, seed=seed)
+
+    def iter_run(self, steps: int | None = None, seed: int | None = None):
+        """Iterate over the run, yielding one StepRecord per step.
+
+        For live rendering or early stopping; :meth:`run` collects the same
+        records into a :class:`~shinro.simulation.runner.SimResult`.
+        """
+        from shinro.simulation.runner import iter_phase_schedule, iter_scenario
+
+        if self.controller is None:
+            return iter_phase_schedule(self, steps=steps)
+        return iter_scenario(self, steps=steps, seed=seed)
+
+    def reset(self) -> None:
+        """Restore the TOML initial state and clear controller/estimator state.
+
+        Deterministic reproduction is ``scenario.reset(); scenario.run(seed=0)``.
+        """
+        if self.sim is not None:
+            self.sim.reset()
+        else:
+            init = self.config.get("plant", {}).get("initial_state")
+            if init is not None:
+                self.plant.state = self.plant.bk.array(init)
+            else:
+                self.plant.state = self.plant.bk.zeros_like(self.plant.get_state())
+        if self.controller is not None:
+            self.controller.reset()
+        if self.estimator is not None:
+            self.estimator.reset()
 
 
 class ScenarioFactory:

@@ -306,7 +306,6 @@ def iter_scenario(scenario, steps: int | None = None, seed: int | None = None) -
     seed = seed if seed is not None else (noise_cfg or {}).get("seed", DEFAULT_SEED)
     rng = np.random.default_rng(seed)
 
-    adversarial_cfg = scenario.config.get("adversarial")
     lo, hi = _control_limits(scenario)
     n_u = _control_input_dim(scenario)
     u_prev = np.zeros(n_u)
