@@ -1,9 +1,30 @@
 
 
+from dataclasses import dataclass
+
 from shinro.components import PhysicsEngine, Plant
 from shinro.factories.registry import register_plant, register_plant_detector
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend
+from shinro.utils.config_spec import BoundsConfig, strict_from_dict, strip_runtime_keys
 from shinro.utils.linearization import discretize_euler, linearize_plant
+
+
+@dataclass(frozen=True)
+class InvertedPendulumConfig:
+    """Strict TOML schema for :class:`InvertedPendulum`.
+
+    The plant TOML is the single source of physics truth: every field has a
+    default, so a minimal config is just ``type`` + ``name``. ``engine`` is
+    runtime-injected by sim-backed builds (RobotSim), never authored in TOML.
+    """
+
+    mass: float = 0.1
+    length: float = 0.5
+    damping: float = 0.0
+    gravity: float = 9.81
+    dt: float = 0.01
+    state_bounds: dict | None = None
+    name: str = "inverted_pendulum"
 
 
 @register_plant("InvertedPendulum")
@@ -171,9 +192,11 @@ class InvertedPendulum(Plant):
             self.state = self.bk.clip(self.state, self.state_bounds[0], self.state_bounds[1])
         return self.state
 
+    Config = InvertedPendulumConfig
+
     @classmethod
     def from_config(cls, config, backend: ArrayBackend | None = None):
-        """Create an InvertedPendulum from a TOML config dict.
+        """Create an InvertedPendulum from a TOML config dict or :class:`InvertedPendulumConfig`.
 
         Config fields:
             mass: Pendulum bob mass (kg).
@@ -182,30 +205,37 @@ class InvertedPendulum(Plant):
             gravity: Gravitational acceleration (m/s^2).
             dt: Time step.
             state_bounds: Optional dict with ``min`` and ``max`` lists.
-            engine: Optional PhysicsEngine instance to attach.
 
         Args:
-            config: TOML config dict.
+            config: TOML config dict (may carry a runtime-injected ``engine``)
+                or InvertedPendulumConfig.
             backend: Array backend. Defaults to NumpyBackend.
 
         Returns:
             InvertedPendulum instance.
         """
         bk = backend or NumpyBackend()
+        clean, runtime = (
+            strip_runtime_keys(config, ("engine", "joint_groups")) if isinstance(config, dict) else (config, {})
+        )
+        cfg = cls.parse_config(clean)
         state_bounds = None
-        if "state_bounds" in config:
-            sb = config["state_bounds"]
-            state_bounds = (bk.array(sb.get("min", [-3.14, -10.0])), bk.array(sb.get("max", [3.14, 10.0])))
+        if cfg.state_bounds is not None:
+            sb = strict_from_dict(BoundsConfig, cfg.state_bounds, "InvertedPendulum.state_bounds")
+            state_bounds = (
+                bk.array(sb.min if sb.min is not None else [-3.14, -10.0]),
+                bk.array(sb.max if sb.max is not None else [3.14, 10.0]),
+            )
         plant = cls(
-            mass=config.get("mass", 0.1),
-            length=config.get("length", 0.5),
-            damping=config.get("damping", 0.0),
-            gravity=config.get("gravity", 9.81),
-            dt=config.get("dt", 0.01),
+            mass=cfg.mass,
+            length=cfg.length,
+            damping=cfg.damping,
+            gravity=cfg.gravity,
+            dt=cfg.dt,
             state_bounds=state_bounds,
             backend=bk,
         )
-        engine = config.get("engine")
+        engine = runtime.get("engine")
         if engine is not None:
             plant.physics_engine(engine)
         return plant

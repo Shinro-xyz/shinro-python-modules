@@ -302,3 +302,43 @@ class TestRegistryConfigEnforcement:
             assert cls.Config is not None, f"estimator '{name}' has no Config dataclass"
         for name in ("LQR", "PID", "MPC_LTI", "MPC_DeltaU", "SMC", "MPPI"):
             assert _CONTROLLER_REGISTRY[name].Config is not None, f"controller '{name}' has no Config dataclass"
+
+    def test_registered_plants_and_trajectories_all_have_config(self):
+        """Strict registries: every built-in plant and trajectory declares Config."""
+        from shinro.factories.registry import _PLANT_REGISTRY, _TRAJECTORY_REGISTRY
+
+        for name, cls in _PLANT_REGISTRY.items():
+            assert cls.Config is not None, f"plant '{name}' has no Config dataclass"
+        for name, cls in _TRAJECTORY_REGISTRY.items():
+            assert cls.Config is not None, f"trajectory '{name}' has no Config dataclass"
+
+    def test_register_plant_without_config_raises(self):
+        """Registering a plant without a Config dataclass raises TypeError at import."""
+        from shinro.components import Plant
+        from shinro.factories.registry import register_plant
+
+        with pytest.raises(TypeError, match="Config dataclass"):
+
+            @register_plant("ConfiglessTestPlant")
+            class _Configless(Plant):
+                def get_state(self, *args, **kwargs):
+                    return None
+
+                def get_model(self, *args, **kwargs):
+                    return None
+
+                def step(self, *args, **kwargs):
+                    return None
+
+                def physics_engine(self, engine, *args, **kwargs):
+                    return None
+
+    def test_register_trajectory_without_config_raises(self):
+        """Registering a trajectory without a Config dataclass raises TypeError at import."""
+        from shinro.factories.registry import register_trajectory
+
+        with pytest.raises(TypeError, match="Config dataclass"):
+
+            @register_trajectory("configless_test_traj")
+            class _Configless:
+                pass

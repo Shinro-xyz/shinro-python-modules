@@ -1,8 +1,27 @@
+from dataclasses import dataclass
+
 import numpy as np
 
 from shinro.components import Plant
 from shinro.factories.registry import register_plant, register_plant_detector
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend
+from shinro.utils.config_spec import strip_runtime_keys
+
+
+@dataclass(frozen=True)
+class HolonomicMobileRobotConfig:
+    """Strict TOML schema for :class:`HolonomicMobileRobot`.
+
+    ``engine`` is runtime-injected by sim-backed builds (RobotSim), never
+    authored in TOML.
+    """
+
+    num_wheels: int
+    radius_robots: float
+    gamma: float
+    radius_wheels: float
+    dt: float
+    name: str = "base"
 
 
 @register_plant("HolonomicMobileRobot")
@@ -152,9 +171,11 @@ class HolonomicMobileRobot(Plant):
         B = self.dt * self.bk.eye(3)
         return A, B
 
+    Config = HolonomicMobileRobotConfig
+
     @classmethod
     def from_config(cls, config, backend: ArrayBackend | None = None):
-        """Create a HolonomicMobileRobot from a TOML config dict.
+        """Create a HolonomicMobileRobot from a TOML config dict or :class:`HolonomicMobileRobotConfig`.
 
         Config fields:
             num_wheels: Number of wheels.
@@ -162,25 +183,29 @@ class HolonomicMobileRobot(Plant):
             gamma: First wheel angle offset (rad).
             radius_wheels: Wheel radius (m).
             dt: Time step.
-            engine: Optional PhysicsEngine instance to attach.
 
         Args:
-            config: TOML config dict.
+            config: TOML config dict (may carry a runtime-injected ``engine``)
+                or HolonomicMobileRobotConfig.
             backend: Array backend. Defaults to NumpyBackend.
 
         Returns:
             HolonomicMobileRobot instance.
         """
         bk = backend or NumpyBackend()
+        clean, runtime = (
+            strip_runtime_keys(config, ("engine", "joint_groups")) if isinstance(config, dict) else (config, {})
+        )
+        cfg = cls.parse_config(clean)
         plant = cls(
-            num_wheels=config["num_wheels"],
-            radius_robots=config["radius_robots"],
-            gamma=config["gamma"],
-            radius_wheels=config["radius_wheels"],
-            dt=config["dt"],
+            num_wheels=cfg.num_wheels,
+            radius_robots=cfg.radius_robots,
+            gamma=cfg.gamma,
+            radius_wheels=cfg.radius_wheels,
+            dt=cfg.dt,
             backend=bk,
         )
-        engine = config.get("engine")
+        engine = runtime.get("engine")
         if engine is not None:
             plant.physics_engine(engine)
         return plant

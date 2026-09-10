@@ -19,9 +19,9 @@ def _check_config(cls, kind: str, name: str, *, strict: bool) -> None:
         kind: Human-readable role ("Controller", "Estimator", ...).
         name: The registered name.
         strict: Raise when ``Config`` is missing; otherwise emit a UserWarning.
-            Strict for fully-migrated registries. Controllers are still
-            warning-only until the onnx_rl / lerobot_diffusion adapters (both
-            pending rewrite — their NN runtimes are untraceable) define Config.
+            Strict for every registry except controllers (warning-only until the
+            onnx_rl / lerobot_diffusion adapters — both pending rewrite, their
+            NN runtimes are untraceable — define Config).
     """
     if is_dataclass(getattr(cls, "Config", None)):
         return
@@ -57,6 +57,7 @@ def register_estimator(name):
 
 def register_trajectory(name):
     def decorator(cls):
+        _check_config(cls, "Trajectory", name, strict=True)
         cls._registry_name = name
         _TRAJECTORY_REGISTRY[name] = cls
         return cls
@@ -66,6 +67,7 @@ def register_trajectory(name):
 
 def register_plant(name):
     def decorator(cls):
+        _check_config(cls, "Plant", name, strict=True)
         cls._registry_name = name
         _PLANT_REGISTRY[name] = cls
         return cls

@@ -1,9 +1,32 @@
 
+from dataclasses import dataclass
+
 import numpy as np
 
 from shinro.components import TrajectoryGenerator
 from shinro.factories.registry import register_trajectory
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend
+from shinro.utils.config_spec import strict_from_list
+
+
+@dataclass(frozen=True)
+class CubicSegmentConfig:
+    """One ``[[segments]]`` entry for :class:`CubicPolynomial`."""
+
+    duration: float
+    start: list[float]
+    end: list[float]
+    start_vel: list[float] | None = None
+    end_vel: list[float] | None = None
+
+
+@dataclass(frozen=True)
+class CubicSegmentsConfig:
+    """Strict TOML schema for the ``cubic_segments`` trajectory."""
+
+    dt: float
+    segments: list[dict]
+    name: str = "cubic_segments"
 
 
 @register_trajectory("cubic_segments")
@@ -84,9 +107,11 @@ class CubicPolynomial(TrajectoryGenerator):
         acc = 2 * self.a2 + 6 * self.a3 * t
         return pos, vel, acc
 
+    Config = CubicSegmentsConfig
+
     @classmethod
     def from_config(cls, config, backend: ArrayBackend | None = None):
-        """Create a waypoint schedule from a TOML config dict.
+        """Create a waypoint schedule from a TOML config dict or :class:`CubicSegmentsConfig`.
 
         Config fields:
             dt: Time step.
@@ -98,26 +123,26 @@ class CubicPolynomial(TrajectoryGenerator):
                 - end_vel: Optional end velocity (default: zeros).
 
         Args:
-            config: TOML config dict.
+            config: TOML config dict or CubicSegmentsConfig.
             backend: Array backend. Defaults to NumpyBackend.
 
         Returns:
             Array of shape (total_steps, N) with position waypoints.
         """
         bk = backend or NumpyBackend()
-        dt = config["dt"]
+        cfg = cls.parse_config(config)
+        segs = strict_from_list(CubicSegmentConfig, cfg.segments, "cubic_segments.segment")
         schedule = []
-        for seg in config["segments"]:
-            n_steps = int(np.round(seg["duration"] / dt))
-            p0 = bk.array(seg["start"])
-            pf = bk.array(seg["end"])
-            T = seg["duration"]
-            start_vel = bk.array(seg.get("start_vel", [0.0, 0.0, 0.0]))
-            end_vel = bk.array(seg.get("end_vel", [0.0, 0.0, 0.0]))
+        for seg in segs:
+            n_steps = int(np.round(seg.duration / cfg.dt))
+            p0 = bk.array(seg.start)
+            pf = bk.array(seg.end)
+            start_vel = bk.array(seg.start_vel if seg.start_vel is not None else [0.0] * len(seg.start))
+            end_vel = bk.array(seg.end_vel if seg.end_vel is not None else [0.0] * len(seg.end))
             traj = cls(backend=bk)
-            traj.generate(p0, pf, T, start_vel, end_vel)
+            traj.generate(p0, pf, seg.duration, start_vel, end_vel)
             for k in range(n_steps):
-                t = k * dt
+                t = k * cfg.dt
                 pos, _, _ = traj.position_at(t)
                 schedule.append(pos)
         return bk.array(schedule)

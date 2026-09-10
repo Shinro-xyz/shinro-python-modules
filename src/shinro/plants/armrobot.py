@@ -1,8 +1,29 @@
+from dataclasses import dataclass
+
 import numpy as np
 
 from shinro.components import PhysicsEngine, Plant
 from shinro.factories.registry import register_plant, register_plant_detector
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend
+from shinro.utils.config_spec import strip_runtime_keys
+
+
+@dataclass(frozen=True)
+class ArmRobotConfig:
+    """Strict TOML schema for :class:`ArmRobot`.
+
+    ``joint_groups`` (the lookup table itself) and ``engine`` are
+    runtime-injected by RobotSim; the TOML authors only ``joint_group``, the
+    name of the group to use.
+    """
+
+    num_dof: int
+    joint_group: str
+    joint_offsets: list
+    rot_axes: list[str]
+    dt: float
+    ee_body_name: str | None = None
+    name: str = "arm"
 
 
 @register_plant("ArmRobot")
@@ -380,9 +401,11 @@ class ArmRobot(Plant):
 
         return current_joints
 
+    Config = ArmRobotConfig
+
     @classmethod
     def from_config(cls, config, backend: ArrayBackend | None = None):
-        """Create an ArmRobot from a TOML config dict.
+        """Create an ArmRobot from a TOML config dict or :class:`ArmRobotConfig`.
 
         Config fields:
             joint_group: Name of the joint group in ``joint_groups``.
@@ -391,28 +414,40 @@ class ArmRobot(Plant):
             joint_offsets: List of link offset vectors.
             rot_axes: List of rotation axes.
             ee_body_name: Optional end-effector body name.
-            engine: PhysicsEngine instance to attach.
+
+        Requires a runtime-injected ``engine`` (RobotSim merges it into the
+        config dict); standalone use without an engine is not supported.
 
         Args:
-            config: TOML config dict.
+            config: TOML config dict (with runtime-injected ``engine`` and
+                ``joint_groups``) or ArmRobotConfig.
             backend: Array backend. Defaults to NumpyBackend.
 
         Returns:
             ArmRobot instance.
         """
         bk = backend or NumpyBackend()
-        joint_names = config["joint_groups"][config["joint_group"]]
-        engine = config["engine"]
+        clean, runtime = (
+            strip_runtime_keys(config, ("engine", "joint_groups")) if isinstance(config, dict) else (config, {})
+        )
+        cfg = cls.parse_config(clean)
+        engine = runtime.get("engine")
+        joint_groups = runtime.get("joint_groups")
+        if engine is None or joint_groups is None:
+            raise ValueError(
+                "ArmRobot requires a runtime-injected 'engine' and 'joint_groups' "
+                "(RobotSim merges them into the config dict) — standalone use is not supported."
+            )
+        joint_names = joint_groups[cfg.joint_group]
         limits = np.array([engine.get_joint_limits(n) for n in joint_names])
-        num_dof = config["num_dof"]
         plant = cls(
-            num_dof=num_dof,
-            dt=config["dt"],
+            num_dof=cfg.num_dof,
+            dt=cfg.dt,
             joint_limits=bk.from_numpy(limits),
-            joint_offsets=bk.from_numpy(np.array(config["joint_offsets"])),
-            rot_axes=config["rot_axes"],
+            joint_offsets=bk.from_numpy(np.array(cfg.joint_offsets)),
+            rot_axes=cfg.rot_axes,
             joint_names=joint_names,
-            ee_body_name=config.get("ee_body_name"),
+            ee_body_name=cfg.ee_body_name,
             backend=bk,
         )
         plant.physics_engine(engine)

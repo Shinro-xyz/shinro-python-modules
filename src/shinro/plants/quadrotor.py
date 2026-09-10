@@ -1,5 +1,25 @@
+from dataclasses import dataclass
+
 from shinro.components import Plant
 from shinro.factories.registry import register_plant
+
+
+@dataclass(frozen=True)
+class QuadrotorConfig:
+    """Strict TOML schema for :class:`Quadrotor`.
+
+    Placeholder schema documenting the intended 12D/4D parameter surface (see
+    ``configs/plants/quadrotor.toml``); construction raises NotImplementedError.
+    """
+
+    mass: float = 0.5
+    radius: float = 0.1
+    inertia: list[float] | None = None
+    thrust_coeff: float = 1.0
+    torque_coeff: float = 0.1
+    dt: float = 0.01
+    g: float = 9.81
+    name: str = "quadrotor"
 
 
 @register_plant("Quadrotor")
@@ -26,6 +46,8 @@ class Quadrotor(Plant):
 
     def physics_engine(self, engine):
         raise NotImplementedError
+
+    Config = QuadrotorConfig
 
     @classmethod
     def from_config(cls, config, backend=None):

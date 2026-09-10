@@ -197,7 +197,7 @@ class Controller(ConfigDriven, ABC):
         """
         pass
 
-class Plant(ABC):
+class Plant(ConfigDriven, ABC):
     """
     Abstract base class for a system plant.
 
@@ -318,7 +318,7 @@ class StateEstimator(ConfigDriven, ABC):
         """
         pass
 
-class TrajectoryGenerator(ABC):
+class TrajectoryGenerator(ConfigDriven, ABC):
     """
     Abstract base class for trajectory generators.
 

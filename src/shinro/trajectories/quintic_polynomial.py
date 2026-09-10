@@ -1,9 +1,70 @@
 
+from dataclasses import dataclass
+
 import numpy as np
 
-from shinro.components import TrajectoryGenerator
+from shinro.components import ConfigDriven, TrajectoryGenerator
 from shinro.factories.registry import register_trajectory
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend
+from shinro.utils.config_spec import strict_from_list
+
+
+@dataclass(frozen=True)
+class QuinticSegmentConfig:
+    """One ``[[segments]]`` entry for the ``quintic_segments`` trajectory."""
+
+    duration: float
+    start: list[float]
+    end: list[float]
+    start_vel: list[float] | None = None
+    end_vel: list[float] | None = None
+    start_acc: list[float] | None = None
+    end_acc: list[float] | None = None
+
+
+@dataclass(frozen=True)
+class QuinticSegmentsConfig:
+    """Strict TOML schema for the ``quintic_segments`` trajectory."""
+
+    dt: float
+    segments: list[dict]
+    name: str = "quintic_segments"
+
+
+@dataclass(frozen=True)
+class WaypointConfig:
+    """One ``[[waypoints]]`` entry for the ``waypoints`` trajectory."""
+
+    duration: float
+    position: list[float]
+
+
+@dataclass(frozen=True)
+class WaypointsConfig:
+    """Strict TOML schema for the ``waypoints`` trajectory."""
+
+    dt: float
+    waypoints: list[dict]
+    name: str = "waypoints"
+
+
+@dataclass(frozen=True)
+class PhaseConfig:
+    """One ``[[phases]]`` entry for the ``phase_list`` trajectory."""
+
+    duration: float
+    arm: list[float]
+    base: list[float]
+    jaw: float
+
+
+@dataclass(frozen=True)
+class PhasesConfig:
+    """Strict TOML schema for the ``phase_list`` trajectory."""
+
+    dt: float
+    phases: list[dict]
+    name: str = "phase_list"
 
 
 @register_trajectory("quintic_segments")
@@ -116,17 +177,21 @@ class QuinticPolynomial(TrajectoryGenerator):
         acc = 20 * self.A * t ** 3 + 12 * self.B * t ** 2 + 6 * self.C * t + 2 * self.D
         return pos, vel, acc
 
+    Config = QuinticSegmentsConfig
+
 
 @register_trajectory("quintic_segments")
-class QuinticPolynomialConfigAdapter:
+class QuinticPolynomialConfigAdapter(ConfigDriven):
     """Adapter so ``from_config`` uses the ``generate()`` + ``position_at()`` API.
 
     Registered as ``"quintic_segments"`` in the trajectory registry.
     """
 
+    Config = QuinticSegmentsConfig
+
     @classmethod
     def from_config(cls, config, backend: ArrayBackend | None = None):
-        """Create a waypoint schedule from a TOML config dict.
+        """Create a waypoint schedule from a TOML config dict or :class:`QuinticSegmentsConfig`.
 
         Config fields:
             dt: Time step.
@@ -140,43 +205,45 @@ class QuinticPolynomialConfigAdapter:
                 - end_acc: Optional end acceleration (default: zeros).
 
         Args:
-            config: TOML config dict.
+            config: TOML config dict or QuinticSegmentsConfig.
             backend: Array backend. Defaults to NumpyBackend.
 
         Returns:
             Array of shape (total_steps, N) with position waypoints.
         """
         bk = backend or NumpyBackend()
-        dt = config["dt"]
+        cfg = cls.parse_config(config)
+        segs = strict_from_list(QuinticSegmentConfig, cfg.segments, "quintic_segments.segment")
         schedule = []
-        for seg in config["segments"]:
-            n_steps = int(np.round(seg["duration"] / dt))
-            p0 = bk.array(seg["start"])
-            pf = bk.array(seg["end"])
-            T = seg["duration"]
-            start_vel = bk.array(seg.get("start_vel", [0.0, 0.0, 0.0]))
-            end_vel = bk.array(seg.get("end_vel", [0.0, 0.0, 0.0]))
-            start_acc = bk.array(seg.get("start_acc", [0.0, 0.0, 0.0]))
-            end_acc = bk.array(seg.get("end_acc", [0.0, 0.0, 0.0]))
+        for seg in segs:
+            n_steps = int(np.round(seg.duration / cfg.dt))
+            p0 = bk.array(seg.start)
+            pf = bk.array(seg.end)
+            start_vel = bk.array(seg.start_vel if seg.start_vel is not None else [0.0] * len(seg.start))
+            end_vel = bk.array(seg.end_vel if seg.end_vel is not None else [0.0] * len(seg.end))
+            start_acc = bk.array(seg.start_acc if seg.start_acc is not None else [0.0] * len(seg.start))
+            end_acc = bk.array(seg.end_acc if seg.end_acc is not None else [0.0] * len(seg.end))
             traj = QuinticPolynomial(backend=bk)
-            traj.generate(p0, pf, T, start_vel, end_vel, start_acc, end_acc)
+            traj.generate(p0, pf, seg.duration, start_vel, end_vel, start_acc, end_acc)
             for k in range(n_steps):
-                t = k * dt
+                t = k * cfg.dt
                 pos, _, _ = traj.position_at(t)
                 schedule.append(pos)
         return bk.array(schedule)
 
 
 @register_trajectory("waypoints")
-class WaypointSchedule:
+class WaypointSchedule(ConfigDriven):
     """Simple waypoint schedule — constant position per segment.
 
     Returns a flat array of position waypoints, one per time step.
     """
 
+    Config = WaypointsConfig
+
     @classmethod
     def from_config(cls, config, backend: ArrayBackend | None = None):
-        """Create a waypoint schedule from a TOML config dict.
+        """Create a waypoint schedule from a TOML config dict or :class:`WaypointsConfig`.
 
         Config fields:
             dt: Time step.
@@ -185,32 +252,35 @@ class WaypointSchedule:
                 - position: Position list.
 
         Args:
-            config: TOML config dict.
+            config: TOML config dict or WaypointsConfig.
             backend: Array backend. Defaults to NumpyBackend.
 
         Returns:
             Array of shape (total_steps, N) with position waypoints.
         """
         bk = backend or NumpyBackend()
-        dt = config["dt"]
+        cfg = cls.parse_config(config)
+        wps = strict_from_list(WaypointConfig, cfg.waypoints, "waypoints.waypoint")
         schedule = []
-        for wp in config["waypoints"]:
-            n_steps = int(np.round(wp["duration"] / dt))
-            schedule.extend([bk.array(wp["position"])] * n_steps)
+        for wp in wps:
+            n_steps = int(np.round(wp.duration / cfg.dt))
+            schedule.extend([bk.array(wp.position)] * n_steps)
         return bk.array(schedule)
 
 
 @register_trajectory("phase_list")
-class PhaseSchedule:
+class PhaseSchedule(ConfigDriven):
     """Multi-signal phase schedule for pick-and-place sequences.
 
     Returns a dict with ``"arm"``, ``"base"``, and ``"jaw"`` arrays, each
     containing the per-step setpoint for that subsystem.
     """
 
+    Config = PhasesConfig
+
     @classmethod
     def from_config(cls, config, backend: ArrayBackend | None = None):
-        """Create a phase schedule from a TOML config dict.
+        """Create a phase schedule from a TOML config dict or :class:`PhasesConfig`.
 
         Config fields:
             dt: Time step.
@@ -221,7 +291,7 @@ class PhaseSchedule:
                 - jaw: Jaw position (float).
 
         Args:
-            config: TOML config dict.
+            config: TOML config dict or PhasesConfig.
             backend: Array backend. Defaults to NumpyBackend.
 
         Returns:
@@ -229,15 +299,16 @@ class PhaseSchedule:
             of shape (total_steps, N).
         """
         bk = backend or NumpyBackend()
-        dt = config["dt"]
+        cfg = cls.parse_config(config)
+        phases = strict_from_list(PhaseConfig, cfg.phases, "phase_list.phase")
         arm_sched = []
         base_sched = []
         jaw_sched = []
-        for phase in config["phases"]:
-            n_steps = int(np.round(phase["duration"] / dt))
-            arm = bk.array(phase["arm"])
-            base = bk.array(phase["base"])
-            jaw = float(phase["jaw"])
+        for phase in phases:
+            n_steps = int(np.round(phase.duration / cfg.dt))
+            arm = bk.array(phase.arm)
+            base = bk.array(phase.base)
+            jaw = float(phase.jaw)
             for _ in range(n_steps):
                 arm_sched.append(bk.copy(arm))
                 base_sched.append(bk.copy(base))

@@ -1,7 +1,29 @@
+from dataclasses import dataclass
+
 from shinro.components import PhysicsEngine, Plant
 from shinro.factories.registry import register_plant, register_plant_detector
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend
+from shinro.utils.config_spec import strip_runtime_keys
 from shinro.utils.linearization import discretize_euler, linearize_plant
+
+
+@dataclass(frozen=True)
+class CartPoleConfig:
+    """Strict TOML schema for :class:`CartPole`.
+
+    The plant TOML is the single source of physics truth: every field has a
+    default. ``engine`` is runtime-injected by sim-backed builds (RobotSim),
+    never authored in TOML.
+    """
+
+    cart_mass: float = 0.5
+    pole_mass: float = 0.1
+    pole_length: float = 0.5
+    damping: float = 0.0
+    gravity: float = 9.81
+    dt: float = 0.01
+    track_limits: list[float] | None = None
+    name: str = "cartpole"
 
 
 @register_plant("CartPole")
@@ -214,9 +236,11 @@ class CartPole(Plant):
             ])
         return self.state
 
+    Config = CartPoleConfig
+
     @classmethod
     def from_config(cls, config, backend: ArrayBackend | None = None):
-        """Create a CartPole from a TOML config dict.
+        """Create a CartPole from a TOML config dict or :class:`CartPoleConfig`.
 
         Config fields:
             cart_mass: Mass of the cart (kg).
@@ -226,31 +250,32 @@ class CartPole(Plant):
             gravity: Gravitational acceleration (m/s^2).
             dt: Time step.
             track_limits: Optional list of [min, max] for cart position.
-            engine: Optional PhysicsEngine instance to attach.
 
         Args:
-            config: TOML config dict.
+            config: TOML config dict (may carry a runtime-injected ``engine``)
+                or CartPoleConfig.
             backend: Array backend. Defaults to NumpyBackend.
 
         Returns:
             CartPole instance.
         """
         bk = backend or NumpyBackend()
-        track_limits = None
-        if "track_limits" in config:
-            tl = config["track_limits"]
-            track_limits = (tl[0], tl[1])
+        clean, runtime = (
+            strip_runtime_keys(config, ("engine", "joint_groups")) if isinstance(config, dict) else (config, {})
+        )
+        cfg = cls.parse_config(clean)
+        track_limits = (cfg.track_limits[0], cfg.track_limits[1]) if cfg.track_limits is not None else None
         plant = cls(
-            cart_mass=config.get("cart_mass", 0.5),
-            pole_mass=config.get("pole_mass", 0.1),
-            pole_length=config.get("pole_length", 0.5),
-            damping=config.get("damping", 0.0),
-            gravity=config.get("gravity", 9.81),
-            dt=config.get("dt", 0.01),
+            cart_mass=cfg.cart_mass,
+            pole_mass=cfg.pole_mass,
+            pole_length=cfg.pole_length,
+            damping=cfg.damping,
+            gravity=cfg.gravity,
+            dt=cfg.dt,
             track_limits=track_limits,
             backend=bk,
         )
-        engine = config.get("engine")
+        engine = runtime.get("engine")
         if engine is not None:
             plant.physics_engine(engine)
         return plant

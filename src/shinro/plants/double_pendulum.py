@@ -1,7 +1,29 @@
+from dataclasses import dataclass
+
 from shinro.components import PhysicsEngine, Plant
 from shinro.factories.registry import register_plant, register_plant_detector
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend
+from shinro.utils.config_spec import BoundsConfig, strict_from_dict, strip_runtime_keys
 from shinro.utils.linearization import discretize_euler, linearize_plant
+
+
+@dataclass(frozen=True)
+class DoublePendulumConfig:
+    """Strict TOML schema for :class:`DoublePendulum`.
+
+    The plant TOML is the single source of physics truth: every field has a
+    default. ``engine`` is runtime-injected by sim-backed builds (RobotSim),
+    never authored in TOML.
+    """
+
+    mass_top: float = 0.1
+    mass_bottom: float = 0.1
+    length_top: float = 0.5
+    length_bottom: float = 0.5
+    dt: float = 0.01
+    g: float = 9.81
+    state_bounds: dict | None = None
+    name: str = "double_pendulum"
 
 
 @register_plant("DoublePendulum")
@@ -240,44 +262,52 @@ class DoublePendulum(Plant):
             self.state = self.bk.clip(self.state, self.state_bounds[0], self.state_bounds[1])
         return self.state
 
+    Config = DoublePendulumConfig
+
     @classmethod
     def from_config(cls, config, backend: ArrayBackend | None = None):
-        """Create a DoublePendulum from a TOML config dict.
+        """Create a DoublePendulum from a TOML config dict or :class:`DoublePendulumConfig`.
 
         Config fields:
-            mass_top: Top pendulum bob mass (kg).
-            mass_bottom: Bottom pendulum bob mass (kg).
+            mass_top: Top bob mass (kg).
+            mass_bottom: Bottom bob mass (kg).
             length_top: Top rod length (m).
             length_bottom: Bottom rod length (m).
             dt: Time step.
             g: Gravitational acceleration (m/s^2).
             state_bounds: Optional dict with ``min`` and ``max`` lists.
-            engine: Optional PhysicsEngine instance to attach.
 
         Args:
-            config: TOML config dict.
+            config: TOML config dict (may carry a runtime-injected ``engine``)
+                or DoublePendulumConfig.
             backend: Array backend. Defaults to NumpyBackend.
 
         Returns:
             DoublePendulum instance.
         """
         bk = backend or NumpyBackend()
+        clean, runtime = (
+            strip_runtime_keys(config, ("engine", "joint_groups")) if isinstance(config, dict) else (config, {})
+        )
+        cfg = cls.parse_config(clean)
         state_bounds = None
-        if "state_bounds" in config:
-            sb = config["state_bounds"]
-            state_bounds = (bk.array(sb.get("min", [-3.14, -3.14, -10.0, -10.0])),
-                            bk.array(sb.get("max", [3.14, 3.14, 10.0, 10.0])))
+        if cfg.state_bounds is not None:
+            sb = strict_from_dict(BoundsConfig, cfg.state_bounds, "DoublePendulum.state_bounds")
+            state_bounds = (
+                bk.array(sb.min if sb.min is not None else [-3.14, -3.14, -10.0, -10.0]),
+                bk.array(sb.max if sb.max is not None else [3.14, 3.14, 10.0, 10.0]),
+            )
         plant = cls(
-            mass_top=config.get("mass_top", 0.1),
-            mass_bottom=config.get("mass_bottom", 0.1),
-            length_top=config.get("length_top", 0.5),
-            length_bottom=config.get("length_bottom", 0.5),
-            dt=config.get("dt", 0.01),
-            g=config.get("g", 9.81),
+            mass_top=cfg.mass_top,
+            mass_bottom=cfg.mass_bottom,
+            length_top=cfg.length_top,
+            length_bottom=cfg.length_bottom,
+            dt=cfg.dt,
+            g=cfg.g,
             state_bounds=state_bounds,
             backend=bk,
         )
-        engine = config.get("engine")
+        engine = runtime.get("engine")
         if engine is not None:
             plant.physics_engine(engine)
         return plant
