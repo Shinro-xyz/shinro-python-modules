@@ -56,26 +56,34 @@ def _trace_with_state(component, input_shapes: dict[str, tuple[int, ...]]) -> No
     return trace_node(component, input_shapes, state_shapes=state_shapes)
 
 
+def _factory(factory_cls, config):
+    """Instantiate a component from a config TOML path or an in-memory dict."""
+    if isinstance(config, dict):
+        return factory_cls(config=config).create(backend=NumpyBackend())
+    return factory_cls(config).create(backend=NumpyBackend())
+
+
 def build_composed_graph(
-    estimator_config: str,
-    controller_config: str,
+    estimator_config: str | dict,
+    controller_config: str | dict,
     n_x: int,
     n_u: int,
     input_limits: tuple | None = None,
 ) -> ComposedGraph:
     """Trace an estimator + controller and compose the closed-loop step graph.
 
-    Instantiates both components from their config TOMLs with a
-    :class:`NumpyBackend`, traces them with the two-pass state discovery, and
-    composes them into the fixed ABC dataflow (``y → estimator → x̂ →
-    controller → u → [clip]``). The estimator's recurrent state (e.g. the
-    Kalman filter's ``x_hat`` / ``P``) and the controller's (e.g. PID's
-    integral) become ``state_*`` ports the host feeds back each tick.
+    Instantiates both components with a :class:`NumpyBackend`, traces them
+    with the two-pass state discovery, and composes them into the fixed ABC
+    dataflow (``y → estimator → x̂ → controller → u → [clip]``). The
+    estimator's recurrent state (e.g. the Kalman filter's ``x_hat`` / ``P``)
+    and the controller's (e.g. PID's integral) become ``state_*`` ports the
+    host feeds back each tick.
 
     Args:
         estimator_config: Estimator config TOML path (resolved via
-            :func:`shinro.utils.config_resolver.resolve_config_path`).
-        controller_config: Controller config TOML path.
+            :func:`shinro.utils.config_resolver.resolve_config_path`) or an
+            in-memory config dict.
+        controller_config: Controller config TOML path or in-memory dict.
         n_x: Plant state dimension.
         n_u: Plant input dimension.
         input_limits: Optional ``(lo, hi)`` clip bounds for the controller
@@ -84,8 +92,8 @@ def build_composed_graph(
     Returns:
         A :class:`ComposedGraph` for one closed-loop step.
     """
-    est = EstimatorFactory(estimator_config).create(backend=NumpyBackend())
-    ctrl = ControllerFactory(controller_config).create(backend=NumpyBackend())
+    est = _factory(EstimatorFactory, estimator_config)
+    ctrl = _factory(ControllerFactory, controller_config)
 
     est_input_shapes = {"measurement": (n_x, 1), "control_input": (n_u, 1)}
     ctrl_input_shapes = {

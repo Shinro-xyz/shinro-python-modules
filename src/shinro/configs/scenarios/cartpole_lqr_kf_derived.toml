@@ -1,0 +1,29 @@
+# CartPole + LQR + KalmanFilter, with the model DERIVED from the plant.
+#
+# The [plant] section is the source of truth: gen_scenario derives n_x/n_u and
+# the A_dynamics/B_dynamics model from it (linearize at upright + Euler at the
+# plant's dt), so the controller/estimator configs below need only specs +
+# weights — no hand-computed model. This is the same derivation the simulation
+# path (ScenarioFactory) uses, so sim and compile agree on the model.
+#
+# Explicit [compile] n_x/n_u or config A_dynamics/B_dynamics would win over the
+# derived values; here neither is written.
+
+[plant]
+type = "CartPole"
+config = "configs/plants/cartpole.toml"
+
+[controller]
+type = "LQR"
+config = "configs/controllers/lqr_cartpole.toml"
+
+[estimator]
+type = "KalmanFilter"
+config = "configs/estimators/kalman_cartpole.toml"
+
+[scenario]
+name = "cartpole_lqr_kf_derived"
+input_limits = { min = [-10.0], max = [10.0] }
+
+[compile]
+optimize = "release"

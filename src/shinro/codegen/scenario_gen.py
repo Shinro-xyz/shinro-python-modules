@@ -8,6 +8,12 @@ traces + composes the closed-loop step graph via the generic
 is never touched, so compiling a custom scenario never clobbers the shipped
 graph.
 
+An optional ``[plant]`` section derives ``n_x``/``n_u`` and the
+``A_dynamics``/``B_dynamics`` model from the plant (the same derivation the
+simulation path uses), so a scenario can be written as specs + weights with no
+hand-computed model. Explicit ``[compile]`` dims and config ``A/B`` win over
+the derived values.
+
 The ``[compile]`` section is the build spec: it is validated strictly (unknown
 keys and invalid ``optimize`` values are loud errors) and its sha256 is
 recorded in the graph manifest's provenance, so the deployment record commits
@@ -32,7 +38,10 @@ from pathlib import Path
 import numpy as np
 
 from shinro.codegen import build_composed_graph, lower_zig
+from shinro.factories.registry import _PLANT_REGISTRY
+from shinro.utils.array_backend import NumpyBackend
 from shinro.utils.config_resolver import resolve_config_path
+from shinro.utils.linearization import derive_model, inject_model
 
 EXIT_OK = 0
 EXIT_UNTRACEABLE = 1
@@ -51,22 +60,21 @@ def _sha256(path: str) -> str:
 def _validate_compile(compile_cfg: dict | None, scenario_path: str) -> dict:
     """Parse and strictly validate the ``[compile]`` section.
 
-    Returns a dict with ``n_x`` / ``n_u`` (required) and ``optimize`` /
-    ``target`` / ``solver_dir`` (optional, with defaults). Unknown keys and
-    invalid ``optimize`` values are loud errors — the section is the build
-    spec, so a typo must not silently change the build.
+    Returns a dict with ``n_x`` / ``n_u`` (optional — derived from ``[plant]``
+    when absent) and ``optimize`` / ``target`` / ``solver_dir`` (optional, with
+    defaults). Unknown keys and invalid ``optimize`` values are loud errors —
+    the section is the build spec, so a typo must not silently change the
+    build.
 
     Raises:
-        ValueError: On a missing section, missing ``n_x``/``n_u``, unknown
-            keys, or an invalid ``optimize`` value.
+        ValueError: On a missing section, unknown keys, or an invalid
+            ``optimize`` value.
     """
     if compile_cfg is None:
-        raise ValueError(f"{scenario_path}: missing [compile] section (n_x, n_u required)")
+        raise ValueError(f"{scenario_path}: missing [compile] section")
     unknown = set(compile_cfg) - _COMPILE_KEYS
     if unknown:
         raise ValueError(f"{scenario_path}: [compile] has unknown key(s): {sorted(unknown)}")
-    if "n_x" not in compile_cfg or "n_u" not in compile_cfg:
-        raise ValueError(f"{scenario_path}: [compile] requires n_x and n_u")
     optimize = compile_cfg.get("optimize", "debug")
     if optimize not in _ALLOWED_OPTIMIZE:
         raise ValueError(
@@ -75,8 +83,8 @@ def _validate_compile(compile_cfg: dict | None, scenario_path: str) -> dict:
             f"bug) and ReleaseSmall is unvalidated — only ReleaseFast is shippable."
         )
     return {
-        "n_x": int(compile_cfg["n_x"]),
-        "n_u": int(compile_cfg["n_u"]),
+        "n_x": int(compile_cfg["n_x"]) if "n_x" in compile_cfg else None,
+        "n_u": int(compile_cfg["n_u"]) if "n_u" in compile_cfg else None,
         "optimize": optimize,
         "target": compile_cfg.get("target", "native"),
         "solver_dir": compile_cfg.get("solver_dir"),
@@ -92,8 +100,10 @@ def load_scenario(scenario_path: str) -> dict:
     """Parse a scenario TOML into the fields the compile pipeline needs.
 
     Returns a dict with ``estimator_config`` / ``controller_config`` (config
-    TOML paths), ``input_limits`` (``(lo, hi)`` ndarray pair or ``None``), and
-    the validated ``compile`` section.
+    TOML paths), ``input_limits`` (``(lo, hi)`` ndarray pair or ``None``), the
+    validated ``compile`` section, and ``plant`` (the ``[plant]`` section or
+    ``None``). When ``[plant]`` is present, ``gen_scenario`` derives
+    ``n_x``/``n_u`` and the ``A_dynamics``/``B_dynamics`` model from it.
 
     Raises:
         ValueError: On a missing ``[controller]``/``[estimator]`` section or an
@@ -114,6 +124,7 @@ def load_scenario(scenario_path: str) -> dict:
         "controller_config": cfg["controller"]["config"],
         "input_limits": limits,
         "compile": _validate_compile(cfg.get("compile"), scenario_path),
+        "plant": cfg.get("plant"),
     }
 
 
@@ -138,6 +149,10 @@ def _provenance(scenario_path: str, spec: dict) -> dict:
 def gen_scenario(scenario_path: str, out_dir: str) -> tuple:
     """Trace + compose + lower a scenario into an isolated graph pair.
 
+    When the scenario declares a ``[plant]`` section, ``n_x``/``n_u`` and the
+    ``A_dynamics``/``B_dynamics`` model are derived from the plant (explicit
+    ``[compile]`` dims and config ``A/B`` win over the derived values).
+
     Args:
         scenario_path: Scenario TOML path.
         out_dir: Output directory for ``graph_data.zig`` + its manifest.
@@ -150,11 +165,40 @@ def gen_scenario(scenario_path: str, out_dir: str) -> tuple:
         NotImplementedError: If a component uses an untraceable op.
     """
     spec = load_scenario(scenario_path)
+    n_x = spec["compile"]["n_x"]
+    n_u = spec["compile"]["n_u"]
+    est_cfg = spec["estimator_config"]
+    ctrl_cfg = spec["controller_config"]
+
+    # When the scenario declares a plant-only [plant] section (type + config),
+    # derive the dims and the A_dynamics/B_dynamics model from it — the same
+    # derivation the simulation path (ScenarioFactory) uses, so sim and
+    # compile can never disagree about the model. Sim-backed [plant] sections
+    # (name only) are sim-only and ignored here. Explicit [compile] n_x/n_u and
+    # config A/B win over derived.
+    plant_cfg = spec["plant"]
+    if plant_cfg is not None and "type" in plant_cfg and "config" in plant_cfg:
+        with open(resolve_config_path(plant_cfg["config"]), "rb") as f:
+            plant = _PLANT_REGISTRY[plant_cfg["type"]].from_config(
+                tomllib.load(f), backend=NumpyBackend()
+            )
+        n_x = plant.get_state().shape[0]
+        A_d, B_d = derive_model(plant)
+        n_u = B_d.shape[1]
+        est_cfg = inject_model(est_cfg, plant)
+        ctrl_cfg = inject_model(ctrl_cfg, plant)
+
+    if n_x is None or n_u is None:
+        raise ValueError(
+            f"{scenario_path}: cannot determine n_x/n_u — set [compile] n_x/n_u "
+            "or add a [plant] section"
+        )
+
     cg = build_composed_graph(
-        spec["estimator_config"],
-        spec["controller_config"],
-        spec["compile"]["n_x"],
-        spec["compile"]["n_u"],
+        est_cfg,
+        ctrl_cfg,
+        n_x,
+        n_u,
         input_limits=spec["input_limits"],
     )
     out = Path(out_dir)

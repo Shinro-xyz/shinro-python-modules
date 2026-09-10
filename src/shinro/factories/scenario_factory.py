@@ -20,7 +20,7 @@ from shinro.factories.registry import _PLANT_REGISTRY
 from shinro.factories.trajectory_factory import TrajectoryFactory
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend
 from shinro.utils.config_resolver import resolve_config_path
-from shinro.utils.linearization import discretize_euler, linearize_plant
+from shinro.utils.linearization import inject_model
 
 if TYPE_CHECKING:
     from shinro.simulation.robotsim import RobotSim
@@ -213,16 +213,14 @@ class ScenarioFactory:
         In plant-only mode (``derive_model``), a config that omits
         ``A_dynamics``/``B_dynamics`` gets the plant's linearized model
         (upright equilibrium) discretized with first-order Euler at the
-        plant's ``dt``. Sim-backed scenarios are untouched (their
-        ``A = I, B = dt * I`` defaults are correct for the velocity-commanded
-        base).
+        plant's ``dt`` — the same :func:`inject_model` derivation the compile
+        path uses. Sim-backed scenarios are untouched (their ``A = I,
+        B = dt * I`` defaults are correct for the velocity-commanded base).
         """
         with open(resolve_config_path(config_path), "rb") as f:
             cfg = tomllib.load(f)
-        if derive_model and "A_dynamics" not in cfg and "B_dynamics" not in cfg:
-            A_c, B_c = linearize_plant(plant)
-            A_d, B_d = discretize_euler(A_c, B_c, plant.dt, backend=plant.bk)
-            cfg = {**cfg, "A_dynamics": A_d, "B_dynamics": B_d}
+        if derive_model:
+            cfg = inject_model(cfg, plant)
         if backend is not None:
             return factory_cls(config=cfg).create(backend=backend)
         return factory_cls(config=cfg).create()

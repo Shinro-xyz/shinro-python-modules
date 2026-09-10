@@ -1,9 +1,11 @@
+import tomllib
 from collections.abc import Callable
 from typing import Any
 
 import numpy as np
 
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend
+from shinro.utils.config_resolver import resolve_config_path
 
 
 def linearize(
@@ -140,3 +142,47 @@ def linearize_plant(plant, x0=None, u0=None, eps=1e-6):
             )
         u0 = plant.bk.zeros(plant.input_dim)
     return linearize(as_numpy_f(plant.dynamics, plant.bk), x0, u0, plant.bk, eps=eps)
+
+
+def derive_model(plant):
+    """Linearize a plant at its default operating point and Euler-discretize.
+
+    Returns the discrete-time ``(A_d, B_d)`` pair in the plant's backend type —
+    the model a controller/estimator needs when its config omits
+    ``A_dynamics``/``B_dynamics``. This is the single source of the derived
+    model shared by the simulation and compile paths.
+
+    Args:
+        plant: A plant with ``.dynamics``, ``.bk``, ``.dt``, ``.get_state()``,
+            and ``.input_dim``.
+
+    Returns:
+        Tuple ``(A_d, B_d)`` in the plant's backend native type.
+    """
+    A_c, B_c = linearize_plant(plant)
+    return discretize_euler(A_c, B_c, plant.dt, backend=plant.bk)
+
+
+def inject_model(cfg, plant) -> dict:
+    """Fill ``A_dynamics``/``B_dynamics`` from the plant when a config omits them.
+
+    ``cfg`` may be a config dict or a TOML path (resolved via
+    :func:`shinro.utils.config_resolver.resolve_config_path`); a dict is
+    returned either way. A config that already declares either matrix is left
+    untouched — explicit model wins over the derived one.
+
+    Args:
+        cfg: Controller/estimator config dict or TOML path.
+        plant: The plant to derive the model from.
+
+    Returns:
+        The config dict with ``A_dynamics``/``B_dynamics`` filled in when they
+        were absent.
+    """
+    if isinstance(cfg, str):
+        with open(resolve_config_path(cfg), "rb") as f:
+            cfg = tomllib.load(f)
+    if "A_dynamics" not in cfg and "B_dynamics" not in cfg:
+        A_d, B_d = derive_model(plant)
+        cfg = {**cfg, "A_dynamics": A_d, "B_dynamics": B_d}
+    return cfg
