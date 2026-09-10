@@ -1326,7 +1326,7 @@ class TestMpcDeltaUComposedOracle:
             kf.x_hat = x_hat.copy()
             x_hat_np = kf.estimate(y.reshape(-1, 1), u_prev_np.reshape(-1, 1))
             u_np = np.clip(
-                mpc.compute(x_hat_np.ravel() - x_ref, u_prev_np), limits[0], limits[1]
+                mpc.compute(x_hat_np.ravel() - x_ref, u_prev=u_prev_np), limits[0], limits[1]
             )
 
             inputs = _pack_inputs(cg, y, x_ref, u_prev_so, x_hat, P)

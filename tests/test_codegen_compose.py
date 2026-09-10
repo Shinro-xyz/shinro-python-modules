@@ -562,7 +562,7 @@ class TestComposeControllerRoles:
             kf.x_hat = x_hat_init.copy()
             x_hat_np = kf.estimate(y.reshape(-1, 1), u_prev.reshape(-1, 1))
             u_np = np.clip(
-                mpc.compute(x_hat_np.ravel() - x_ref, u_prev),
+                mpc.compute(x_hat_np.ravel() - x_ref, u_prev=u_prev),
                 _BASE_LIMITS[0],
                 _BASE_LIMITS[1],
             )
