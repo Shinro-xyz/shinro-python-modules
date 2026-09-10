@@ -1,5 +1,6 @@
 import tomllib
 from collections.abc import Callable
+from dataclasses import fields, replace
 from typing import Any
 
 import numpy as np
@@ -184,4 +185,46 @@ def inject_model(cfg, plant) -> dict:
     if "A_dynamics" not in cfg and "B_dynamics" not in cfg:
         A_d, B_d = derive_model(plant)
         cfg = {**cfg, "A_dynamics": A_d, "B_dynamics": B_d}
+    return cfg
+
+
+def inject_plant_derived(cfg, plant, *, with_model: bool = False):
+    """Fill ``dt`` / ``A_dynamics`` / ``B_dynamics`` on a Config dataclass from the plant.
+
+    The plant is the single source of physics truth. Precedence: **explicit
+    wins, derived fills, disagreement is loud**.
+
+    - ``dt``: filled from ``plant.dt`` when the config omits it; a declared
+      ``dt`` that disagrees with the plant's is a loud error (a mismatched
+      PID/MPPI ``dt`` silently mis-scales integration otherwise).
+    - ``A_dynamics``/``B_dynamics``: derived via :func:`derive_model` and
+      injected (as TOML-serializable lists) when the config declares *neither*
+      — only when ``with_model`` is set, so sim-backed velocity-commanded
+      plants keep their untouched ``A = I, B = dt·I`` defaults.
+
+    Args:
+        cfg: A component Config dataclass instance (from
+            :meth:`shinro.components.ConfigDriven.parse_config`).
+        plant: The plant to derive from.
+        with_model: Also derive the model when A/B are both absent.
+
+    Returns:
+        The (possibly replaced) Config dataclass.
+
+    Raises:
+        ValueError: On a ``dt`` disagreement, or a ``dt``-less config without
+            ``B_dynamics`` in standalone use.
+    """
+    names = {f.name for f in fields(cfg)}
+    if "dt" in names:
+        if cfg.dt is None:
+            cfg = replace(cfg, dt=float(plant.dt))
+        elif abs(float(cfg.dt) - float(plant.dt)) > 1e-12:
+            raise ValueError(
+                f"{type(cfg).__name__}: config dt ({cfg.dt}) disagrees with plant dt "
+                f"({plant.dt}) — the plant is the source of truth; omit dt to inherit it."
+            )
+    if with_model and "A_dynamics" in names and cfg.A_dynamics is None and cfg.B_dynamics is None:
+        A_d, B_d = derive_model(plant)
+        cfg = replace(cfg, A_dynamics=A_d.tolist(), B_dynamics=B_d.tolist())
     return cfg

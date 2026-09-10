@@ -46,6 +46,44 @@ class ConfigDriven:
             return strict_from_dict(spec, config, getattr(cls, "_registry_name", cls.__name__))
         return config
 
+    @classmethod
+    def load_config(cls, config, plant=None, derive_model: bool = False):
+        """Strict-parse a TOML config into ``cls.Config``, then inject plant-derived values.
+
+        With ``plant``, ``dt`` is filled from the plant when the config omits
+        it and a declared ``dt`` that disagrees with the plant's is a loud
+        error (the plant is the source of truth). With ``derive_model``,
+        ``A_dynamics``/``B_dynamics`` are additionally derived from the plant
+        when the config declares neither. See
+        :func:`shinro.utils.linearization.inject_plant_derived`.
+
+        Args:
+            config: Raw TOML dict (with optional ``type`` key) or a ``Config``
+                instance.
+            plant: Optional plant for derived-value injection.
+            derive_model: Also derive ``A_dynamics``/``B_dynamics`` from the
+                plant when both are omitted.
+
+        Returns:
+            A ``cls.Config`` instance.
+
+        Raises:
+            ValueError: On strict-parse failure or a ``dt`` disagreement.
+        """
+        if isinstance(config, str):
+            import tomllib
+
+            from shinro.utils.config_resolver import resolve_config_path
+
+            with open(resolve_config_path(config), "rb") as f:
+                config = tomllib.load(f)
+        cfg = cls.parse_config(config)
+        if plant is not None:
+            from shinro.utils.linearization import inject_plant_derived
+
+            cfg = inject_plant_derived(cfg, plant, with_model=derive_model)
+        return cfg
+
 
 class PhysicsEngine(ABC):
     """

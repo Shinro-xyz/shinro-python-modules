@@ -253,7 +253,8 @@ class TestEstimatorConfigParity:
                 kf = tomllib.load(f)
             with open(twin, "rb") as f:
                 lue = tomllib.load(f)
-            assert lue["dt"] == kf["dt"], f"{twin.name} dt differs from {kf_path.name}"
+            # dt agreement: both declared, or both omitted (plant-derived inheritance).
+            assert kf.get("dt") == lue.get("dt"), f"{twin.name} dt differs from {kf_path.name}"
             assert len(lue["observer_gain"]) == len(kf["process_noise"]), (
                 f"{twin.name} observer_gain dims differ from {kf_path.name} process_noise"
             )

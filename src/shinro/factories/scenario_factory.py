@@ -20,7 +20,6 @@ from shinro.factories.registry import _PLANT_REGISTRY
 from shinro.factories.trajectory_factory import TrajectoryFactory
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend
 from shinro.utils.config_resolver import resolve_config_path
-from shinro.utils.linearization import inject_model
 
 if TYPE_CHECKING:
     from shinro.simulation.robotsim import RobotSim
@@ -76,11 +75,12 @@ class ScenarioFactory:
        dynamics — no MuJoCo engine. ``[scenario].dt`` must equal the plant's
        own ``dt`` (the plant integrates at its own time step).
 
-    When a controller/estimator config omits ``A_dynamics``/``B_dynamics`` in
-    plant-only mode, the discrete-time model is derived from the plant via
-    :func:`shinro.utils.linearization.linearize_plant` (upright equilibrium)
-    and first-order Euler discretization, so the plant TOML stays the single
-    source of physics truth.
+    The plant TOML is the single source of physics truth. Controller/estimator
+    configs never need to restate it: ``dt`` is filled from ``plant.dt`` when
+    omitted (a declared ``dt`` that disagrees is a loud error), and in
+    plant-only mode an omitted ``A_dynamics``/``B_dynamics`` model is derived
+    from the plant via :func:`shinro.utils.linearization.linearize_plant`
+    (upright equilibrium) and first-order Euler discretization.
     """
 
     def __init__(self, config_path: str):
@@ -208,22 +208,21 @@ class ScenarioFactory:
 
     @staticmethod
     def _create_loop_role(factory_cls, config_path: str, plant: Plant, backend: ArrayBackend | None, derive_model: bool):
-        """Build a controller/estimator, deriving A/B from the plant when omitted.
+        """Build a controller/estimator with plant-derived injection.
 
-        In plant-only mode (``derive_model``), a config that omits
-        ``A_dynamics``/``B_dynamics`` gets the plant's linearized model
-        (upright equilibrium) discretized with first-order Euler at the
-        plant's ``dt`` — the same :func:`inject_model` derivation the compile
-        path uses. Sim-backed scenarios are untouched (their ``A = I,
-        B = dt * I`` defaults are correct for the velocity-commanded base).
+        The plant is the single source of physics truth. In **both** modes the
+        config's ``dt`` is filled from ``plant.dt`` when omitted, and a
+        declared ``dt`` that disagrees with the plant's is a loud error (a
+        mismatched PID/MPPI dt silently mis-scales integration). In plant-only
+        mode (``derive_model``), a config that omits ``A_dynamics``/
+        ``B_dynamics`` additionally gets the plant's linearized model (upright
+        equilibrium) discretized with first-order Euler at the plant's ``dt`` —
+        the same derivation the compile path uses. Sim-backed scenarios keep
+        their model defaults untouched (``A = I, B = dt * I`` is correct for
+        the velocity-commanded base). See
+        :func:`shinro.utils.linearization.inject_plant_derived`.
         """
-        with open(resolve_config_path(config_path), "rb") as f:
-            cfg = tomllib.load(f)
-        if derive_model:
-            cfg = inject_model(cfg, plant)
-        if backend is not None:
-            return factory_cls(config=cfg).create(backend=backend)
-        return factory_cls(config=cfg).create()
+        return factory_cls(config_path).create(backend=backend, plant=plant, derive_model=derive_model)
 
     @staticmethod
     def _physics_xml(physics_cfg: dict) -> tuple[str, dict] | tuple[None, None]:

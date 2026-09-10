@@ -29,6 +29,7 @@ Exit codes: 0 ok · 1 untraceable · 2 usage/config error.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import hashlib
 import sys
 import tomllib
@@ -38,10 +39,10 @@ from pathlib import Path
 import numpy as np
 
 from shinro.codegen import build_composed_graph, lower_zig
-from shinro.factories.registry import _PLANT_REGISTRY
+from shinro.factories.registry import _CONTROLLER_REGISTRY, _ESTIMATOR_REGISTRY, _PLANT_REGISTRY
 from shinro.utils.array_backend import NumpyBackend
 from shinro.utils.config_resolver import resolve_config_path
-from shinro.utils.linearization import derive_model, inject_model
+from shinro.utils.linearization import derive_model
 
 EXIT_OK = 0
 EXIT_UNTRACEABLE = 1
@@ -122,6 +123,8 @@ def load_scenario(scenario_path: str) -> dict:
     return {
         "estimator_config": cfg["estimator"]["config"],
         "controller_config": cfg["controller"]["config"],
+        "estimator_type": cfg["estimator"].get("type"),
+        "controller_type": cfg["controller"].get("type"),
         "input_limits": limits,
         "compile": _validate_compile(cfg.get("compile"), scenario_path),
         "plant": cfg.get("plant"),
@@ -132,18 +135,37 @@ def _provenance(scenario_path: str, spec: dict) -> dict:
     """Build the provenance dict for ``lower_zig``.
 
     Records the sha256 of the scenario TOML itself (pinning the whole build
-    spec, including ``[compile]``) plus the estimator/controller configs, so
-    the deployment record's config slot commits to all three.
+    spec, including ``[compile]``) plus the estimator/controller configs — and
+    the plant config when derivation was used, so the deployment record's
+    config slot commits to every file the artifact was built from.
     """
+    configs = {
+        scenario_path: _sha256(scenario_path),
+        spec["estimator_config"]: _sha256(spec["estimator_config"]),
+        spec["controller_config"]: _sha256(spec["controller_config"]),
+    }
+    plant = spec.get("plant")
+    if plant and "config" in plant:
+        configs[plant["config"]] = _sha256(plant["config"])
     return {
-        "configs": {
-            scenario_path: _sha256(scenario_path),
-            spec["estimator_config"]: _sha256(spec["estimator_config"]),
-            spec["controller_config"]: _sha256(spec["controller_config"]),
-        },
+        "configs": configs,
         "python_version": sys.version.split()[0],
         "numpy_version": version("numpy"),
     }
+
+
+def _type_from_component_config(config_path: str) -> str:
+    """Read the component's registered name from its own config TOML.
+
+    Scenario TOMLs may omit ``type`` in ``[controller]``/``[estimator]`` (only
+    a ``config`` path); the plant-derived injection needs the registry class,
+    so the type is read from the component file when not declared.
+    """
+    with open(resolve_config_path(config_path), "rb") as f:
+        t = tomllib.load(f).get("type")
+    if t is None:
+        raise ValueError(f"{config_path}: missing 'type' — required for plant-derived injection")
+    return t
 
 
 def gen_scenario(scenario_path: str, out_dir: str) -> tuple:
@@ -185,8 +207,23 @@ def gen_scenario(scenario_path: str, out_dir: str) -> tuple:
         n_x = plant.get_state().shape[0]
         A_d, B_d = derive_model(plant)
         n_u = B_d.shape[1]
-        est_cfg = inject_model(est_cfg, plant)
-        ctrl_cfg = inject_model(ctrl_cfg, plant)
+        # Strict-parse + plant-derived injection (dt filled/checked, model
+        # derived when omitted), then flatten back to the dict shape
+        # build_composed_graph's factories dispatch on ("type" key).
+        est_type = spec["estimator_type"] or _type_from_component_config(spec["estimator_config"])
+        ctrl_type = spec["controller_type"] or _type_from_component_config(spec["controller_config"])
+        est_cfg = {
+            **dataclasses.asdict(_ESTIMATOR_REGISTRY[est_type].load_config(
+                spec["estimator_config"], plant=plant, derive_model=True
+            )),
+            "type": est_type,
+        }
+        ctrl_cfg = {
+            **dataclasses.asdict(_CONTROLLER_REGISTRY[ctrl_type].load_config(
+                spec["controller_config"], plant=plant, derive_model=True
+            )),
+            "type": ctrl_type,
+        }
 
     if n_x is None or n_u is None:
         raise ValueError(

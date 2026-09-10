@@ -14,6 +14,7 @@ from __future__ import annotations
 import tomllib
 
 import numpy as np
+import pytest
 
 from shinro.codegen import build_composed_graph
 from shinro.codegen.compose import ComposedGraph
@@ -153,6 +154,106 @@ def test_derive_model_multi_input():
     A_d, B_d = derive_model(plant)
     assert np.asarray(A_d).shape == (4, 4)
     assert np.asarray(B_d).shape == (4, 2)  # n_u = 2, not the dt*I (4,4) default
+
+
+class TestInjectPlantDerived:
+    """inject_plant_derived: dt filled/checked, model derived — explicit wins, disagreement loud."""
+
+    @pytest.fixture()
+    def cartpole(self):
+        from shinro.factories.registry import _PLANT_REGISTRY
+        from shinro.utils.array_backend import NumpyBackend
+        from shinro.utils.config_resolver import resolve_config_path
+
+        with open(resolve_config_path("configs/plants/cartpole.toml"), "rb") as f:
+            return _PLANT_REGISTRY["CartPole"].from_config(tomllib.load(f), backend=NumpyBackend())
+
+    def _lqr_cfg(self):
+        from shinro.controllers.lqr import LQRConfig
+        return LQRConfig(state_cost=[20.0, 2.0, 100.0, 10.0], control_cost=[0.1])
+
+    def test_dt_filled_from_plant_when_omitted(self, cartpole):
+        from shinro.utils.linearization import inject_plant_derived
+
+        cfg = inject_plant_derived(self._lqr_cfg(), cartpole, with_model=True)
+        assert cfg.dt == cartpole.dt
+        assert cfg.A_dynamics is not None and cfg.B_dynamics is not None
+
+    def test_matching_dt_left_alone(self, cartpole):
+        from dataclasses import replace
+
+        from shinro.utils.linearization import inject_plant_derived
+
+        cfg = replace(self._lqr_cfg(), dt=cartpole.dt)
+        out = inject_plant_derived(cfg, cartpole, with_model=False)
+        assert out.dt == cartpole.dt
+        assert out.A_dynamics is None  # no derive_model: model untouched
+
+    def test_dt_mismatch_is_loud(self, cartpole):
+        from dataclasses import replace
+
+        from shinro.utils.linearization import inject_plant_derived
+
+        cfg = replace(self._lqr_cfg(), dt=cartpole.dt * 5)
+        with pytest.raises(ValueError, match="disagrees with plant dt"):
+            inject_plant_derived(cfg, cartpole, with_model=False)
+
+    def test_model_derived_only_when_both_absent(self, cartpole):
+        from dataclasses import replace
+
+        from shinro.utils.linearization import inject_plant_derived
+
+        # Explicit A blocks model injection even in derive_model mode.
+        cfg = replace(self._lqr_cfg(), dt=cartpole.dt, A_dynamics=[[1.0, 0.0], [0.0, 1.0]])
+        out = inject_plant_derived(cfg, cartpole, with_model=True)
+        assert out.A_dynamics == [[1.0, 0.0], [0.0, 1.0]]
+        assert out.B_dynamics is None
+
+    def test_components_without_dt_fields_are_skipped(self, cartpole):
+        """PIDConfig has no A/B fields; injection must not touch it beyond dt."""
+        from dataclasses import replace
+
+        from shinro.controllers.pid import PIDConfig
+        from shinro.utils.linearization import inject_plant_derived
+
+        cfg = replace(PIDConfig(kp=[1.0], ki=[0.1], kd=[0.01]), dt=None)
+        out = inject_plant_derived(cfg, cartpole, with_model=True)
+        assert out.dt == cartpole.dt
+
+
+class TestLoadConfigPlantInjection:
+    """ConfigDriven.load_config: parse → plant injection, end to end."""
+
+    @pytest.fixture()
+    def cartpole(self):
+        from shinro.factories.registry import _PLANT_REGISTRY
+        from shinro.utils.array_backend import NumpyBackend
+        from shinro.utils.config_resolver import resolve_config_path
+
+        with open(resolve_config_path("configs/plants/cartpole.toml"), "rb") as f:
+            return _PLANT_REGISTRY["CartPole"].from_config(tomllib.load(f), backend=NumpyBackend())
+
+    def test_lqr_constructs_from_dtless_config_with_plant(self, cartpole):
+        """The shipped lqr_cartpole.toml (no dt) builds via the plant-derived path."""
+        from shinro.controllers.lqr import LQR
+        from shinro.utils.array_backend import NumpyBackend
+
+        cfg = LQR.load_config("configs/controllers/lqr_cartpole.toml", plant=cartpole, derive_model=True)
+        assert cfg.dt == cartpole.dt
+        lqr = LQR.from_config(cfg, backend=NumpyBackend())
+        assert lqr.K is not None
+
+    def test_factory_create_with_plant_injects(self, cartpole):
+        """ControllerFactory.create(plant=...) fills dt and derives the model."""
+        from shinro.factories.controller_factory import ControllerFactory
+        from shinro.utils.array_backend import NumpyBackend
+
+        factory = ControllerFactory(config={"type": "LQR", "name": "x", "state_cost": [1.0, 1.0, 1.0, 1.0], "control_cost": [0.1]})
+        ctrl = factory.create(backend=NumpyBackend(), plant=cartpole, derive_model=True)
+        A_d, B_d = cartpole.get_model()
+        assert np.allclose(np.asarray(ctrl.A), np.asarray(A_d))
+        assert np.allclose(np.asarray(ctrl.B), np.asarray(B_d))
+        assert np.asarray(ctrl.B).shape == (4, 1)
 
 
 def test_derived_plant_scenario_matches_explicit(tmp_path):
