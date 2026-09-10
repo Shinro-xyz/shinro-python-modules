@@ -474,14 +474,14 @@ class TestComposePortMeta:
 class TestComposeControllerRoles:
     """Controller inputs map by role from the compute() signature.
 
-    MPC_LTI/MPC_DeltaU are regulators (no reference input): compose feeds the
-    error ``x_hat - x_ref`` so regulating it to zero tracks ``x_ref``. A
-    controller declaring ``u_prev`` (DeltaU) shares the estimator's
-    previous-control port. Unmapped input names raise.
+    Every built-in controller takes ``(current_state, target_state, u_prev)``:
+    compose feeds ``x_hat`` and ``x_ref`` separately and MPC forms the tracking
+    error internally. A controller declaring ``u_prev`` (DeltaU) shares the
+    estimator's previous-control port. Unmapped input names raise.
     """
 
     def test_mpc_lti_compose_error_state(self, rng):
-        """KF + MPC_LTI: controller receives e = x_hat - x_ref, matches live."""
+        """KF + MPC_LTI: controller receives x_hat and x_ref, matches live."""
         kf = _load_kalman()
         mpc = ControllerFactory("configs/controllers/mpc_lti_base.toml").create(backend=NumpyBackend())
 
@@ -490,12 +490,15 @@ class TestComposeControllerRoles:
             input_shapes={"measurement": (3, 1), "control_input": (3, 1)},
             state_shapes={"x_hat": (3, 1), "P": (3, 3)},
         )
-        ctrl_ng = trace_node(mpc, input_shapes={"x0": (3,)})
+        ctrl_ng = trace_node(
+            mpc,
+            input_shapes={"current_state": (3,), "target_state": (3,)},
+        )
         composed = compose(est_ng, ctrl_ng, plant_dims=_BASE_DIMS, input_limits=_BASE_LIMITS)
 
-        # The regulator's state feed is the error: a sub node bridges x_hat and x_ref.
+        # The tracking error is formed inside the MPC node (current - target).
         ops = [n.op for n in composed.graph.nodes]
-        assert "sub" in ops, f"expected an error-state sub node; ops = {ops}"
+        assert "sub" in ops, f"expected the MPC's internal error sub node; ops = {ops}"
 
         initial_P = kf.P.copy()
         for trial in range(20):
@@ -537,7 +540,10 @@ class TestComposeControllerRoles:
             input_shapes={"measurement": (3, 1), "control_input": (3, 1)},
             state_shapes={"x_hat": (3, 1), "P": (3, 3)},
         )
-        ctrl_ng = trace_node(mpc, input_shapes={"x0": (3,), "u_prev": (3,)})
+        ctrl_ng = trace_node(
+            mpc,
+            input_shapes={"current_state": (3,), "target_state": (3,), "u_prev": (3,)},
+        )
         composed = compose(est_ng, ctrl_ng, plant_dims=_BASE_DIMS, input_limits=_BASE_LIMITS)
 
         # Same port list as KF+LQR: u_prev is shared, not duplicated.

@@ -12,8 +12,11 @@ graph representing one tick of the closed loop:
 The wiring is the **fixed ABC dataflow** — the same for every scenario, so no
 per-scenario edge dict is needed. What's scenario-specific (clip limits, vector
 dims) comes from the scenario config. Controller inputs are mapped by role
-from the compute() signature; a regulator controller (MPC) gets the error
-``x_hat - x_ref`` instead of a separate reference input.
+from the compute() signature; every built-in controller takes
+``(current_state, target_state, u_prev)`` and receives ``x_hat`` and ``x_ref``
+separately (MPC forms the tracking error internally). A custom regulator-style
+controller that declares only a state input (e.g. ``compute(x0)``) still gets
+the error ``x_hat - x_ref`` instead.
 
 Shape mismatches between estimator and controller (e.g. the KF produces
 ``(n,1)`` column vectors but the LQR expects ``(n,)`` flat) are resolved by
@@ -79,11 +82,11 @@ def compose(
 
     The controller's inputs are mapped by ROLE from its compute() signature
     (state / reference / u_prev — see ``_CONTROLLER_INPUT_ROLES``), not by
-    hardcoded names. A controller that takes a reference (LQR, MPPI) receives
-    ``x_hat`` and ``x_ref`` separately; a regulator without a reference input
-    (MPC_LTI, MPC_DeltaU) receives the error ``x_hat - x_ref`` instead.
-    ``u_prev`` routes the shared previous-control port into controllers that
-    declare it (MPC_DeltaU).
+    hardcoded names. A controller that takes a reference (LQR, PID, MPC, MPPI)
+    receives ``x_hat`` and ``x_ref`` separately; a custom regulator without a
+    reference input (e.g. ``compute(x0)``) receives the error ``x_hat - x_ref``
+    instead. ``u_prev`` routes the shared previous-control port into
+    controllers that declare it (MPC_DeltaU).
 
     State (recurrent attributes on both sides — the estimator's ``x_hat`` and
     covariance ``P``, the controller's integral state, ...) and the previous

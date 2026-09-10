@@ -202,7 +202,7 @@ class MPPIController(Controller):
         self.dynamics_fn = adapter.dynamics_fn
         self.cost_fn = lambda x, u: adapter.cost_fn(x, u, self._Q, self._R, x_ref=self._x_ref)
 
-    def compute(self, x0, x_ref: Any | None = None):
+    def compute(self, current_state, target_state: Any | None = None):
         """Compute the MPPI control action for a given initial state.
 
         Samples :math:`N` Gaussian perturbation sequences, rolls out the
@@ -216,11 +216,11 @@ class MPPIController(Controller):
         to the backend.
 
         Args:
-            x0: Initial state vector (D_x,). Accepts the backend's native
-                array type (numpy or torch).
-            x_ref: Optional reference state (D_x,) to track. When given, the
-                cost penalizes deviation ``(x - x_ref)``; otherwise the
-                controller regulates to the origin.
+            current_state: Initial state vector (D_x,). Accepts the backend's
+                native array type (numpy or torch).
+            target_state: Optional reference state (D_x,) to track. When given,
+                the cost penalizes deviation ``(x - target_state)``; otherwise
+                the controller regulates to the origin.
 
         Returns:
             First control action (D_u,) in the backend's native type.
@@ -238,8 +238,8 @@ class MPPIController(Controller):
         dynamics_fn = self.dynamics_fn
         cost_fn = self.cost_fn
 
-        x0_np = self.bk.to_numpy(x0)
-        self._x_ref = self.bk.from_numpy(self.bk.to_numpy(x_ref)) if x_ref is not None else None
+        x0_np = self.bk.to_numpy(current_state)
+        self._x_ref = self.bk.from_numpy(self.bk.to_numpy(target_state)) if target_state is not None else None
 
         epsilon = self._rng.normal(loc=0.0, scale=self.noise_sigma, size=(self.N, self.K, self.D_u))
         self._last_epsilon = epsilon

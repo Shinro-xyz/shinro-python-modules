@@ -142,18 +142,22 @@ def _build_lowered_ops_graph():
 def _build_mpc_graph():
     """Trace the base MPC_LTI and wrap it as a single-input step graph.
 
-    The traced compute() is: x0 → q = Fᵀ x0 (matmul) → solve_qp → u[:3]
-    (slice). The ``solve_qp`` node drives the codegen static solver baked into
-    libbase.so (src/shinro/runtime/codegen/emosqp/), whose problem must match the
+    The traced compute() is: e = current_state - target_state → q = Fᵀ e
+    (matmul) → solve_qp → u[:3] (slice). The ``solve_qp`` node drives the
+    codegen static solver baked into libbase.so
+    (src/shinro/runtime/codegen/emosqp/), whose problem must match the
     ``mpc_lti_base.toml`` bake (n_vars=30).
     """
     ctrl = ControllerFactory(
         str(REPO_ROOT / "src/shinro/configs/controllers/mpc_lti_base.toml")
     ).create(backend=NumpyBackend())
-    ng = trace_node(ctrl, input_shapes={"x0": (3,)})
+    ng = trace_node(
+        ctrl,
+        input_shapes={"current_state": (3,), "target_state": (3,)},
+    )
     return ComposedGraph(
         graph=ng.graph,
-        inputs=["x0"],
+        inputs=["current_state", "target_state"],
         outputs=["out"],
         state_inputs=[],
         state_outputs=[],
@@ -1071,10 +1075,11 @@ class TestSolveQpOracle:
         max_err = 0.0
         for _ in range(10):
             x0 = rng.normal(0.0, 0.1, (3,))
-            inputs = _pack_arrays(cg, {"x0": x0})
+            zero = np.zeros(3)
+            inputs = _pack_arrays(cg, {"current_state": x0, "target_state": zero})
             out, _ = _step(lib, cg, inputs, n_out, n_state)
 
-            traced = interpret(cg.graph, {"x0": x0})["out"]
+            traced = interpret(cg.graph, {"current_state": x0, "target_state": zero})["out"]
             max_err = max(max_err, float(np.max(np.abs(out - np.asarray(traced).ravel()))))
 
         assert max_err < 1e-3, f"Zig .so solve_qp diverged from interpreter: max abs err = {max_err:.3e}"

@@ -20,20 +20,15 @@ minimal install (the physics engine is only needed for sim-backed scenarios).
 
 from __future__ import annotations
 
+import inspect
 import warnings
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import numpy as np
 
-from shinro.controllers.lqr import LQR
-from shinro.controllers.mpc_lti import MPC_LTI, MPC_LTI_DeltaU
-from shinro.controllers.mppi import MPPIController
-from shinro.controllers.pid import PIDController
-
-if TYPE_CHECKING:
-    pass
+from shinro.controllers.smc import SlidingModeController
 
 MAX_CONTROL = 1e6
 DEFAULT_SEED = 42
@@ -238,21 +233,17 @@ def _control_limits(scenario) -> tuple[np.ndarray, np.ndarray]:
     )
 
 
-def _compute_control(ctrl, estimate: np.ndarray, reference: np.ndarray, u_prev: np.ndarray) -> np.ndarray:
-    """Compute the control input, dispatching on controller type.
+def _compute_control(ctrl, estimate: np.ndarray, reference: np.ndarray, u_prev: np.ndarray, takes_u_prev: bool) -> np.ndarray:
+    """Compute the control input via the uniform controller signature.
 
-    LQR/PID take ``(current, target)``; MPC_LTI variants take ``(error)`` or
-    ``(error, u_prev)``; MPPI takes ``(x0, x_ref=)``. This is the single
-    adapter that absorbs the per-controller ``compute()`` signatures.
+    Every scenario-runnable controller implements
+    ``compute(current_state, target_state=None)`` — LQR/PID/MPC/MPPI all
+    regulate ``current_state`` toward ``target_state`` (MPC internally forms
+    the tracking error). Controllers that declare ``u_prev`` (MPC_DeltaU) get
+    the previous control; the flag is computed once per run, not per step.
     """
-    if isinstance(ctrl, (LQR, PIDController)):
-        return ctrl.compute(estimate, reference)
-    if isinstance(ctrl, MPPIController):
-        return ctrl.compute(estimate, x_ref=reference)
-    if isinstance(ctrl, MPC_LTI_DeltaU):
-        return ctrl.compute(estimate - reference, u_prev=u_prev)  # type: ignore[call-arg]
-    if isinstance(ctrl, MPC_LTI):
-        return ctrl.compute(estimate - reference)
+    if takes_u_prev:
+        return ctrl.compute(estimate, reference, u_prev=u_prev)
     return ctrl.compute(estimate, reference)
 
 
@@ -310,6 +301,13 @@ def iter_scenario(scenario, steps: int | None = None, seed: int | None = None) -
     n_u = _control_input_dim(scenario)
     u_prev = np.zeros(n_u)
 
+    # One-time controller contract checks (not per step): SMC needs f_x/g_x
+    # dynamics a scenario does not wire; u_prev is passed only to controllers
+    # that declare it (MPC_DeltaU).
+    if isinstance(ctrl, SlidingModeController):
+        raise NotImplementedError("SMC requires f_x/g_x dynamics — not scenario-runnable")
+    ctrl_takes_u_prev = "u_prev" in inspect.signature(ctrl.compute).parameters
+
     dt = float(scenario.config.get("scenario", {}).get("dt", scenario.sim.engine.dt if scenario.sim is not None else 0.01))
     for step in range(total_steps):
         true_state = np.asarray(plant.get_state(), dtype=np.float64).flatten()
@@ -327,7 +325,7 @@ def iter_scenario(scenario, steps: int | None = None, seed: int | None = None) -
                 "NaN/Inf measurements must not corrupt the estimate."
             )
 
-        control = np.clip(_compute_control(ctrl, estimate, reference, u_prev), lo, hi)
+        control = np.clip(_compute_control(ctrl, estimate, reference, u_prev, ctrl_takes_u_prev), lo, hi)
 
         plant.step(control)
         if scenario.sim is not None:

@@ -921,7 +921,7 @@ class TestMPPI:
         x_ref = bk.array([1.0, 0.0, 0.0])
         x = bk.array([0.0, 0.0, 0.0])
         for _ in range(300):
-            u = ctrl.compute(x, x_ref=x_ref)
+            u = ctrl.compute(x, x_ref)
             # first-order integrator: state += u * dt (matches A=I, B=dt*I)
             x = x + 0.02 * u
         assert abs(_to_np(x, bk)[0] - 1.0) < 0.2

@@ -182,19 +182,22 @@ class MPC_LTI(Controller):
         self.H = 2 * (R_bar + self.S_bar.T @ Q_bar @ self.S_bar)
         self.F = 2 * (self.T_bar.T @ Q_bar @ self.S_bar)
 
-    def compute(self, x0):
-        """Solve the MPC QP for a given initial state.
+    def compute(self, current_state, target_state: Any | None = None):
+        """Solve the MPC QP for a given state and optional reference.
 
-        Computes the linear cost ``q = Fᵀ x0`` and routes the QP solve
-        through ``self.bk.solve_qp`` (OSQP for numpy/torch; a graph node under
-        tracing), then slices out the first control action.
+        Regulates the tracking error ``e = current_state - target_state`` to
+        zero (exact for A = I plants; general A needs an ``(A - I) x_ref``
+        feedforward). With ``target_state`` omitted the controller regulates
+        to the origin.
 
         Args:
-            x0: Initial state vector (n_x,).
+            current_state: Initial state vector (n_x,).
+            target_state: Optional reference state (n_x,) to track.
 
         Returns:
             Optimal first control action (n_u,).
         """
+        x0 = current_state - target_state if target_state is not None else current_state
         q = self.F.T @ x0
         z_opt = self.bk.solve_qp(q, self.H, self.A_constraints, self.lcons, self.ucons)
         return self.bk.slice_(z_opt, 0, self.m)
@@ -313,13 +316,15 @@ class MPC_LTI_DeltaU(MPC_LTI):
         self._augment_dynamics()
         super()._mpc_dynamics_matrices()
 
-    def compute(self, x0, u_prev: Any | None = None):
+    def compute(self, current_state, target_state: Any | None = None, u_prev: Any | None = None):
         """Solve MPC with :math:`\\Delta u` regularization.
 
-        Augments the state with the previous control input before solving.
+        Regulates the tracking error ``e = current_state - target_state`` to
+        zero, augmenting the state with the previous control input.
 
         Args:
-            x0: Original (non-augmented) state vector (n_x,).
+            current_state: Original (non-augmented) state vector (n_x,).
+            target_state: Optional reference state (n_x,) to track.
             u_prev: Previous control input (n_u,). Defaults to zeros.
 
         Returns:
@@ -327,6 +332,7 @@ class MPC_LTI_DeltaU(MPC_LTI):
         """
         if u_prev is None:
             u_prev = self.bk.zeros(self.m)
+        x0 = current_state - target_state if target_state is not None else current_state
         x0_aug = self.bk.hstack([x0, u_prev])
         return super().compute(x0_aug)
 
