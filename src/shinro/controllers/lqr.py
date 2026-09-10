@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import Any
 
 from scipy.linalg import solve_discrete_are
@@ -5,6 +6,24 @@ from scipy.linalg import solve_discrete_are
 from shinro.components import Controller
 from shinro.factories.registry import register_controller
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend, parse_matrix
+from shinro.utils.config_spec import strict_from_dict
+
+
+@dataclass(frozen=True)
+class LQRConfig:
+    """Strict TOML schema for :class:`LQR`.
+
+    ``dt`` / ``A_dynamics`` / ``B_dynamics`` are optional: scenario builds
+    inject them from the plant (see :mod:`shinro.utils.linearization`);
+    standalone use must supply ``B_dynamics`` or ``dt``.
+    """
+
+    state_cost: list[float] | list[list[float]]
+    control_cost: list[float] | list[list[float]]
+    dt: float | None = None
+    A_dynamics: Any = None
+    B_dynamics: Any = None
+    name: str = "lqr"
 
 
 @register_controller("LQR")
@@ -84,9 +103,11 @@ class LQR(Controller):
     def reset(self):
         """No internal state to reset for LQR."""
 
+    Config = LQRConfig
+
     @classmethod
     def from_config(cls, config, backend: ArrayBackend | None = None):
-        """Create an LQR controller from a TOML config dict.
+        """Create an LQR controller from a TOML config dict or :class:`LQRConfig`.
 
         Config fields:
             state_cost: Diagonal Q weights (n_x,) or full Q matrix (n_x, n_x).
@@ -96,19 +117,27 @@ class LQR(Controller):
             B_dynamics: Optional full B matrix (n_x, n_u). Defaults to dt * I.
 
         Args:
-            config: TOML config dict.
+            config: TOML config dict or LQRConfig.
             backend: Array backend. Defaults to NumpyBackend.
 
         Returns:
             LQR instance.
         """
         bk = backend or NumpyBackend()
-        Q = parse_matrix(bk, config["state_cost"])
+        cfg = strict_from_dict(LQRConfig, config, "LQR") if isinstance(config, dict) else config
+        Q = parse_matrix(bk, cfg.state_cost)
         n = Q.shape[0]
+        A = bk.array(cfg.A_dynamics) if cfg.A_dynamics is not None else bk.eye(n)
+        if cfg.B_dynamics is not None:
+            B = bk.array(cfg.B_dynamics)
+        elif cfg.dt is not None:
+            B = cfg.dt * bk.eye(n)
+        else:
+            raise ValueError("LQR: no B_dynamics and no dt — standalone use requires one of them")
         return cls(
             state_cost_matrix=Q,
-            control_cost_matrix=parse_matrix(bk, config["control_cost"]),
-            dynamics_state_matrix=bk.array(config.get("A_dynamics", bk.eye(n))),
-            dynamics_control_matrix=bk.array(config.get("B_dynamics", config["dt"] * bk.eye(n))),
+            control_cost_matrix=parse_matrix(bk, cfg.control_cost),
+            dynamics_state_matrix=A,
+            dynamics_control_matrix=B,
             backend=bk,
         )

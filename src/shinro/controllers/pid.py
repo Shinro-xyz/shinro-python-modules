@@ -1,7 +1,35 @@
 
+from dataclasses import dataclass
+
 from shinro.components import Controller
 from shinro.factories.registry import register_controller
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend
+from shinro.utils.config_spec import strict_from_dict
+
+
+@dataclass(frozen=True)
+class LimitsConfig:
+    """Nested ``output_limits`` table for :class:`PIDConfig`."""
+
+    min: list[float]
+    max: list[float]
+
+
+@dataclass(frozen=True)
+class PIDConfig:
+    """Strict TOML schema for :class:`PIDController`.
+
+    ``dt`` is required at runtime (integral/derivative terms); scenario builds
+    inject it from the plant, so it may be omitted there. Missing gains default
+    to a P-controller (``kp=[1.0]``, ``ki``/``kd`` zeros).
+    """
+
+    kp: list[float] | None = None
+    ki: list[float] | None = None
+    kd: list[float] | None = None
+    dt: float | None = None
+    output_limits: dict | None = None
+    name: str = "pid"
 
 
 @register_controller("PID")
@@ -116,38 +144,44 @@ class PIDController(Controller):
         self._prev_error = self.bk.zeros_like(self.kd)
         self._has_run = self.bk.zeros_like(self.ki)
 
+    Config = PIDConfig
+
     @classmethod
     def from_config(cls, config, backend: ArrayBackend | None = None):
-        """Create a PID controller from a TOML config dict.
+        """Create a PID controller from a TOML config dict or :class:`PIDConfig`.
 
         Config fields:
-            kp: List of proportional gains (n,).
-            ki: List of integral gains (n,).
-            kd: List of derivative gains (n,).
-            dt: Time step.
+            kp: List of proportional gains (n,). Defaults to [1.0].
+            ki: List of integral gains (n,). Defaults to zeros.
+            kd: List of derivative gains (n,). Defaults to zeros.
+            dt: Time step. Required at runtime; injected from the plant in
+                scenario builds.
             output_limits: Optional dict with ``min`` and ``max`` lists.
 
         Args:
-            config: TOML config dict.
+            config: TOML config dict or PIDConfig.
             backend: Array backend. Defaults to NumpyBackend.
 
         Returns:
             PIDController instance.
         """
         bk = backend or NumpyBackend()
-        n = len(config.get("kp", [1]))
-        output_limits = config.get("output_limits")
-        limits = None
-        if output_limits:
-            limits = (
-                bk.array(output_limits["min"]),
-                bk.array(output_limits["max"]),
+        cfg = strict_from_dict(PIDConfig, config, "PID") if isinstance(config, dict) else config
+        if cfg.dt is None:
+            raise ValueError(
+                "PID: dt is required (runtime integration) — omit it only in scenario "
+                "builds, where the plant's dt is injected"
             )
+        n = len(cfg.kp) if cfg.kp is not None else 1
+        limits = None
+        if cfg.output_limits is not None:
+            lim = strict_from_dict(LimitsConfig, cfg.output_limits, "PID.output_limits")
+            limits = (bk.array(lim.min), bk.array(lim.max))
         return cls(
-            kp=bk.array(config.get("kp", [1.0] * n)),
-            ki=bk.array(config.get("ki", [0.0] * n)),
-            kd=bk.array(config.get("kd", [0.0] * n)),
-            dt=config["dt"],
+            kp=bk.array(cfg.kp if cfg.kp is not None else [1.0] * n),
+            ki=bk.array(cfg.ki if cfg.ki is not None else [0.0] * n),
+            kd=bk.array(cfg.kd if cfg.kd is not None else [0.0] * n),
+            dt=cfg.dt,
             output_limits=limits,
             backend=bk,
         )

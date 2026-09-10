@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import Any
 
 from scipy import sparse
@@ -5,6 +6,43 @@ from scipy import sparse
 from shinro.components import Controller
 from shinro.factories.registry import register_controller
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend, parse_matrix
+from shinro.utils.config_spec import strict_from_dict
+
+
+@dataclass(frozen=True, kw_only=True)
+class ConstraintsConfig:
+    """Nested ``constraints`` table for :class:`MPCConfig`."""
+
+    upper: list[float]
+    lower: list[float]
+    matrix: Any = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class MPCConfig:
+    """Strict TOML schema for :class:`MPC_LTI_Base` (registered ``"MPC_LTI"``).
+
+    ``dt`` / ``A_dynamics`` / ``B_dynamics`` are optional: scenario builds
+    inject them from the plant; standalone use must supply ``B_dynamics`` or
+    ``dt``. ``terminal_cost`` defaults to ``state_cost``.
+    """
+
+    horizon: int
+    state_cost: list[float] | list[list[float]]
+    control_cost: list[float] | list[list[float]]
+    terminal_cost: list[float] | list[list[float]] | None = None
+    dt: float | None = None
+    A_dynamics: Any = None
+    B_dynamics: Any = None
+    constraints: dict | None = None
+    name: str = "mpc"
+
+
+@dataclass(frozen=True, kw_only=True)
+class MPCDeltaUConfig(MPCConfig):
+    """Strict TOML schema for :class:`MPC_LTI_DeltaU` (registered ``"MPC_DeltaU"``)."""
+
+    delta_u_penalty: list[float] | list[list[float]]
 
 
 class MPC_LTI(Controller):
@@ -189,9 +227,11 @@ class MPC_LTI_DeltaU(MPC_LTI):
         self.S_delta = delta_u_penalty
         super().__init__(backend=self.bk, **kwargs)
 
+    Config = MPCDeltaUConfig
+
     @classmethod
     def from_config(cls, config, backend: ArrayBackend | None = None):
-        """Create an MPC_DeltaU controller from a TOML config dict.
+        """Create an MPC_DeltaU controller from a TOML config dict or :class:`MPCDeltaUConfig`.
 
         Config fields:
             delta_u_penalty: Diagonal S weights (n_u,) or full S matrix (n_u, n_u).
@@ -204,31 +244,37 @@ class MPC_LTI_DeltaU(MPC_LTI):
             constraints: Optional dict with ``upper`` and ``lower`` bound lists.
 
         Args:
-            config: TOML config dict.
+            config: TOML config dict or MPCDeltaUConfig.
             backend: Array backend. Defaults to NumpyBackend.
 
         Returns:
             MPC_LTI_DeltaU instance.
         """
         bk = backend or NumpyBackend()
-        Q = parse_matrix(bk, config["state_cost"])
+        cfg = strict_from_dict(MPCDeltaUConfig, config, "MPC_DeltaU") if isinstance(config, dict) else config
+        Q = parse_matrix(bk, cfg.state_cost)
         n = Q.shape[0]
+        A = bk.array(cfg.A_dynamics) if cfg.A_dynamics is not None else bk.eye(n)
+        if cfg.B_dynamics is not None:
+            B = bk.array(cfg.B_dynamics)
+        elif cfg.dt is not None:
+            B = cfg.dt * bk.eye(n)
+        else:
+            raise ValueError("MPC_DeltaU: no B_dynamics and no dt — standalone use requires one of them")
         ctrl = cls(
-            delta_u_penalty=parse_matrix(bk, config["delta_u_penalty"]),
-            horizon=config["horizon"],
-            control_cost_matrix=parse_matrix(bk, config["control_cost"]),
+            delta_u_penalty=parse_matrix(bk, cfg.delta_u_penalty),
+            horizon=cfg.horizon,
+            control_cost_matrix=parse_matrix(bk, cfg.control_cost),
             state_cost_matrix=Q,
-            A_dynamics=bk.array(config.get("A_dynamics", bk.eye(n))),
-            B_dynamics=bk.array(config.get("B_dynamics", config["dt"] * bk.eye(n))),
-            terminal_cost=parse_matrix(bk, config.get("terminal_cost", config["state_cost"])),
+            A_dynamics=A,
+            B_dynamics=B,
+            terminal_cost=parse_matrix(bk, cfg.terminal_cost if cfg.terminal_cost is not None else cfg.state_cost),
             backend=bk,
         )
-        if "constraints" in config:
-            if "matrix" in config["constraints"]:
-                F = bk.array(config["constraints"]["matrix"])
-            else:
-                F = bk.vstack([bk.eye(n), -bk.eye(n)])
-            ctrl.constraints(F, config["constraints"]["upper"], config["constraints"]["lower"])
+        if cfg.constraints is not None:
+            cons = strict_from_dict(ConstraintsConfig, cfg.constraints, "MPC_DeltaU.constraints")
+            F = bk.array(cons.matrix) if cons.matrix is not None else bk.vstack([bk.eye(n), -bk.eye(n)])
+            ctrl.constraints(F, cons.upper, cons.lower)
         return ctrl
 
     def _augment_dynamics(self):
@@ -293,9 +339,11 @@ class MPC_LTI_Base(MPC_LTI):
     dynamics :math:`A = I, B = dt \\cdot I`.
     """
 
+    Config = MPCConfig
+
     @classmethod
     def from_config(cls, config, backend: ArrayBackend | None = None):
-        """Create an MPC_LTI controller from a TOML config dict.
+        """Create an MPC_LTI controller from a TOML config dict or :class:`MPCConfig`.
 
         Config fields:
             horizon: Prediction horizon.
@@ -307,28 +355,34 @@ class MPC_LTI_Base(MPC_LTI):
             constraints: Optional dict with ``upper`` and ``lower`` bound lists.
 
         Args:
-            config: TOML config dict.
+            config: TOML config dict or MPCConfig.
             backend: Array backend. Defaults to NumpyBackend.
 
         Returns:
             MPC_LTI instance.
         """
         bk = backend or NumpyBackend()
-        Q = parse_matrix(bk, config["state_cost"])
+        cfg = strict_from_dict(MPCConfig, config, "MPC_LTI") if isinstance(config, dict) else config
+        Q = parse_matrix(bk, cfg.state_cost)
         n = Q.shape[0]
+        A = bk.array(cfg.A_dynamics) if cfg.A_dynamics is not None else bk.eye(n)
+        if cfg.B_dynamics is not None:
+            B = bk.array(cfg.B_dynamics)
+        elif cfg.dt is not None:
+            B = cfg.dt * bk.eye(n)
+        else:
+            raise ValueError("MPC_LTI: no B_dynamics and no dt — standalone use requires one of them")
         ctrl = cls(
-            horizon=config["horizon"],
-            control_cost_matrix=parse_matrix(bk, config["control_cost"]),
+            horizon=cfg.horizon,
+            control_cost_matrix=parse_matrix(bk, cfg.control_cost),
             state_cost_matrix=Q,
-            A_dynamics=bk.array(config.get("A_dynamics", bk.eye(n))),
-            B_dynamics=bk.array(config.get("B_dynamics", config["dt"] * bk.eye(n))),
-            terminal_cost=parse_matrix(bk, config.get("terminal_cost", config["state_cost"])),
+            A_dynamics=A,
+            B_dynamics=B,
+            terminal_cost=parse_matrix(bk, cfg.terminal_cost if cfg.terminal_cost is not None else cfg.state_cost),
             backend=bk,
         )
-        if "constraints" in config:
-            if "matrix" in config["constraints"]:
-                F = bk.array(config["constraints"]["matrix"])
-            else:
-                F = bk.vstack([bk.eye(n), -bk.eye(n)])
-            ctrl.constraints(F, config["constraints"]["upper"], config["constraints"]["lower"])
+        if cfg.constraints is not None:
+            cons = strict_from_dict(ConstraintsConfig, cfg.constraints, "MPC_LTI.constraints")
+            F = bk.array(cons.matrix) if cons.matrix is not None else bk.vstack([bk.eye(n), -bk.eye(n)])
+            ctrl.constraints(F, cons.upper, cons.lower)
         return ctrl

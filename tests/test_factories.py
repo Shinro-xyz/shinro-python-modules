@@ -109,12 +109,12 @@ class TestControllerFactory:
             factory.create()
 
     def test_create_missing_required_key(self, tmp_path):
-        """ControllerFactory raises KeyError when a required config key is missing."""
+        """ControllerFactory raises ValueError when a required config key is missing."""
         from shinro.factories.controller_factory import ControllerFactory
         config = tmp_path / "bad.toml"
         config.write_text("""type = "LQR"\n""")
         factory = ControllerFactory(str(config))
-        with pytest.raises(KeyError):
+        with pytest.raises(ValueError, match="state_cost"):
             factory.create()
 
 
