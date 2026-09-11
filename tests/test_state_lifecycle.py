@@ -25,15 +25,13 @@ import zlib
 
 import numpy as np
 import pytest
-from test_zig_lowering import (
-    ALL_SCAN_CASES,
-    NumpyBackend,
-    _build_so,
-    _output_split,
-    _pack_arrays,
-    _plant_graph,
-    _state_slices,
-    _step,
+from test_zig_lowering import ALL_SCAN_CASES, NumpyBackend, _build_so, _plant_graph
+
+from shinro.codegen.oracle import (
+    output_split as _output_split,
+    pack_arrays as _pack_arrays,
+    state_slices as _state_slices,
+    step_so as _step,
 )
 
 from shinro.codegen import interpret
@@ -104,7 +102,7 @@ def test_multitick_state_threading(lifecycle_so):
             if skey is not None:
                 a, b = sl[skey]
                 kports[port] = kstate[a:b].reshape(in_shapes[port])
-        out, kstate = _step(lib, cg, _pack_arrays(cg, {k: np.asarray(v).ravel() for k, v in kports.items()}), n_out, n_state)
+        out, kstate = _step(lib, _pack_arrays(cg, {k: np.asarray(v).ravel() for k, v in kports.items()}), n_out, n_state)
 
         # reference side (own state copy)
         rports = {"y": y_seq[t], "x_ref": xr_seq[t], "u_prev": u_prev.copy()}
@@ -190,7 +188,7 @@ def test_pid_first_tick_gate(tmp_path):
     for port in cg.state_outputs:
         ports0[port] = np.zeros(sl[port][1] - sl[port][0])
     inp = _pack_arrays(cg, {k: np.asarray(v).ravel() for k, v in ports0.items()})
-    out0, kstate = _step(lib, cg, inp, n_out, n_state)
+    out0, kstate = _step(lib, inp, n_out, n_state)
     pid._integral = np.zeros(3)
     pid._prev_error = np.zeros(3)
     pid._has_run = np.zeros(3)
@@ -207,7 +205,7 @@ def test_pid_first_tick_gate(tmp_path):
         a, b = sl[port]
         ports1[port] = kstate[a:b]
     inp1 = _pack_arrays(cg, {k: np.asarray(v).ravel() for k, v in ports1.items()})
-    out1, _ = _step(lib, cg, inp1, n_out, n_state)
+    out1, _ = _step(lib, inp1, n_out, n_state)
     u1_live = pid.compute(cur1.copy(), tgt1.copy())  # pid state evolved live above
     assert np.max(np.abs(out1 - u1_live)) < TOL, "tick-1 kernel != live PID"
 
@@ -235,7 +233,7 @@ def test_deterministic_repeat_calls(tmp_path):
 
     results = []
     for _ in range(3):
-        out, state = _step(lib, cg, inp.copy(), n_out, n_state)
+        out, state = _step(lib, inp.copy(), n_out, n_state)
         results.append((out.copy(), state.copy()))
 
     for out, state in results[1:]:

@@ -28,7 +28,9 @@ import json
 
 import numpy as np
 import pytest
-from test_zig_lowering import _build_so, _output_split, _step
+from test_zig_lowering import _build_so
+
+from shinro.codegen.oracle import output_split as _output_split, step_so as _step
 
 from shinro.codegen import interpret
 from shinro.codegen.compose import ComposedGraph
@@ -309,7 +311,7 @@ class TestOpShapeMatrix:
 
         for feed, feed_tag in feeds:
             inp = np.concatenate([np.asarray(feed[k]).ravel() for k in cg.inputs])
-            out, _ = _step(lib, cg, inp, n_out, n_state)
+            out, _ = _step(lib, inp, n_out, n_state)
             traced = interpret(cg.graph, dict(feed))
             off = 0
             for oname in cg.outputs:

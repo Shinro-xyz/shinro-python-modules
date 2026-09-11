@@ -12,12 +12,14 @@ Requires ``zig`` on PATH. Skipped cleanly if it's unavailable.
 from __future__ import annotations
 
 import ctypes
+import dataclasses
 import hashlib
 import json
 import re
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Any, Callable
 
 import numpy as np
 import pytest
@@ -26,6 +28,13 @@ from scripts.gen_base import build_base_graph
 from shinro.codegen import interpret
 from shinro.codegen.compose import ComposedGraph, compose
 from shinro.codegen.lower_zig import lower_zig
+from shinro.codegen.oracle import (
+    input_shape as _input_shape,
+    output_split as _output_split,
+    pack_arrays as _pack_arrays,
+    state_slices as _state_slices,
+    step_so as _step,
+)
 from shinro.codegen.trace_node import trace_node
 from shinro.codegen.tracing import Graph
 from shinro.controllers.pid import PIDController
@@ -295,28 +304,6 @@ def mpc_deltau_composed_so(tmp_path_factory, deltau_bake):
     )
 
 
-def _output_split(cg):
-    """Return (n_out, n_state): flat sizes of the outputs and state buffers."""
-    n_out = 0
-    for name in cg.outputs:
-        n_out += next(int(np.prod(n.shape)) for n in cg.graph.nodes if n.op == "output" and n.attrs["name"] == name)
-    n_state = 0
-    for name in cg.state_outputs:
-        n_state += next(int(np.prod(n.shape)) for n in cg.graph.nodes if n.op == "output" and n.attrs["name"] == name)
-    return n_out, n_state
-
-
-def _state_slices(cg):
-    """Map each state output port name to its (start, stop) in the flat state buffer."""
-    slices = {}
-    off = 0
-    for name in cg.state_outputs:
-        size = next(int(np.prod(n.shape)) for n in cg.graph.nodes if n.op == "output" and n.attrs["name"] == name)
-        slices[name] = (off, off + size)
-        off += size
-    return slices
-
-
 def _pack_inputs(cg, y, x_ref, u_prev, x_hat_init, P_init):
     """Pack host inputs into the flat C-ABI buffer, in cg.inputs order."""
     port_arrays = {
@@ -327,23 +314,6 @@ def _pack_inputs(cg, y, x_ref, u_prev, x_hat_init, P_init):
         "state_P": P_init.ravel(),
     }
     return _pack_arrays(cg, port_arrays)
-
-
-def _pack_arrays(cg, arrays):
-    """Pack a port-name -> array dict into the flat C-ABI input buffer."""
-    return np.concatenate([arrays[name].astype(np.float64) for name in cg.inputs])
-
-
-def _step(lib, cg, inputs, n_out, n_state):
-    """Run one zig step: outputs and state into two separate flat buffers."""
-    out = np.zeros(n_out, dtype=np.float64)
-    state = np.zeros(n_state, dtype=np.float64)
-    lib.shinro_step(
-        inputs.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
-        out.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
-        state.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
-    )
-    return out, state
 
 
 def _build_matmul_shapes_graph():
@@ -446,7 +416,7 @@ class TestZigLowering:
             P_init = P_init @ P_init.T + 0.1 * np.eye(3)
 
             inputs = _pack_inputs(cg, y, x_ref, u_prev, x_hat_init, P_init)
-            out, state = _step(lib, cg, inputs, n_out, n_state)
+            out, state = _step(lib, inputs, n_out, n_state)
 
             traced = interpret(
                 cg.graph,
@@ -490,60 +460,12 @@ class TestZigLowering:
         # Run the .so for three ticks, threading state out -> next-tick state in.
         for _ in range(3):
             inputs = _pack_inputs(cg, y, x_ref, u, x_hat, P)
-            out, state = _step(lib, cg, inputs, n_out, n_state)
+            out, state = _step(lib, inputs, n_out, n_state)
             u = out
             x_hat = state[sl["state_x_hat"][0] : sl["state_x_hat"][1]].reshape(3, 1)
             P = state[sl["state_P"][0] : sl["state_P"][1]].reshape(3, 3)
 
         assert np.all(np.isfinite(u)), "Zig step produced non-finite control"
-
-    def test_so_matches_live_kf_multitick(self, base_so):
-        """100-tick .so closed loop equals a live numpy KalmanFilter loop.
-
-        The regression test for recurrent covariance: the deployed graph must
-        run the live P recursion (state_P port feeding back each tick), not a
-        frozen one-step gain baked from the trace-time seed. The oracle is
-        the real KalmanFilter.estimate() on the numpy backend, driven in
-        parallel through the same measurement/reference sequence.
-        """
-        lib, cg = base_so
-        rng = np.random.default_rng(11)
-        n_out, n_state = _output_split(cg)
-        sl = _state_slices(cg)
-
-        kf = EstimatorFactory("configs/estimators/kalman_base.toml").create(backend=NumpyBackend())
-        lqr = ControllerFactory("configs/controllers/lqr_base.toml").create(backend=NumpyBackend())
-        limits = (np.array([-0.5, -0.5, -1.0]), np.array([0.5, 0.5, 1.0]))
-
-        P = np.eye(3) * 0.1
-        x_hat = np.zeros((3, 1))
-        u_prev_so = np.zeros(3)
-        u_prev_np = np.zeros(3)
-
-        max_err = 0.0
-        for _ in range(100):
-            y = rng.normal(0.0, 0.1, (3,))
-            x_ref = rng.normal(0.0, 0.05, (3,))
-
-            # Live numpy oracle: the same predict-update the graph encodes,
-            # with P evolving per tick (each loop evolves its own u_prev).
-            kf.P = P.copy()
-            kf.x_hat = x_hat.copy()
-            x_hat_np = kf.estimate(y.reshape(-1, 1), u_prev_np.reshape(-1, 1))
-            u_np = np.clip(lqr.compute(x_hat_np.ravel(), x_ref), limits[0], limits[1])
-
-            inputs = _pack_inputs(cg, y, x_ref, u_prev_so, x_hat, P)
-            out, state = _step(lib, cg, inputs, n_out, n_state)
-            max_err = max(max_err, float(np.max(np.abs(out - u_np))))
-
-            x_hat = state[sl["state_x_hat"][0] : sl["state_x_hat"][1]].reshape(3, 1)
-            P = state[sl["state_P"][0] : sl["state_P"][1]].reshape(3, 3)
-            u_prev_so = out
-            u_prev_np = u_np
-
-        assert max_err < 1e-10, (
-            f".so diverged from live KalmanFilter over 100 ticks: max abs err = {max_err:.3e}"
-        )
 
 
 class TestMatmulShapeDispatch:
@@ -590,7 +512,7 @@ class TestMatmulShapeDispatch:
                     "row": row.ravel(),
                 },
             )
-            out, _ = _step(lib, cg, inputs, n_out, 1)
+            out, _ = _step(lib, inputs, n_out, 1)
             for name in cg.outputs:
                 got = out[offsets[name][0] : offsets[name][1]]
                 exp = np.asarray(refs[name](a, v, vcol, scol, row)).ravel()
@@ -621,7 +543,7 @@ class TestSingleInputKfLqr:
             P = P @ P.T + 0.1 * np.eye(2)
 
             inputs = _pack_inputs(cg, y, x_ref, u_prev, x_hat, P)
-            out, state = _step(lib, cg, inputs, n_out, n_state)
+            out, state = _step(lib, inputs, n_out, n_state)
             traced = interpret(
                 cg.graph,
                 {
@@ -932,7 +854,7 @@ class TestGlueOpShapeSemantics:
         lib, cg2 = _build_so(cg, d / "build", graph_path=d / "graph_data.zig")
         n_out, n_state = _output_split(cg2)
         inp = np.concatenate([np.asarray(feed[k]).ravel() for k, _ in in_specs])
-        out, _ = _step(lib, cg2, inp, n_out, n_state)
+        out, _ = _step(lib, inp, n_out, n_state)
         traced = interpret(cg2.graph, dict(feed))
         off = 0
         max_err = 0.0
@@ -957,7 +879,7 @@ class TestPlantCompileScan:
         for _ in range(20):
             ports = _scan_input_ports(cg, n_x, n_u, rng)
             inputs = _pack_arrays(cg, {k: v.ravel() for k, v in ports.items()})
-            out, state = _step(lib, cg, inputs, n_out, n_state)
+            out, state = _step(lib, inputs, n_out, n_state)
             traced = interpret(cg.graph, ports)
             off = 0
             for pname in cg.outputs:
@@ -1037,7 +959,7 @@ class TestLoweredOpsOracle:
         for _ in range(20):
             x = rng.normal(0.0, 1.0, (4,))
             inputs = _pack_arrays(cg, {"x": x})
-            out, _ = _step(lib, cg, inputs, n_out, n_state)
+            out, _ = _step(lib, inputs, n_out, n_state)
 
             traced = interpret(cg.graph, {"x": x})
             off = 0
@@ -1077,7 +999,7 @@ class TestSolveQpOracle:
             x0 = rng.normal(0.0, 0.1, (3,))
             zero = np.zeros(3)
             inputs = _pack_arrays(cg, {"current_state": x0, "target_state": zero})
-            out, _ = _step(lib, cg, inputs, n_out, n_state)
+            out, _ = _step(lib, inputs, n_out, n_state)
 
             traced = interpret(cg.graph, {"current_state": x0, "target_state": zero})["out"]
             max_err = max(max_err, float(np.max(np.abs(out - np.asarray(traced).ravel()))))
@@ -1085,261 +1007,259 @@ class TestSolveQpOracle:
         assert max_err < 1e-3, f"Zig .so solve_qp diverged from interpreter: max abs err = {max_err:.3e}"
 
 
-class TestMpcComposedOracle:
-    """The composed KF + MPC_LTI .so matches a live numpy closed loop.
+# ─── closed-loop oracles: .so vs live numpy components over 100 ticks ───────
 
-    The regulator gets the error state e = x_hat - x_ref (compose inserts the
-    sub node); the oracle is the real KalmanFilter.estimate() + MPC_LTI.compute()
-    on the numpy backend, driven in parallel through the same y/x_ref sequence.
-    Tolerance is looser than the KF+LQR oracle: the .so's baked EMOSQP
-    warm-starts from the previous tick's solution while the live side
-    cold-starts Python osqp each tick, so ADMM settles at slightly different
-    points within eps — and that difference feeds back through the loop
-    (measured: max ~1.5e-6 over 100 ticks).
+
+def _make_kf():
+    return EstimatorFactory("configs/estimators/kalman_base.toml").create(backend=NumpyBackend())
+
+
+def _make_luenberger():
+    return EstimatorFactory("configs/estimators/luenberger_base.toml").create(backend=NumpyBackend())
+
+
+def _make_lqr():
+    return ControllerFactory("configs/controllers/lqr_base.toml").create(backend=NumpyBackend())
+
+
+def _make_mpc_lti():
+    return ControllerFactory("configs/controllers/mpc_lti_base.toml").create(backend=NumpyBackend())
+
+
+def _make_mpc_deltau():
+    return ControllerFactory("configs/controllers/mpc_base.toml").create(backend=NumpyBackend())
+
+
+def _make_pid():
+    return PIDController(
+        kp=np.array([2.0, 2.0, 2.0]),
+        ki=np.array([0.5, 0.5, 0.5]),
+        kd=np.array([0.5, 0.5, 0.5]),
+        dt=0.02,
+        output_limits=(np.array([-0.3, -0.3, -0.6]), np.array([0.3, 0.3, 0.6])),
+        backend=NumpyBackend(),
+    )
+
+
+_CLOSED_LOOP_LIMITS = (np.array([-0.5, -0.5, -1.0]), np.array([0.5, 0.5, 1.0]))
+KF_P_INIT = np.eye(3) * 0.1
+
+KF_PORTS = (("state_x_hat", "x_hat", (3, 1)), ("state_P", "P", (3, 3)))
+LUENBERGER_PORTS = (("state_x_hat", "x_hat", (3, 1)),)
+PID_PORTS = (
+    ("state_integral", "_integral", (3,)),
+    ("state_prev_error", "_prev_error", (3,)),
+    ("state_has_run", "_has_run", (3,)),
+)
+
+
+@dataclasses.dataclass(frozen=True)
+class ClosedLoopCase:
+    """One (estimator, controller) closed-loop oracle config.
+
+    est_state_ports: (graph state port, live estimator attr, shape) triples.
+    est_seed_mode: "cross" re-seeds the live estimator from the .so's threaded
+        state each tick (KF cases — isolates single-tick predict-update
+        fidelity from long-horizon drift toward the gate); "self" lets both
+        sides evolve their own states independently (Luenberger — the
+        stronger property).
+    ctrl_state_ports: controller recurrent state (PID's integral/prev_error/
+        has_run), threaded on both sides.
+    mode: how the controller consumes the estimate — "tracking" (x_hat,
+        x_ref), "error" (x_hat - x_ref, MPC_LTI), "error_deltau"
+        (MPC_DeltaU, which also takes u_prev).
+    sat_threshold: when set, the loop must actually saturate (asserts the
+        anti-windup ne/where path is genuinely exercised).
     """
 
-    def test_so_matches_live_kf_mpc(self, mpc_composed_so):
-        lib, cg = mpc_composed_so
-        rng = np.random.default_rng(21)
-        n_out, n_state = _output_split(cg)
-        sl = _state_slices(cg)
-
-        kf = EstimatorFactory("configs/estimators/kalman_base.toml").create(backend=NumpyBackend())
-        mpc = ControllerFactory("configs/controllers/mpc_lti_base.toml").create(backend=NumpyBackend())
-        limits = (np.array([-0.5, -0.5, -1.0]), np.array([0.5, 0.5, 1.0]))
-
-        P = np.eye(3) * 0.1
-        x_hat = np.zeros((3, 1))
-        u_prev_so = np.zeros(3)
-        u_prev_np = np.zeros(3)
-
-        max_err = 0.0
-        for _ in range(100):
-            y = rng.normal(0.0, 0.1, (3,))
-            x_ref = rng.normal(0.0, 0.05, (3,))
-
-            # Live numpy oracle: KF step, then the regulator on the error.
-            kf.P = P.copy()
-            kf.x_hat = x_hat.copy()
-            x_hat_np = kf.estimate(y.reshape(-1, 1), u_prev_np.reshape(-1, 1))
-            u_np = np.clip(
-                mpc.compute(x_hat_np.ravel() - x_ref), limits[0], limits[1]
-            )
-
-            inputs = _pack_inputs(cg, y, x_ref, u_prev_so, x_hat, P)
-            out, state = _step(lib, cg, inputs, n_out, n_state)
-            max_err = max(max_err, float(np.max(np.abs(out - u_np))))
-
-            x_hat = state[sl["state_x_hat"][0] : sl["state_x_hat"][1]].reshape(3, 1)
-            P = state[sl["state_P"][0] : sl["state_P"][1]].reshape(3, 3)
-            u_prev_so = out
-            u_prev_np = u_np
-
-        assert max_err < 1e-4, (
-            f".so diverged from live KF+MPC over 100 ticks: max abs err = {max_err:.3e}"
-        )
+    name: str
+    fixture: str
+    estimator: Callable[[], Any]
+    controller: Callable[[], Any]
+    mode: str
+    est_state_ports: tuple[tuple[str, str, tuple[int, ...]], ...]
+    est_seed_mode: str
+    ctrl_state_ports: tuple[tuple[str, str, tuple[int, ...]], ...]
+    est_init: dict[str, np.ndarray]
+    tol: float
+    seed: int
+    sat_threshold: float | None = None
 
 
-class TestPidComposedOracle:
-    """The composed KF + PID .so matches a live numpy closed loop.
+CASES = [
+    ClosedLoopCase(
+        name="kf_lqr",
+        fixture="base_so",
+        estimator=_make_kf,
+        controller=_make_lqr,
+        mode="tracking",
+        est_state_ports=KF_PORTS,
+        est_seed_mode="cross",
+        ctrl_state_ports=(),
+        est_init={"state_P": KF_P_INIT},
+        tol=1e-10,
+        seed=11,
+    ),
+    ClosedLoopCase(
+        name="kf_mpc_lti",
+        fixture="mpc_composed_so",
+        estimator=_make_kf,
+        controller=_make_mpc_lti,
+        mode="error",
+        est_state_ports=KF_PORTS,
+        est_seed_mode="cross",
+        ctrl_state_ports=(),
+        est_init={"state_P": KF_P_INIT},
+        tol=1e-4,
+        seed=21,
+    ),
+    ClosedLoopCase(
+        name="kf_pid",
+        fixture="pid_composed_so",
+        estimator=_make_kf,
+        controller=_make_pid,
+        mode="tracking",
+        est_state_ports=KF_PORTS,
+        est_seed_mode="cross",
+        ctrl_state_ports=PID_PORTS,
+        est_init={"state_P": KF_P_INIT},
+        tol=1e-10,
+        seed=31,
+        sat_threshold=0.3,
+    ),
+    ClosedLoopCase(
+        name="luenberger_lqr",
+        fixture="luenberger_composed_so",
+        estimator=_make_luenberger,
+        controller=_make_lqr,
+        mode="tracking",
+        est_state_ports=LUENBERGER_PORTS,
+        est_seed_mode="self",
+        ctrl_state_ports=(),
+        est_init={},
+        tol=1e-10,
+        seed=37,
+    ),
+    ClosedLoopCase(
+        name="kf_mpc_deltau",
+        fixture="mpc_deltau_composed_so",
+        estimator=_make_kf,
+        controller=_make_mpc_deltau,
+        mode="error_deltau",
+        est_state_ports=KF_PORTS,
+        est_seed_mode="cross",
+        ctrl_state_ports=(),
+        est_init={"state_P": KF_P_INIT},
+        tol=1e-4,
+        seed=41,
+    ),
+]
 
-    The regression test for controller recurrent state: PID's integral must
-    accumulate across ticks (the old composed graph froze it at zero), the
-    D-term gate must open after tick 0 (the old graph baked the first-tick
-    branch forever), and the anti-windup back-calculation must fire only on
-    saturated channels. output_limits forces saturation so the ne/where
-    anti-windup path is genuinely exercised.
+
+def _run_closed_loop(lib, cg, case, ticks=100):
+    """Thread the .so and the live components through `ticks` shared y/x_ref ticks.
+
+    The .so side threads its recurrent state ports across ticks
+    (state_slices); the live side drives the real estimator/controller on the
+    numpy backend. Each side evolves its own u_prev; the max abs error
+    between the two controls is the oracle metric.
+    """
+    rng = np.random.default_rng(case.seed)
+    n_out, n_state = _output_split(cg)
+    sl = _state_slices(cg)
+    n_x = int(np.prod(_input_shape(cg.graph, "y")))
+    n_u = int(np.prod(_input_shape(cg.graph, "u_prev")))
+    est = case.estimator()
+    ctrl = case.controller()
+
+    so_est = {
+        port: case.est_init.get(port, np.zeros(shape)).astype(np.float64).copy()
+        for port, _, shape in case.est_state_ports
+    }
+    live_est = {
+        attr: case.est_init.get(port, np.zeros(shape)).astype(np.float64).copy()
+        for port, attr, shape in case.est_state_ports
+    }
+    so_ctrl = {port: np.zeros(shape) for port, _, shape in case.ctrl_state_ports}
+    live_ctrl = {attr: np.zeros(shape) for _, attr, shape in case.ctrl_state_ports}
+    u_prev_so = np.zeros(n_u)
+    u_prev_np = np.zeros(n_u)
+
+    max_err = 0.0
+    saw_saturation = False
+    for _ in range(ticks):
+        y = rng.normal(0.0, 0.1, (n_x,))
+        x_ref = rng.normal(0.0, 0.05, (n_x,))
+
+        if case.est_seed_mode == "cross":
+            for port, attr, shape in case.est_state_ports:
+                setattr(est, attr, so_est[port].reshape(shape).copy())
+        else:
+            for port, attr, shape in case.est_state_ports:
+                setattr(est, attr, live_est[attr].reshape(shape).copy())
+        x_hat_np = est.estimate(y.reshape(-1, 1), u_prev_np.reshape(-1, 1))
+        if case.est_seed_mode == "self":
+            for port, attr, shape in case.est_state_ports:
+                live_est[attr] = np.asarray(getattr(est, attr)).reshape(shape).copy()
+
+        for port, attr, shape in case.ctrl_state_ports:
+            setattr(ctrl, attr, live_ctrl[attr].copy())
+        if case.mode == "tracking":
+            u_raw = ctrl.compute(x_hat_np.ravel(), x_ref)
+        elif case.mode == "error":
+            u_raw = ctrl.compute(x_hat_np.ravel() - x_ref)
+        else:
+            u_raw = ctrl.compute(x_hat_np.ravel() - x_ref, u_prev=u_prev_np)
+        u_np = np.clip(u_raw, _CLOSED_LOOP_LIMITS[0], _CLOSED_LOOP_LIMITS[1])
+        for port, attr, shape in case.ctrl_state_ports:
+            live_ctrl[attr] = np.asarray(getattr(ctrl, attr)).reshape(shape).copy()
+        if case.sat_threshold is not None:
+            saw_saturation = saw_saturation or bool(np.any(np.abs(u_np) >= case.sat_threshold - 1e-12))
+
+        ports = {"y": y, "x_ref": x_ref, "u_prev": u_prev_so}
+        for port, _, shape in case.est_state_ports:
+            ports[port] = so_est[port].reshape(shape)
+        for port, _, shape in case.ctrl_state_ports:
+            ports[port] = so_ctrl[port].reshape(shape)
+        out, state = _step(lib, _pack_arrays(cg, ports), n_out, n_state)
+        max_err = max(max_err, float(np.max(np.abs(out - u_np))))
+        for port, _, shape in case.est_state_ports:
+            a, b = sl[port]
+            so_est[port] = state[a:b].reshape(shape).copy()
+        for port, _, shape in case.ctrl_state_ports:
+            a, b = sl[port]
+            so_ctrl[port] = state[a:b].reshape(shape).copy()
+        u_prev_so = out
+        u_prev_np = u_np
+
+    return max_err, saw_saturation
+
+
+class TestClosedLoopOracles:
+    """Composed .so vs live numpy closed loops: one driver, five declarative cases.
+
+    The KF cases are the recurrent-covariance regression (the live P
+    recursion must run each tick, not a frozen trace-time gain); the
+    Luenberger case is the estimator-swap regression (x_hat threads with no
+    P, solver-free graph); the PID case is the controller-recurrent-state
+    regression (integral accumulates, D-gate opens after tick 0, anti-windup
+    fires only on saturated channels); the MPC cases compare the baked
+    EMOSQP solver (warm-started from the previous tick) against cold-started
+    Python osqp — ADMM settles at slightly different points within eps, and
+    that difference feeds back through the loop (measured max ~1.5e-6 over
+    100 ticks → the 1e-4 gate). The DeltaU case additionally builds against
+    the n_vars=45 bake via -Dsolver_dir (the comptime graph↔bake check
+    rejects the shipped n_vars=30 bake at compile time).
     """
 
-    def test_so_matches_live_kf_pid(self, pid_composed_so):
-        lib, cg = pid_composed_so
-        rng = np.random.default_rng(31)
-        n_out, n_state = _output_split(cg)
-        sl = _state_slices(cg)
-
-        kf = EstimatorFactory("configs/estimators/kalman_base.toml").create(backend=NumpyBackend())
-        pid = PIDController(
-            kp=np.array([2.0, 2.0, 2.0]),
-            ki=np.array([0.5, 0.5, 0.5]),
-            kd=np.array([0.5, 0.5, 0.5]),
-            dt=0.02,
-            output_limits=(np.array([-0.3, -0.3, -0.6]), np.array([0.3, 0.3, 0.6])),
-            backend=NumpyBackend(),
-        )
-        limits = (np.array([-0.5, -0.5, -1.0]), np.array([0.5, 0.5, 1.0]))
-
-        P = np.eye(3) * 0.1
-        x_hat = np.zeros((3, 1))
-        integral_so = np.zeros(3)
-        prev_error_so = np.zeros(3)
-        has_run_so = np.zeros(3)
-        integral_live = np.zeros(3)
-        prev_error_live = np.zeros(3)
-        has_run_live = np.zeros(3)
-        u_prev_so = np.zeros(3)
-        u_prev_np = np.zeros(3)
-        saw_saturation = False
-
-        max_err = 0.0
-        for _ in range(100):
-            y = rng.normal(0.0, 0.1, (3,))
-            x_ref = rng.normal(0.0, 0.05, (3,))
-
-            # Live numpy oracle: KF step, then PID with its own state.
-            kf.P = P.copy()
-            kf.x_hat = x_hat.copy()
-            pid._integral = integral_live.copy()
-            pid._prev_error = prev_error_live.copy()
-            pid._has_run = has_run_live.copy()
-            x_hat_np = kf.estimate(y.reshape(-1, 1), u_prev_np.reshape(-1, 1))
-            u_np = np.clip(pid.compute(x_hat_np.ravel(), x_ref), limits[0], limits[1])
-            integral_live = pid._integral.copy()
-            prev_error_live = pid._prev_error.copy()
-            has_run_live = pid._has_run.copy()
-            saw_saturation = saw_saturation or bool(
-                np.any(np.abs(u_np) >= 0.3 - 1e-12)
-            )
-
-            inputs = _pack_arrays(
-                cg,
-                {
-                    "y": y,
-                    "x_ref": x_ref,
-                    "u_prev": u_prev_so,
-                    "state_x_hat": x_hat.ravel(),
-                    "state_P": P.ravel(),
-                    "state_integral": integral_so,
-                    "state_prev_error": prev_error_so,
-                    "state_has_run": has_run_so,
-                },
-            )
-            out, state = _step(lib, cg, inputs, n_out, n_state)
-            max_err = max(max_err, float(np.max(np.abs(out - u_np))))
-
-            # Each loop evolves its own state.
-            x_hat = state[sl["state_x_hat"][0] : sl["state_x_hat"][1]].reshape(3, 1)
-            P = state[sl["state_P"][0] : sl["state_P"][1]].reshape(3, 3)
-            integral_so = state[sl["state_integral"][0] : sl["state_integral"][1]]
-            prev_error_so = state[sl["state_prev_error"][0] : sl["state_prev_error"][1]]
-            has_run_so = state[sl["state_has_run"][0] : sl["state_has_run"][1]]
-            u_prev_so = out
-            u_prev_np = u_np
-
-        assert saw_saturation, "oracle never saturated — anti-windup path untested"
-        assert max_err < 1e-10, (
-            f".so diverged from live KF+PID over 100 ticks: max abs err = {max_err:.3e}"
-        )
-
-
-class TestLuenbergerComposedOracle:
-    """The composed Luenberger + LQR .so matches a live numpy closed loop.
-
-    The estimator-swap regression test: the Luenberger observer's recurrent
-    ``x_hat`` must thread across ticks (the two-pass trace discovers it, no
-    ``P`` covariance like the KF), and the composed graph must be solver-free.
-    """
-
-    def test_so_matches_live_luenberger_lqr(self, luenberger_composed_so):
-        lib, cg = luenberger_composed_so
-        rng = np.random.default_rng(37)
-        n_out, n_state = _output_split(cg)
-        sl = _state_slices(cg)
-
-        luen = EstimatorFactory("configs/estimators/luenberger_base.toml").create(backend=NumpyBackend())
-        lqr = ControllerFactory("configs/controllers/lqr_base.toml").create(backend=NumpyBackend())
-        limits = (np.array([-0.5, -0.5, -1.0]), np.array([0.5, 0.5, 1.0]))
-
-        x_hat_so = np.zeros((3, 1))
-        x_hat_np = np.zeros((3, 1))
-        u_prev_so = np.zeros(3)
-        u_prev_np = np.zeros(3)
-
-        max_err = 0.0
-        for _ in range(100):
-            y = rng.normal(0.0, 0.1, (3,))
-            x_ref = rng.normal(0.0, 0.05, (3,))
-
-            # Live numpy oracle: Luenberger step, then LQR with its own state.
-            luen.x_hat = x_hat_np.copy()
-            x_hat_np = luen.estimate(y.reshape(-1, 1), u_prev_np.reshape(-1, 1))
-            u_np = np.clip(lqr.compute(x_hat_np.ravel(), x_ref), limits[0], limits[1])
-
-            inputs = _pack_arrays(
-                cg,
-                {
-                    "y": y,
-                    "x_ref": x_ref,
-                    "u_prev": u_prev_so,
-                    "state_x_hat": x_hat_so.ravel(),
-                },
-            )
-            out, state = _step(lib, cg, inputs, n_out, n_state)
-            max_err = max(max_err, float(np.max(np.abs(out - u_np))))
-
-            # Each loop evolves its own state.
-            x_hat_so = state[sl["state_x_hat"][0] : sl["state_x_hat"][1]].reshape(3, 1)
-            u_prev_so = out
-            u_prev_np = u_np
-
-        assert max_err < 1e-10, (
-            f".so diverged from live Luenberger+LQR over 100 ticks: max abs err = {max_err:.3e}"
-        )
-
-
-class TestMpcDeltaUComposedOracle:
-    """The composed KF + MPC_DeltaU .so matches a live numpy closed loop.
-
-    The regression test for the second bake: the graph's .solve_qp node has
-    output size 45 (mpc_base.toml, horizon 15), so the .so is built against
-    the DeltaU bake via -Dsolver_dir — the shipped n_vars=30 bake would be
-    rejected at compile time by the comptime graph↔bake check. The live oracle
-    is KalmanFilter.estimate() + MPC_DeltaU.compute(x̂ − x_ref, u_prev) with
-    u_prev threaded on both sides. Tolerance matches TestMpcComposedOracle:
-    the .so's baked EMOSQP warm-starts from the previous tick while the live
-    side cold-starts Python osqp, so ADMM settles within eps and the
-    difference feeds back through the loop.
-    """
-
-    def test_so_matches_live_kf_mpc_deltau(self, mpc_deltau_composed_so):
-        lib, cg = mpc_deltau_composed_so
-        rng = np.random.default_rng(41)
-        n_out, n_state = _output_split(cg)
-        sl = _state_slices(cg)
-
-        kf = EstimatorFactory("configs/estimators/kalman_base.toml").create(backend=NumpyBackend())
-        mpc = ControllerFactory("configs/controllers/mpc_base.toml").create(backend=NumpyBackend())
-        limits = (np.array([-0.5, -0.5, -1.0]), np.array([0.5, 0.5, 1.0]))
-
-        P = np.eye(3) * 0.1
-        x_hat = np.zeros((3, 1))
-        u_prev_so = np.zeros(3)
-        u_prev_np = np.zeros(3)
-
-        max_err = 0.0
-        for _ in range(100):
-            y = rng.normal(0.0, 0.1, (3,))
-            x_ref = rng.normal(0.0, 0.05, (3,))
-
-            # Live numpy oracle: KF step, then the DeltaU regulator on the
-            # error with its own u_prev.
-            kf.P = P.copy()
-            kf.x_hat = x_hat.copy()
-            x_hat_np = kf.estimate(y.reshape(-1, 1), u_prev_np.reshape(-1, 1))
-            u_np = np.clip(
-                mpc.compute(x_hat_np.ravel() - x_ref, u_prev=u_prev_np), limits[0], limits[1]
-            )
-
-            inputs = _pack_inputs(cg, y, x_ref, u_prev_so, x_hat, P)
-            out, state = _step(lib, cg, inputs, n_out, n_state)
-            max_err = max(max_err, float(np.max(np.abs(out - u_np))))
-
-            x_hat = state[sl["state_x_hat"][0] : sl["state_x_hat"][1]].reshape(3, 1)
-            P = state[sl["state_P"][0] : sl["state_P"][1]].reshape(3, 3)
-            u_prev_so = out
-            u_prev_np = u_np
-
-        assert max_err < 1e-4, (
-            f".so diverged from live KF+MPC_DeltaU over 100 ticks: max abs err = {max_err:.3e}"
+    @pytest.mark.parametrize("case", CASES, ids=[c.name for c in CASES])
+    def test_so_matches_live_components(self, request, case):
+        lib, cg = request.getfixturevalue(case.fixture)
+        max_err, saw_saturation = _run_closed_loop(lib, cg, case)
+        if case.sat_threshold is not None:
+            assert saw_saturation, f"{case.name}: oracle never saturated — anti-windup path untested"
+        assert max_err < case.tol, (
+            f"{case.name}: .so diverged from live components over 100 ticks: max abs err = {max_err:.3e}"
         )
 
 

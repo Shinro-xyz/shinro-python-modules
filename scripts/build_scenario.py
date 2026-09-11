@@ -5,14 +5,13 @@ suite and repo-internal tooling. New code should import from
 ``shinro.codegen.scenario_build``.
 """
 
+from shinro.codegen.oracle import TOL_NON_QP, TOL_QP  # noqa: F401
 from shinro.codegen.scenario_build import (  # noqa: F401
     EXIT_BUILD,
     EXIT_NO_ZIG,
     EXIT_OK,
     EXIT_ORACLE,
     EXIT_USAGE,
-    TOL_NON_QP,
-    TOL_QP,
     BuildError,
     build_scenario,
     main,

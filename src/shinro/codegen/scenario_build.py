@@ -39,7 +39,6 @@ Exit codes: 0 ok · 2 usage/config · 3 oracle mismatch · 4 build/verify failur
 from __future__ import annotations
 
 import argparse
-import ctypes
 import json
 import shutil
 import subprocess
@@ -47,9 +46,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-import numpy as np
-
-from shinro.codegen import interpret
+from shinro.codegen.oracle import load_so, run_oracle, tol_for
 from shinro.codegen.runtime_paths import runtime_root
 from shinro.codegen.scenario_gen import gen_scenario, load_scenario
 from shinro.codegen.stamp import stamp
@@ -63,87 +60,9 @@ EXIT_ORACLE = 3
 EXIT_BUILD = 4
 EXIT_NO_ZIG = 5
 
-# Tolerance for the .so-vs-interpreter oracle. Non-QP graphs (KF+LQR, KF+PID)
-# agree to float-exactness (Zig's LU inv differs from LAPACK only in last
-# ulps); QP graphs settle within the solver's eps (same precedent as the
-# TestSolveQpOracle / TestMpcComposedOracle tolerances).
-TOL_NON_QP = 1e-12
-TOL_QP = 1e-3
-
 
 class BuildError(RuntimeError):
     """The zig build failed or produced no artifact."""
-
-
-# ─── C-ABI helpers (mirror tests/test_zig_lowering.py) ─────────────────────
-
-
-def _input_shape(graph, name: str) -> tuple[int, ...]:
-    for node in graph.nodes:
-        if node.op == "input" and node.attrs["name"] == name:
-            return node.shape
-    raise KeyError(f"input port '{name}' not found in graph")
-
-
-def _output_size(graph, name: str) -> int:
-    for node in graph.nodes:
-        if node.op == "output" and node.attrs["name"] == name:
-            return int(np.prod(node.shape))
-    raise KeyError(f"output port '{name}' not found in graph")
-
-
-def _output_split(cg) -> tuple[int, int]:
-    n_out = sum(_output_size(cg.graph, name) for name in cg.outputs)
-    n_state = sum(_output_size(cg.graph, name) for name in cg.state_outputs)
-    return n_out, n_state
-
-
-def _state_slices(cg) -> dict[str, tuple[int, int]]:
-    slices: dict[str, tuple[int, int]] = {}
-    off = 0
-    for name in cg.state_outputs:
-        size = _output_size(cg.graph, name)
-        slices[name] = (off, off + size)
-        off += size
-    return slices
-
-
-def _pack_arrays(cg, arrays: dict[str, np.ndarray]) -> np.ndarray:
-    return np.concatenate([np.asarray(arrays[name], dtype=np.float64).ravel() for name in cg.inputs])
-
-
-def _step(lib, cg, inputs: np.ndarray, n_out: int, n_state: int) -> tuple[np.ndarray, np.ndarray]:
-    out = np.zeros(n_out, dtype=np.float64)
-    state = np.zeros(n_state, dtype=np.float64)
-    lib.shinro_step(
-        inputs.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
-        out.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
-        state.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
-    )
-    return out, state
-
-
-def _random_inputs(cg, rng: np.random.Generator) -> dict[str, np.ndarray]:
-    """Random inputs per port; square 2-D state ports are made SPD (covariance-like)."""
-    inputs: dict[str, np.ndarray] = {}
-    for name in cg.inputs:
-        shape = _input_shape(cg.graph, name)
-        if len(shape) == 2 and shape[0] == shape[1]:
-            a = rng.normal(0.0, 0.1, shape)
-            inputs[name] = a @ a.T + 0.1 * np.eye(shape[0])
-        else:
-            inputs[name] = rng.normal(0.0, 0.1, shape)
-    return inputs
-
-
-def _load_so(prefix: Path):
-    so_path = Path(prefix) / "lib" / "libbase.so"
-    if not so_path.exists():
-        raise BuildError(f"zig build produced no libbase.so at {so_path}")
-    lib = ctypes.CDLL(str(so_path))
-    lib.shinro_step.argtypes = [ctypes.POINTER(ctypes.c_double)] * 3
-    lib.shinro_step.restype = None
-    return lib
 
 
 # ─── pipeline stages ─────────────────────────────────────────────────────────
@@ -199,30 +118,6 @@ def _check_graph_integrity(scenario_path: str, graph_dir: Path):
                 f"currently produces. Re-run gen_scenario.py before building."
             )
     return fresh_cg
-
-
-def _oracle(lib, cg, samples: int, seed: int, tol: float) -> float:
-    """Compare the .so's shinro_step against interpret() on random inputs."""
-    n_out, n_state = _output_split(cg)
-    sl = _state_slices(cg)
-    rng = np.random.default_rng(seed)
-    max_err = 0.0
-    for _ in range(samples):
-        inputs = _random_inputs(cg, rng)
-        packed = _pack_arrays(cg, inputs)
-        out, state = _step(lib, cg, packed, n_out, n_state)
-
-        traced = interpret(cg.graph, inputs)
-        off = 0
-        for name in cg.outputs:
-            expected = np.asarray(traced[name]).ravel()
-            max_err = max(max_err, float(np.max(np.abs(out[off : off + expected.size] - expected))))
-            off += expected.size
-        for name in cg.state_outputs:
-            expected = np.asarray(traced[name]).ravel()
-            start, stop = sl[name]
-            max_err = max(max_err, float(np.max(np.abs(state[start:stop] - expected))))
-    return max_err
 
 
 def build_scenario(
@@ -318,12 +213,11 @@ def build_scenario(
             print(f"TRACE FAILED: {e}", file=sys.stderr)
             return EXIT_USAGE
         if tgt == "native":
-            tier_tol = TOL_QP if manifest["has_solve_qp"] else TOL_NON_QP
             # [compile].oracle_tol overrides the tier default for QP graphs
             # whose settling at this problem size is coarser than 1e-3.
-            tol = spec["compile"].get("oracle_tol") or tier_tol
-            lib = _load_so(prefix_path)
-            max_err = _oracle(lib, fresh_cg, samples, seed, tol)
+            tol = spec["compile"].get("oracle_tol") or tol_for(manifest)
+            lib = load_so(prefix_path)
+            max_err = run_oracle(lib, fresh_cg, samples, seed)
             if max_err >= tol:
                 print(
                     f"ORACLE MISMATCH: .so diverged from interpreter (max abs err {max_err:.3e} >= {tol})",
