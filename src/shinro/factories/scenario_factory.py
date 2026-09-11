@@ -224,7 +224,7 @@ class ScenarioFactory:
         sim = RobotSim(resolve_config_path(sim_cfg["config"]), xml_string=xml_string, assets=assets)  # type: ignore[arg-type]
         plant = sim.get_plant(plant_cfg["name"])
         if plant is None:
-            raise KeyError(f"Plant name '{plant_cfg['name']}' not found in RobotSim. Available plants: {sorted(sim._plants.keys())}")
+            raise KeyError(f"Plant name '{plant_cfg['name']}' not found in RobotSim. Available plants: {sorted(sim.plants.keys())}")
         return sim, plant
 
     @staticmethod

@@ -70,23 +70,24 @@ class RobotSim:
                 plant.state = np.zeros_like(plant.state)
 
     def step(self):
+        """Advance the world one tick, then let each plant reconcile.
+
+        All physics runs through the engine; plants that self-integrate their
+        own dynamics (e.g. an analytical wheeled base) implement
+        ``Plant.post_engine_step`` to write their state back into the engine —
+        nothing in this factory is specific to any robot.
+        """
         self.engine.step()
-        if hasattr(self, "base") and hasattr(self.engine, "has_free_joint") and self.engine.has_free_joint:
-            base_state = self.base.state
-            self.engine.data.qpos[0] = base_state[0]
-            self.engine.data.qpos[1] = base_state[1]
-            self.engine.data.qpos[3:7] = [1.0, 0.0, 0.0, 0.0]
-            self.engine.data.qvel[:6] = 0.0
-            if hasattr(self.base, "_target_wheel_delta") and self.base._target_wheel_delta is not None:
-                drive_joints = self.config.get("joint_groups", {}).get("drive_joints", [])
-                for name, delta in zip(drive_joints, self.base._target_wheel_delta):
-                    jid = self.engine._joint_name_to_id[name]
-                    qpos_adr = self.engine.model.jnt_qposadr[jid]
-                    self.engine.data.qpos[qpos_adr] += delta
-                self.base._target_wheel_delta = None
+        for plant in self._plants.values():
+            plant.post_engine_step(self.engine)
 
     def get_state(self) -> dict:
         return self.engine.get_sensor_data()
+
+    @property
+    def plants(self) -> dict[str, Any]:
+        """Read-only mapping of plant name → plant instance."""
+        return dict(self._plants)
 
     def get_plant(self, name: str) -> Any:
         return self._plants.get(name)

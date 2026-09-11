@@ -21,6 +21,7 @@ class HolonomicMobileRobotConfig:
     gamma: float
     radius_wheels: float
     dt: float
+    drive_joints: list[str] | None = None
     name: str = "base"
 
 
@@ -66,6 +67,7 @@ class HolonomicMobileRobot(Plant):
         gamma: float,
         radius_wheels: float,
         dt: float,
+        drive_joints: list[str] | None = None,
         backend: ArrayBackend | None = None,
     ):
         self.bk = backend or NumpyBackend()
@@ -77,6 +79,8 @@ class HolonomicMobileRobot(Plant):
         self.state = self.bk.zeros(3)
         self.A_kinematics, self.A_pinv_kin = self._build_kinematics()
         self._engine = None
+        self._drive_joints = drive_joints or []
+        self._target_wheel_delta = None
 
     def physics_engine(self, engine):
         """Attach a physics engine.
@@ -143,6 +147,37 @@ class HolonomicMobileRobot(Plant):
             self._target_wheel_delta = wheel_speeds * self.dt
         return wheel_speeds
 
+    def post_engine_step(self, engine) -> None:
+        """Reconcile the engine's free-joint base with the plant's integrated pose.
+
+        The plant self-integrates pose analytically; the MuJoCo base exists for
+        physics/rendering only. After ``engine.step()`` this writes (x, y) into
+        the free joint, pins the base quaternion upright and zeros the
+        floating-base velocities — the chassis follows the plant's kinematics,
+        not contact dynamics — then deposits the pending wheel-rotation deltas
+        onto the drive joints for visual rolling (consumed once per step).
+
+        No-op for engines without a free joint (e.g. a statically mounted
+        fixture): plant state remains the source of truth either way.
+
+        Args:
+            engine: The physics engine stepping the world.
+        """
+        if self._engine is None or not engine.has_free_joint:
+            return
+
+        x, y = float(self.bk.to_numpy(self.state)[0]), float(self.bk.to_numpy(self.state)[1])
+        engine.data.qpos[0] = x
+        engine.data.qpos[1] = y
+        engine.data.qpos[3:7] = [1.0, 0.0, 0.0, 0.0]
+        engine.data.qvel[engine.free_qvel_slice] = 0.0
+
+        if self._target_wheel_delta is not None:
+            deltas = self.bk.to_numpy(self._target_wheel_delta)
+            for name, delta in zip(self._drive_joints, deltas):
+                engine.set_joint_qpos(name, engine.get_joint_qpos(name) + float(delta))
+            self._target_wheel_delta = None
+
     def set_pose(self, x: float, y: float, theta: float):
         """Set the robot's pose directly.
 
@@ -197,12 +232,16 @@ class HolonomicMobileRobot(Plant):
             strip_runtime_keys(config, ("engine", "joint_groups")) if isinstance(config, dict) else (config, {})
         )
         cfg = cls.parse_config(clean)
+        drive_joints = cfg.drive_joints
+        if drive_joints is None:
+            drive_joints = runtime.get("joint_groups", {}).get("drive_joints")
         plant = cls(
             num_wheels=cfg.num_wheels,
             radius_robots=cfg.radius_robots,
             gamma=cfg.gamma,
             radius_wheels=cfg.radius_wheels,
             dt=cfg.dt,
+            drive_joints=drive_joints,
             backend=bk,
         )
         engine = runtime.get("engine")

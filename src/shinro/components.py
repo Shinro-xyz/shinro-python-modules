@@ -311,6 +311,21 @@ class Plant(ConfigDriven, ABC):
         """
         pass
 
+    def post_engine_step(self, engine: "PhysicsEngine") -> None:
+        """Reconcile plant state with the engine after ``engine.step()``.
+
+        Called once per plant by the simulation factory after the shared
+        engine advances the world. Plants that self-integrate their dynamics
+        (e.g. a wheeled base with analytical kinematics under a sim-backed
+        scenario) override this to write their state back into the engine —
+        syncing a floating base, depositing visual joint deltas, etc. Plants
+        whose dynamics are fully owned by the engine need not override.
+
+        Args:
+            engine: The physics engine this plant is attached to.
+        """
+        return None
+
     def dynamics(self, state: Any, control: Any) -> Any:
         """Continuous-time dynamics :math:`\\dot{x} = f(x, u)`.
 
