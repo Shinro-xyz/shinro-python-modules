@@ -11,8 +11,9 @@ in the scenario TOML, so running a scenario is data, not code. Two drivers:
   :func:`run_scenario`).
 * :func:`iter_phase_schedule` / :func:`run_phase_schedule` — a feedforward run
   for ``phase_list`` schedules (pick-and-place) where the schedule itself is
-  the control: each step carries per-signal arm/base/jaw setpoints applied
-  directly to the composed ``RobotSim``.
+  the control: each step carries per-signal setpoints routed to plants by
+  name or to actuators via the scenario's ``[signals]`` table, applied to
+  the composed ``RobotSim``.
 
 Importing this module does not require mujoco: plant-only scenarios run on the
 minimal install (the physics engine is only needed for sim-backed scenarios).

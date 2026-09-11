@@ -1,4 +1,6 @@
 # Robot configuration for LeKiwi (holonomic base + SO-ARM100 arm)
+[engine]
+type = "mujoco"
 model = "lekiwi-sim/mjcf_lcmm_robot.xml"
 dt = 0.02
 

@@ -120,9 +120,9 @@ class TestEngineManifestEquivalence:
         with pytest.warns(DeprecationWarning, match="\\[engine\\]"):
             RobotSim(str(legacy))
 
-    def test_shipped_manifest_still_builds(self):
+    def test_shipped_manifest_uses_engine_section(self):
         with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
+            warnings.simplefilter("error", DeprecationWarning)  # no legacy fallback
             sim = RobotSim(str(resolve_config_path("robot_config.toml")))
         assert isinstance(sim.engine, MuJoCoEngine)
         assert set(sim.plants) == {"arm", "base"}

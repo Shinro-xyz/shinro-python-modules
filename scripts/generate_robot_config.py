@@ -265,7 +265,7 @@ def generate_config(xml_path: str, cli_type: str = None) -> dict:
     tree = ET.parse(xml_path)
     root = tree.getroot()
 
-    config = {"model": str(Path(xml_path).as_posix()), "dt": 0.02}
+    config = {"engine": {"type": "mujoco", "model": str(Path(xml_path).as_posix()), "dt": 0.02}}
 
     plant_types = detect_plant_types(root, cli_type)
 
@@ -326,9 +326,17 @@ def _format_toml_value(v) -> str:
 def toml_string(config: dict) -> str:
     """Convert a config dict to a TOML string."""
     lines = []
-    for key in ["model", "dt"]:
-        if key in config:
-            lines.append(f'{key} = {_format_toml_value(config[key])}')
+    engine = config.get("engine")
+    if engine:
+        lines.append("[engine]")
+        for key in ["type", "model", "dt"]:
+            if key in engine:
+                lines.append(f'{key} = {_format_toml_value(engine[key])}')
+    else:
+        # back-compat with pre-[engine] dict callers
+        for key in ["model", "dt"]:
+            if key in config:
+                lines.append(f'{key} = {_format_toml_value(config[key])}')
     lines.append("")
 
     jg = config.get("joint_groups", {})

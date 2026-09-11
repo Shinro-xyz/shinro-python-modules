@@ -50,12 +50,16 @@ class WaypointsConfig:
 
 @dataclass(frozen=True)
 class PhaseConfig:
-    """One ``[[phases]]`` entry for the ``phase_list`` trajectory."""
+    """One ``[[phases]]`` entry for the ``phase_list`` trajectory.
+
+    ``signals`` maps signal names to per-step setpoints. A name matching a
+    plant in the sim manifest is routed to ``plant.step(...)``; any other
+    name is an actuator passthrough declared via the scenario's ``[signals]``
+    table (see :func:`shinro.simulation.runner.iter_phase_schedule`).
+    """
 
     duration: float
-    arm: list[float]
-    base: list[float]
-    jaw: float
+    signals: dict[str, list[float]]
 
 
 @dataclass(frozen=True)
@@ -270,10 +274,13 @@ class WaypointSchedule(ConfigDriven):
 
 @register_trajectory("phase_list")
 class PhaseSchedule(ConfigDriven):
-    """Multi-signal phase schedule for pick-and-place sequences.
+    """Multi-signal phase schedule for multi-plant feedforward sequences.
 
-    Returns a dict with ``"arm"``, ``"base"``, and ``"jaw"`` arrays, each
-    containing the per-step setpoint for that subsystem.
+    Returns a dict mapping signal name → per-step setpoints. Signal names
+    are declared by the manifest: a key matching a plant name is routed to
+    ``plant.step(...)``; any other key is an actuator passthrough declared in
+    the scenario's ``[signals]`` table. See
+    :func:`shinro.simulation.runner.iter_phase_schedule`.
     """
 
     Config = PhasesConfig
@@ -284,33 +291,32 @@ class PhaseSchedule(ConfigDriven):
 
         Config fields:
             dt: Time step.
-            phases: List of phase dicts, each with:
+            phases: List of ``[[phases]]`` entries, each with:
                 - duration: Phase duration (s).
-                - arm: Arm velocity twist list (6,).
-                - base: Base velocity list (3,).
-                - jaw: Jaw position (float).
+                - signals: Dict of signal name → per-step setpoint (list of
+                  floats; single-scalar signals like a gripper use a
+                  one-element list, e.g. ``jaw = [0.5]``).
 
         Args:
             config: TOML config dict or PhasesConfig.
             backend: Array backend. Defaults to NumpyBackend.
 
         Returns:
-            Dict with keys ``"arm"``, ``"base"``, ``"jaw"``, each an array
-            of shape (total_steps, N).
+            Dict mapping signal name → array of shape (total_steps, N) (or
+            (total_steps, 1) for scalar signals).
         """
         bk = backend or NumpyBackend()
         cfg = cls.parse_config(config)
         phases = strict_from_list(PhaseConfig, cfg.phases, "phase_list.phase")
-        arm_sched = []
-        base_sched = []
-        jaw_sched = []
+        schedules: dict[str, list] = {}
         for phase in phases:
             n_steps = int(np.round(phase.duration / cfg.dt))
-            arm = bk.array(phase.arm)
-            base = bk.array(phase.base)
-            jaw = float(phase.jaw)
-            for _ in range(n_steps):
-                arm_sched.append(bk.copy(arm))
-                base_sched.append(bk.copy(base))
-                jaw_sched.append(jaw)
-        return {"arm": bk.array(arm_sched), "base": bk.array(base_sched), "jaw": bk.array(jaw_sched)}
+            for name, setpoint in phase.signals.items():
+                seq = schedules.setdefault(name, [])
+                arr = bk.array(setpoint)
+                for _ in range(n_steps):
+                    seq.append(bk.copy(arr))
+        missing = {name for name in schedules if len(schedules[name]) != max(len(v) for v in schedules.values())}
+        if missing:
+            raise ValueError(f"phase_list: signal(s) {sorted(missing)} appear in fewer phases than others — every signal must be declared in every phase")
+        return {name: bk.array(seq) for name, seq in schedules.items()}
