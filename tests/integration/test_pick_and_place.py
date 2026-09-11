@@ -35,6 +35,13 @@ class TestPickAndPlace:
         assert jaw.min() >= 0.0
         assert jaw.max() > 0.3, "gripper never closed (jaw never exceeded 0.3)"
         assert jaw[0] == 0.0 and jaw[-1] == 0.0, "gripper should open at start and end"
+        # The jaw joint must actually move in response to the setpoint — not
+        # just the schedule values (the setpoint used to be dropped).
+        from shinro.simulation.runner import iter_phase_schedule
+
+        engine = scenario.sim.engine
+        qpos = np.asarray([engine.get_joint_qpos("Jaw") for _ in iter_phase_schedule(scenario)])
+        assert qpos.max() - qpos.min() > 0.05, f"jaw never moved (range {qpos.max() - qpos.min():.4f})"
 
     def test_base_drives_forward(self, scenario):
         """The drive phases move the base along +x."""

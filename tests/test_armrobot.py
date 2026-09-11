@@ -462,15 +462,19 @@ class TestArmRobotOrientation:
         arm.engine_ik = MagicMock(wraps=arm.engine_ik)
         u = bk.array([0.0, 0.0, 0.0, 0.1, 0.0, 0.0])
         arm.step(u)
-        assert "target_euler" in arm.engine_ik.call_args.kwargs
+        kwargs = arm.engine_ik.call_args.kwargs
+        assert "target_euler" in kwargs
+        assert np.allclose(_to_np(kwargs["target_euler"], bk), [0.1 * arm.dt, 0.0, 0.0], atol=1e-9)
 
-    def test_step_engine_keeps_3d_path_translation_only(self, bk, mock_engine):
+    def test_step_engine_holds_orientation_translation_only(self, bk, mock_engine):
         arm = _make_arm(bk)
         arm.physics_engine(mock_engine)
         arm.engine_ik = MagicMock(wraps=arm.engine_ik)
         u = bk.array([0.1, 0.0, 0.0, 0.0, 0.0, 0.0])
         arm.step(u)
-        assert "target_euler" not in arm.engine_ik.call_args.kwargs
+        kwargs = arm.engine_ik.call_args.kwargs
+        assert "target_euler" in kwargs
+        assert np.allclose(_to_np(kwargs["target_euler"], bk), 0.0, atol=1e-9)
 
     def test_engine_ik_6d_reaches_pose(self, bk):
         from scipy.spatial.transform import Rotation

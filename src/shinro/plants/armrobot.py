@@ -221,13 +221,10 @@ class ArmRobot(Plant):
         """
         if self._engine is not None:
             current_ee = self._get_ee_pos()
+            current_euler = self._get_ee_euler()
             target_ee = current_ee + u[:3] * self.dt
-            if np.any(np.abs(self.bk.to_numpy(u[3:])) > 1e-12):
-                current_euler = self._get_ee_euler()
-                target_euler = current_euler + u[3:6] * self.dt
-                joint_targets = self.engine_ik(target_ee, target_euler=target_euler)
-            else:
-                joint_targets = self.engine_ik(target_ee)
+            target_euler = current_euler + u[3:6] * self.dt
+            joint_targets = self.engine_ik(target_ee, target_euler=target_euler)
             for name, val in zip(self._joint_names, joint_targets):
                 self._engine.set_joint_ctrl(name, val)
             self._last_joints = self.bk.array([self._engine.get_joint_qpos(n) for n in self._joint_names])
