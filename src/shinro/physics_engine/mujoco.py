@@ -1,14 +1,33 @@
+from dataclasses import dataclass
 from pathlib import Path
 
 import mujoco
 import numpy as np
 
 from shinro.components import PhysicsEngine
+from shinro.factories.registry import register_engine
 
 HERE = Path(__file__).parent.parent
 MJCF_PATH = str(HERE / "lekiwi-sim" / "mjcf_lcmm_robot.xml")
 
 
+@dataclass(frozen=True)
+class MuJoCoEngineConfig:
+    """Strict TOML schema for :class:`MuJoCoEngine` (the ``[engine]`` manifest section).
+
+    Either ``model`` (path to an MJCF file) or ``xml_string`` is required.
+    ``model`` is resolved relative to the CWD / packaged configs like any
+    config path; ``xml_string`` takes precedence when both are given (used by
+    template-generated worlds, e.g. ``ScenarioFactory`` physics injection).
+    """
+
+    model: str | None = None
+    dt: float = 0.02
+    xml_string: str | None = None
+    name: str = "mujoco"
+
+
+@register_engine("mujoco")
 class MuJoCoEngine(PhysicsEngine):
     """
     Low-level MuJoCo wrapper implementing the PhysicsEngine protocol.
@@ -20,6 +39,29 @@ class MuJoCoEngine(PhysicsEngine):
     ArmRobot and HolonomicMobileRobot each hold a reference to one engine
     and read/write their respective joints by name.
     """
+
+    Config = MuJoCoEngineConfig
+
+    @classmethod
+    def from_config(cls, config, assets: dict | None = None) -> "MuJoCoEngine":
+        """Build from an ``[engine]`` manifest table (raw TOML dict or MuJoCoEngineConfig).
+
+        ``xml_string`` (template-generated worlds) overrides ``model``. At
+        least one of the two is required.
+        """
+        from shinro.utils.config_spec import strict_from_dict
+
+        cfg = strict_from_dict(MuJoCoEngineConfig, config, "mujoco") if isinstance(config, dict) else config
+        if cfg.xml_string is None and cfg.model is None:
+            raise ValueError("mujoco engine config: one of 'model' or 'xml_string' is required")
+        from shinro.utils.config_resolver import resolve_config_path
+
+        return cls(
+            model_path=str(resolve_config_path(cfg.model)) if cfg.model is not None else MJCF_PATH,
+            dt=cfg.dt,
+            xml_string=cfg.xml_string,
+            assets=assets,
+        )
 
     def __init__(self, model_path: str = MJCF_PATH, dt: float = 0.02, xml_string: str = None, assets: dict = None):
         if xml_string is not None:
@@ -195,3 +237,15 @@ class MuJoCoEngine(PhysicsEngine):
         print(f"  dt={self._dt}")
         print(f"  Joints: {self.joint_names}")
         print(f"  Actuators: {self.actuator_names}")
+
+
+def interactive_viewer(model_path: str):
+    """Open an interactive MuJoCo viewer for manual inspection."""
+    model = mujoco.MjModel.from_xml_path(model_path)
+    data = mujoco.MjData(model)
+
+    with mujoco.viewer.launch_passive(model, data) as viewer:
+        print("Interactive viewer opened. Close window to exit.")
+        while viewer.is_running():
+            mujoco.mj_step(model, data)
+            viewer.sync()

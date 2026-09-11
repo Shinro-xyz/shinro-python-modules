@@ -13,12 +13,12 @@ Usage:
 """
 
 import tomllib
+import warnings
 from typing import Any
 
-import mujoco
 import numpy as np
 
-from shinro.physics_engine.mujoco import MuJoCoEngine
+from shinro.factories.registry import _ENGINE_REGISTRY
 from shinro.utils.config_resolver import resolve_config_path
 
 
@@ -39,13 +39,35 @@ class RobotSim:
         with open(resolve_config_path(config_path), "rb") as f:
             self.config = tomllib.load(f)
 
-        dt = self.config.get("dt", 0.02)
-        model_path = self.config.get("model", "")
-
+        engine_cfg = self.config.get("engine")
+        if engine_cfg is None:
+            # Back-compat: legacy manifests declare model/dt at the top level.
+            warnings.warn(
+                "Sim manifest is missing an [engine] section — defaulting to "
+                "'mujoco' with the top-level 'model'/'dt' keys. Add an explicit "
+                "[engine] table (type, model, dt); this fallback will be removed.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            engine_cfg = {"type": "mujoco", "model": self.config.get("model", ""), "dt": self.config.get("dt", 0.02)}
         if xml_string is not None:
-            self.engine = MuJoCoEngine(dt=dt, xml_string=xml_string, assets=assets)
-        else:
-            self.engine = MuJoCoEngine(model_path=model_path, dt=dt)
+            engine_cfg = {**engine_cfg, "xml_string": xml_string}
+
+        engine_type = engine_cfg.get("type")
+        if engine_type not in _ENGINE_REGISTRY:
+            # Engines register on module import; load shinro.physics_engine.<type>
+            # on demand so the mujoco import stays lazy (optional extra) and a
+            # third-party engine lands by module name.
+            import importlib
+
+            try:
+                importlib.import_module(f"shinro.physics_engine.{engine_type}")
+            except ModuleNotFoundError:
+                pass  # fall through to the registry error below
+        if engine_type not in _ENGINE_REGISTRY:
+            raise KeyError(f"Unknown engine type '{engine_type}'. Registered: {sorted(_ENGINE_REGISTRY)}")
+        self.engine = _ENGINE_REGISTRY[engine_type].from_config(engine_cfg, assets=assets)
+        dt = self.engine.dt
 
         joint_groups = self.config.get("joint_groups", {})
 
@@ -91,15 +113,3 @@ class RobotSim:
 
     def get_plant(self, name: str) -> Any:
         return self._plants.get(name)
-
-
-def interactive_viewer(model_path: str):
-    """Open an interactive MuJoCo viewer for manual inspection."""
-    model = mujoco.MjModel.from_xml_path(model_path)
-    data = mujoco.MjData(model)
-
-    with mujoco.viewer.launch_passive(model, data) as viewer:
-        print("Interactive viewer opened. Close window to exit.")
-        while viewer.is_running():
-            mujoco.mj_step(model, data)
-            viewer.sync()

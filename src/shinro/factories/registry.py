@@ -6,6 +6,7 @@ _ESTIMATOR_REGISTRY = {}
 _TRAJECTORY_REGISTRY = {}
 _PLANT_REGISTRY = {}
 _PLANT_DETECTOR_REGISTRY = {}
+_ENGINE_REGISTRY = {}
 
 
 def _check_config(cls, kind: str, name: str, *, strict: bool) -> None:
@@ -89,5 +90,22 @@ def register_plant_detector(plant_type):
     def decorator(fn):
         _PLANT_DETECTOR_REGISTRY[plant_type] = fn
         return fn
+
+    return decorator
+
+
+def register_engine(name):
+    """Register a physics engine (MuJoCo, Box2D, Gazebo, ...) by name.
+
+    Same contract as the component registries: a frozen ``Config`` dataclass
+    declares the engine's TOML schema, parsed strictly at build time so
+    manifest typos surface at parse, not inside the simulator backend.
+    """
+
+    def decorator(cls):
+        _check_config(cls, "PhysicsEngine", name, strict=True)
+        cls._registry_name = name
+        _ENGINE_REGISTRY[name] = cls
+        return cls
 
     return decorator
