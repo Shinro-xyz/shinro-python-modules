@@ -77,8 +77,6 @@ class PIDController(Controller):
 
         self.min_limits = output_limits[0] if output_limits else None
         self.max_limits = output_limits[1] if output_limits else None
-        self.min_limits = output_limits[0] if output_limits else None
-        self.max_limits = output_limits[1] if output_limits else None
         self._integral = self.bk.zeros_like(self.ki)
         self._prev_error = self.bk.zeros_like(self.kd)
         # First-tick gate as a 0/1 array (not a Python bool): under tracing a
