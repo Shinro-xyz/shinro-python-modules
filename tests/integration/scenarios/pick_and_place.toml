@@ -12,7 +12,9 @@ free_joint = true
 
 [plant]
 name = "base"
-jaw_joint = "Jaw"
+
+[signals]
+jaw = { actuator = "Jaw" }
 
 [trajectory]
 type = "phase_list"

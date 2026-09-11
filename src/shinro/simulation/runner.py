@@ -355,14 +355,52 @@ def run_scenario(scenario, steps: int | None = None, seed: int | None = None) ->
     return SimResult(list(iter_scenario(scenario, steps=steps, seed=seed)), config=scenario.config)
 
 
-def iter_phase_schedule(scenario, steps: int | None = None) -> Iterator[StepRecord]:
-    """Run a ``phase_list`` schedule feedforward through the composed RobotSim.
+def _resolve_schedule_targets(scenario, schedule: dict):
+    """Map each schedule signal name to its setter — plant ``step`` or actuator passthrough.
 
-    The schedule is a dict of ``{"arm", "base", "jaw"}`` per-step setpoints:
-    the arm setpoint is the 6D twist passed to ``sim.arm.step()``, the base
-    setpoint the 3D velocity for ``sim.base.step()``, and the jaw setpoint is
-    applied directly to the engine actuator (``[plant].jaw_joint``, default
-    ``"Jaw"``) — it is not part of the arm twist.
+    Resolved once per run. A key matching a declared plant name drives that
+    plant; any other key must be declared in the scenario's ``[signals]``
+    table as ``name = { actuator = "<actuator>" }`` and routed to
+    ``engine.set_joint_ctrl``. Unknown keys are a loud error naming the
+    declared plants and signals.
+
+    Args:
+        scenario: Composed scenario (sim-backed).
+        schedule: Dict of signal name → per-step setpoints.
+
+    Returns:
+        Dict of signal name → callable(setpoint array).
+    """
+    sim = scenario.sim
+    declared_signals = scenario.config.get("signals", {})
+    targets = {}
+    for key in schedule:
+        if key in sim.plants:
+            targets[key] = sim.plants[key].step
+            continue
+        actuator = declared_signals.get(key, {}).get("actuator")
+        if actuator is None:
+            raise ValueError(
+                f"schedule key '{key}' is neither a declared plant "
+                f"({sorted(sim.plants)}) nor a declared signal "
+                f"({sorted(declared_signals)})"
+            )
+        if actuator not in sim.engine.actuator_names:
+            raise ValueError(
+                f"signal '{key}' targets actuator '{actuator}', but the engine "
+                f"has no such actuator (declared: {sorted(sim.engine.actuator_names)})"
+            )
+        targets[key] = lambda v, a=actuator: sim.engine.set_joint_ctrl(a, float(np.asarray(v).ravel()[0]))
+    return targets
+
+
+def iter_phase_schedule(scenario, steps: int | None = None) -> Iterator[StepRecord]:
+    """Run a ``phase_list`` schedule feedforward through the composed sim.
+
+    The schedule is a dict of signal name → per-step setpoints. Plant-named
+    signals are routed to ``plant.step(u)``; other signals must be declared in
+    the scenario's ``[signals]`` table (``name = { actuator = ... }``) and go
+    straight to engine actuators. Nothing is robot-specific.
 
     Args:
         scenario: Composed scenario (its trajectory must be a phase dict).
@@ -370,48 +408,46 @@ def iter_phase_schedule(scenario, steps: int | None = None) -> Iterator[StepReco
 
     Yields:
         One :class:`StepRecord` per step (``estimated == true_state``, control
-        == the applied setpoints — no feedback estimator).
+        == the applied setpoints — no feedback estimator). Reference/control
+        carry the full applied signal dict.
 
     Raises:
-        ValueError: If the trajectory is not a phase dict or the scenario is
-            not sim-backed.
+        ValueError: If the trajectory is not a phase dict, the scenario is not
+            sim-backed, a schedule key matches no plant and no ``[signals]``
+            entry, or the signal lengths disagree.
     """
     schedule = scenario.trajectory
-    if not isinstance(schedule, dict) or "arm" not in schedule:
-        raise ValueError("feedforward run requires a phase_list trajectory dict.")
+    if not isinstance(schedule, dict) or not schedule:
+        raise ValueError("feedforward run requires a phase schedule dict.")
     if scenario.sim is None:
-        raise ValueError("feedforward runs drive the RobotSim — sim-backed scenarios only.")
+        raise ValueError("feedforward runs drive the sim — sim-backed scenarios only.")
 
-    n = steps if steps is not None else len(schedule["arm"])
+    targets = _resolve_schedule_targets(scenario, schedule)
+    lengths = {k: len(v) for k, v in schedule.items()}
+    if len(set(lengths.values())) != 1:
+        raise ValueError(f"schedule signals disagree in length: {lengths}")
+    n = steps if steps is not None else next(iter(lengths.values()))
     dt = float(scenario.config.get("scenario", {}).get("dt", scenario.sim.engine.dt))
+    primary = scenario.plant
 
     for step in range(n):
-        arm_twist = np.asarray(schedule["arm"][step], dtype=np.float64).flatten().copy()
-        base_vel = np.asarray(schedule["base"][step], dtype=np.float64).flatten()
+        applied = {k: np.asarray(v[step], dtype=np.float64).flatten() for k, v in schedule.items()}
+        for key, set_value in targets.items():
+            set_value(applied[key].copy())
+            scenario.sim.step()
 
-        arm_plant = scenario.sim.get_plant("arm")
-        base_plant = scenario.sim.get_plant("base")
-
-        arm_plant.step(arm_twist)
-        base_plant.step(base_vel)
-        if "jaw" in schedule:
-            jaw_joint = scenario.config.get("plant", {}).get("jaw_joint", "Jaw")
-            scenario.sim.engine.set_joint_ctrl(jaw_joint, float(schedule["jaw"][step]))
-        scenario.sim.step()
-
-        arm_state = np.asarray(arm_plant.get_state(), dtype=np.float64).flatten()
-        base_state = np.asarray(base_plant.get_state(), dtype=np.float64).flatten()
-        if not np.all(np.isfinite(arm_state)) or not np.all(np.isfinite(base_state)):
+        state = np.asarray(primary.get_state(), dtype=np.float64).flatten()
+        if not np.all(np.isfinite(state)):
             raise RuntimeError(f"Non-finite state at phase step {step}.")
 
         yield StepRecord(
             t=step * dt,
-            reference={"arm": arm_twist, "base": base_vel},
-            true_state=arm_state,
-            measurement=arm_state,
-            estimated=arm_state,
-            control={"arm": arm_twist, "base": base_vel},
-            plant_state=arm_state,
+            reference=applied,
+            true_state=state,
+            measurement=state,
+            estimated=state,
+            control=applied,
+            plant_state=state,
         )
 
 

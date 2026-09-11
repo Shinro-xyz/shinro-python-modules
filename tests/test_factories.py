@@ -185,7 +185,7 @@ class TestTrajectoryFactory:
         """TrajectoryFactory creates a phase schedule from a valid config."""
         from shinro.factories.trajectory_factory import TrajectoryFactory
         config = tmp_path / "phases.toml"
-        config.write_text("""type = "phase_list"\ndt = 0.1\n[[phases]]\nduration = 1.0\narm = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]\nbase = [0.0, 0.0, 0.0]\njaw = 0.0\n""")
+        config.write_text("""type = "phase_list"\ndt = 0.1\n[[phases]]\nduration = 1.0\n[phases.signals]\narm = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]\nbase = [0.0, 0.0, 0.0]\njaw = [0.0]\n""")
         factory = TrajectoryFactory(str(config))
         result = factory.create(backend=bk)
         assert "arm" in result

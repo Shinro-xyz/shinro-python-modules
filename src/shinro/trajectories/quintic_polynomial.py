@@ -316,7 +316,11 @@ class PhaseSchedule(ConfigDriven):
                 arr = bk.array(setpoint)
                 for _ in range(n_steps):
                     seq.append(bk.copy(arr))
-        missing = {name for name in schedules if len(schedules[name]) != max(len(v) for v in schedules.values())}
+        longest = max(len(v) for v in schedules.values())
+        missing = {name for name, seq in schedules.items() if len(seq) != longest}
         if missing:
-            raise ValueError(f"phase_list: signal(s) {sorted(missing)} appear in fewer phases than others — every signal must be declared in every phase")
+            raise ValueError(
+                f"phase_list: signal(s) {sorted(missing)} appear in fewer phases than others — "
+                "every signal must be declared in every phase"
+            )
         return {name: bk.array(seq) for name, seq in schedules.items()}
