@@ -18,6 +18,7 @@ from shinro.factories import TrajectoryFactory
 from lekiwi_sim import HERE as LEKIWI_HOME
 from lekiwi_sim import MJCF_PATH
 from shinro.simulation import RobotSim
+from shinro.utils.config_resolver import resolve_config_path
 
 HERE = Path(__file__).parent.parent
 OUTPUT_PATH = str(HERE / "lekiwi_demo.gif")
@@ -58,11 +59,11 @@ for fname in mesh_dir.iterdir():
         assets[fname.name] = fname.read_bytes()
 
 xml = inject_free_joint(base_xml)
-sim = RobotSim(str(HERE / "robot_config.toml"), xml_string=xml, assets=assets)
+sim = RobotSim(str(resolve_config_path("robot_config.toml")), xml_string=xml, assets=assets)
 sim.reset()
 
 # ── Load phase schedule ──────────────────────────────────────────────────
-sched = TrajectoryFactory(str(HERE / "configs/trajectories/pick_and_place.toml")).create()
+sched = TrajectoryFactory(str(resolve_config_path("configs/trajectories/pick_and_place.toml"))).create()
 total_steps = len(sched["arm"])
 
 # ── Renderer ─────────────────────────────────────────────────────────────

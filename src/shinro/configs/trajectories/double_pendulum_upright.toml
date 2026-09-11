@@ -1,0 +1,7 @@
+# Hold the DoublePendulum at the upright equilibrium (zero state).
+type = "waypoints"
+dt = 0.01
+
+[[waypoints]]
+position = [0.0, 0.0, 0.0, 0.0]
+duration = 20.0

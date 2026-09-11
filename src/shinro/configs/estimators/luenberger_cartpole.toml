@@ -1,0 +1,4 @@
+# Luenberger observer for CartPole (4 states). dt is inherited from the plant.
+type = "LuenbergerObserver"
+name = "cartpole_observer"
+observer_gain = [-1.0, -2.0, -3.0, -4.0]

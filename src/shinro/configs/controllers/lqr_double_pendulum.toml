@@ -1,0 +1,5 @@
+# LQR for DoublePendulum (4 states, 2 inputs). dt is inherited from the plant.
+type = "LQR"
+name = "double_pendulum_controller"
+state_cost = [50.0, 50.0, 10.0, 10.0]
+control_cost = [0.1, 0.1]

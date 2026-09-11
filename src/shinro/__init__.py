@@ -23,7 +23,6 @@ from shinro.components import Controller, PhysicsEngine, Plant, StateEstimator, 
 from shinro.factories import (
     ControllerFactory,
     EstimatorFactory,
-    PlantFactory,
     Scenario,
     ScenarioFactory,
     TrajectoryFactory,

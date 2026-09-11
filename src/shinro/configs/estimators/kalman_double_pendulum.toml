@@ -1,0 +1,5 @@
+# Kalman filter for DoublePendulum (4 states). dt is inherited from the plant.
+type = "KalmanFilter"
+name = "double_pendulum_estimator"
+process_noise = [0.01, 0.01, 0.01, 0.01]
+measurement_noise = [0.1, 0.1, 0.1, 0.1]

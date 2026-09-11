@@ -1,0 +1,4 @@
+# Luenberger observer for DoublePendulum (4 states). dt is inherited from the plant.
+type = "LuenbergerObserver"
+name = "double_pendulum_observer"
+observer_gain = [0.8, 0.8, 0.8, 0.8]

@@ -1,7 +1,8 @@
 # Quickstart
 
-This guide takes you from a fresh checkout to a running, verified control loop
-in four steps. It assumes Python 3.12+ and a working pip.
+This guide takes you from `pip install -e .` to a running, verified control
+loop in three steps. No MuJoCo, no viewer, no optional dependencies — just the
+core package.
 
 If you'd rather read than run: [`how-it-works.md`](./how-it-works.md) explains
 the architecture, [`components.md`](./components.md) is the full component
@@ -9,113 +10,84 @@ catalog, and [`testing.md`](./testing.md) covers the test suite.
 
 ## 1. Install
 
-From a source checkout (recommended for development):
-
 ```bash
 pip install -e .             # core: numpy, scipy, osqp, mcp
-pip install -e ".[mujoco]"   # optional: MuJoCo physics backend
-pip install -e ".[torch]"    # optional: torch backend
 ```
 
-Core install gives you numpy-backed controllers, estimators, trajectories, and
-the MCP server. MuJoCo is needed for the physics-backed scenarios and the
-`demos/` that render a viewer.
+Optional extras:
+
+```bash
+pip install -e ".[mujoco]"   # MuJoCo physics backend (viewer demos)
+pip install -e ".[torch]"    # torch backend (same controllers, torch arrays)
+```
 
 ## 2. Build a controller from TOML
 
 Everything in shinro is built from a TOML config via a factory. A config says
 `type = "LQR"`, and the factory looks that name up in the registry and calls
-the class's `from_config`. Example, `src/shinro/configs/controllers/lqr_base.toml`:
-
-```toml
-type = "LQR"
-name = "base_controller"
-dt = 0.02
-state_cost = [100.0, 100.0, 50.0]
-control_cost = [0.1, 0.1, 0.1]
-```
-
-Create it in code:
+the class's `from_config`.
 
 ```python
-from shinro.factories import ControllerFactory, EstimatorFactory
+from shinro import ControllerFactory, EstimatorFactory
 
-lqr = ControllerFactory("src/shinro/configs/controllers/lqr_base.toml").create()
-kf = EstimatorFactory("src/shinro/configs/estimators/kalman_base.toml").create()
+lqr = ControllerFactory("configs/controllers/lqr_base.toml").create()
+kf  = EstimatorFactory("configs/estimators/kalman_base.toml").create()
 print(lqr.K.shape)   # (3, 3) — the DARE-optimal gain, baked at construction
 ```
 
 No wiring, no manual `A`/`B`/`Q`/`R` — `from_config` does the linearization
-and solve for you. All config files shipped with the package live under
-`src/shinro/configs/` (packaged as `shinro.configs`); the catalog in
-[`components.md`](./components.md) lists every registered name and its config.
+and solve for you. All shipped config files live under `src/shinro/configs/`;
+the catalog in [`components.md`](./components.md) lists every registered name
+and its config.
 
-> The `type` string is the **registered name** — what factories, scenarios,
-> and the MCP server all dispatch on. It is not always the class name
-> (e.g. `MPC_LTI` vs the `MPC_LTI_Base` class behind it).
-
-## 3. Run a simulation scenario
+## 3. Run a simulation — one scenario TOML, three lines of Python
 
 A *scenario* TOML declares the whole closed loop — plant, controller,
-estimator, trajectory, input limits, physics backend — as data. The
-`base_tracking` scenario (LQR + Kalman on the holonomic base) lives in
-`tests/integration/scenarios/base_tracking.toml`:
+estimator, trajectory — as data. `configs/scenarios/cartpole_balance.toml`
+ships with the package as a complete MuJoCo-free example:
+
+```python
+from shinro import ScenarioFactory
+
+scenario = ScenarioFactory("configs/scenarios/cartpole_balance.toml").build()
+result = scenario.run(steps=2000)   # 20 s at 100 Hz
+
+print(f"final pole angle: {result[-1].state[2]:.6f} rad")
+```
+
+That's it. The scenario factory builds the plant from the plant TOML, derives
+the LQR/KF model from the plant's dynamics, wires the loop, and validates the
+dimensions. To iterate on your robot, edit the TOML — no code changes.
+
+<details>
+<summary>The TOML (for reference)</summary>
 
 ```toml
 [scenario]
-name = "base_tracking"
-duration = 16.0
-dt = 0.02
-input_limits = { min = [-0.5, -0.5, -1.0], max = [0.5, 0.5, 1.0] }
+name = "cartpole_balance"
+dt = 0.01
+duration = 20.0
+input_limits = { min = [-10.0], max = [10.0] }
 
 [plant]
-name = "base"
+type = "CartPole"
+config = "configs/plants/cartpole.toml"
+initial_state = [0.0, 0.0, 0.2, 0.0]
 
 [controller]
 type = "LQR"
-config = "configs/controllers/lqr_base.toml"
+config = "configs/controllers/lqr_cartpole.toml"
 
 [estimator]
 type = "KalmanFilter"
-config = "configs/estimators/kalman_base.toml"
+config = "configs/estimators/kalman_cartpole.toml"
 
 [trajectory]
 type = "waypoints"
-config = "configs/trajectories/base_straight.toml"
+config = "configs/trajectories/cartpole_upright.toml"
 ```
 
-Assemble it and run one closed-loop step by hand — the loop is just the four
-ABCs wired in the fixed dataflow (see [`how-it-works.md`](./how-it-works.md)):
-
-```python
-import numpy as np
-from shinro.factories import ScenarioFactory
-
-scenario = ScenarioFactory("tests/integration/scenarios/base_tracking.toml").build()
-sim, plant = scenario.sim, scenario.plant
-ctrl, est, traj = scenario.controller, scenario.estimator, scenario.trajectory
-
-dt = scenario.config["scenario"]["dt"]
-lo = np.array(scenario.config["scenario"]["input_limits"]["min"])
-hi = np.array(scenario.config["scenario"]["input_limits"]["max"])
-
-u_prev = np.zeros(3)
-for step in range(800):                      # 16 s at 50 Hz
-    true_state = np.asarray(plant.get_state()).flatten()
-    ref = np.asarray(traj[step]).flatten()   # waypoint schedule
-    estimate = est.estimate(true_state.reshape(-1, 1), u_prev.reshape(-1, 1)).flatten()
-    control = ctrl.compute(estimate, ref)    # LQR: (current, target)
-    plant.step(np.clip(control, lo, hi))     # apply and advance the plant
-    sim.step()                               # advance the physics engine
-    u_prev = control
-
-print(sim.get_state())
-```
-
-> LQR/PID take `compute(current, target)`; `MPC_LTI` takes `compute(error)`;
-> `MPC_DeltaU` takes `compute(error, u_prev=...)`. The integration runners in
-> `tests/integration/helpers/scenario_runner.py` dispatch on controller type —
-> reuse them rather than reimplementing this switch.
+</details>
 
 To swap LQR for MPC, change one line in the TOML:
 
@@ -128,33 +100,19 @@ config = "configs/controllers/mpc_lti_base.toml"
 No code changes. This is the point of the design: *a scenario is data, not
 code*.
 
-To watch it, run the packaged demo instead:
-
-```bash
-python -m demos.demo_simple              # terminal output, no viewer
-python -m demos.demo_base_tracking --controller mpc   # base tracking, live viewer
-```
-
-MuJoCo must be installed (`pip install -e ".[mujoco]"`) for the viewer demos.
-
 ## 4. Trace, verify, and lower to native code
 
-The codegen pipeline compiles a closed-loop step into a static graph that is
-verified to float-exactness against numpy, then lowers it to a Zig
-comptime-unrolled VM exposed as a `.so`. The full walkthrough is
-[`codegen.md`](./codegen.md); here's the 30-second version:
+Once the loop is verified in Python, compile it to a dependency-free native
+`.so`:
 
 ```bash
-python demo_codegen.py     # trace → compose → interpret, PASS/FAIL per stage
-make test-zig              # + serialize to src/shinro/runtime/graph_data.zig, build .so,
-                           #   cross-check against the interpreter (needs zig)
+shinro-compile configs/scenarios/cartpole_balance.toml --out build/scenario
 ```
 
-`demo_codegen.py` traces a Kalman filter, composes it with an LQR controller
-into one closed-loop tick, verifies the composed step matches a live numpy
-loop, then re-composes with a Luenberger observer — reusing the controller's
-graph without re-tracing (the modularity proof). Each stage prints
-`PASS`/`FAIL` based on max abs error vs numpy.
+This chains trace → compose → oracle-verify → lower to a Zig comptime VM →
+`.so`. The compiled library exposes `shinro_step(inputs, outputs, state_out)`
+— a C-ABI entry point ready for deployment (e.g. to a Cake module on a
+Raspberry Pi). See [`codegen.md`](./codegen.md) for the full walkthrough.
 
 ## What next
 
@@ -168,5 +126,3 @@ graph without re-tracing (the modularity proof). Each stage prints
   fast path, `make test-integration` for MuJoCo-backed full-loop tests.
 - **[`mcp_server.md`](./mcp_server.md)** — drive controllers/estimators over
   Model Context Protocol.
-- **[`../AGENTS.md`](../AGENTS.md)** — how to contribute (agent workflow,
-  lab-notes, Conventional Commits).
