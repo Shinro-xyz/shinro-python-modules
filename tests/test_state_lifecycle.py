@@ -27,15 +27,9 @@ import numpy as np
 import pytest
 from test_zig_lowering import ALL_SCAN_CASES, NumpyBackend, _build_so, _plant_graph
 
-from shinro.codegen.oracle import (
-    output_split as _output_split,
-    pack_arrays as _pack_arrays,
-    state_slices as _state_slices,
-    step_so as _step,
-)
-
 from shinro.codegen import interpret
 from shinro.codegen.compose import ComposedGraph
+from shinro.codegen.oracle import output_split, pack_arrays, state_slices, step_so
 from shinro.codegen.trace_node import trace_node
 
 N_TICKS = 100
@@ -59,7 +53,7 @@ def _state_port_map(cg):
     "state_u_prev"); ``interpret_step`` returns state keyed by the stripped
     name ("x_hat", "u_prev"). Non-state ports (y, x_ref) map to None.
     """
-    sl = _state_slices(cg)
+    sl = state_slices(cg)
     mapping = {}
     for port in cg.inputs:
         if port in sl:
@@ -81,7 +75,7 @@ def test_multitick_state_threading(lifecycle_so):
     y_seq = rng.normal(0.0, 0.1, (N_TICKS, n_x))
     xr_seq = rng.normal(0.0, 0.05, (N_TICKS, n_x))
 
-    n_out, n_state = _output_split(cg)
+    n_out, n_state = output_split(cg)
     sl, port_map = _state_port_map(cg)
     in_shapes = {n.attrs["name"]: n.shape for n in cg.graph.nodes if n.op == "input"}
 
@@ -102,7 +96,7 @@ def test_multitick_state_threading(lifecycle_so):
             if skey is not None:
                 a, b = sl[skey]
                 kports[port] = kstate[a:b].reshape(in_shapes[port])
-        out, kstate = _step(lib, _pack_arrays(cg, {k: np.asarray(v).ravel() for k, v in kports.items()}), n_out, n_state)
+        out, kstate = step_so(lib, pack_arrays(cg, {k: np.asarray(v).ravel() for k, v in kports.items()}), n_out, n_state)
 
         # reference side (own state copy)
         rports = {"y": y_seq[t], "x_ref": xr_seq[t], "u_prev": u_prev.copy()}
@@ -160,8 +154,8 @@ def test_pid_first_tick_gate(tmp_path):
     d = tmp_path / "pid-gate"
     d.mkdir()
     lib, cg = _build_so(cg, d / "build", graph_path=d / "graph_data.zig")
-    n_out, n_state = _output_split(cg)
-    sl = _state_slices(cg)
+    n_out, n_state = output_split(cg)
+    sl = state_slices(cg)
 
     rng = np.random.default_rng(97)
     cur = rng.normal(0, 0.2, 3)
@@ -187,8 +181,8 @@ def test_pid_first_tick_gate(tmp_path):
     ports0 = {"current_state": cur, "target_state": tgt}
     for port in cg.state_outputs:
         ports0[port] = np.zeros(sl[port][1] - sl[port][0])
-    inp = _pack_arrays(cg, {k: np.asarray(v).ravel() for k, v in ports0.items()})
-    out0, kstate = _step(lib, inp, n_out, n_state)
+    inp = pack_arrays(cg, {k: np.asarray(v).ravel() for k, v in ports0.items()})
+    out0, kstate = step_so(lib, inp, n_out, n_state)
     pid._integral = np.zeros(3)
     pid._prev_error = np.zeros(3)
     pid._has_run = np.zeros(3)
@@ -204,8 +198,8 @@ def test_pid_first_tick_gate(tmp_path):
     for port in cg.state_outputs:
         a, b = sl[port]
         ports1[port] = kstate[a:b]
-    inp1 = _pack_arrays(cg, {k: np.asarray(v).ravel() for k, v in ports1.items()})
-    out1, _ = _step(lib, inp1, n_out, n_state)
+    inp1 = pack_arrays(cg, {k: np.asarray(v).ravel() for k, v in ports1.items()})
+    out1, _ = step_so(lib, inp1, n_out, n_state)
     u1_live = pid.compute(cur1.copy(), tgt1.copy())  # pid state evolved live above
     assert np.max(np.abs(out1 - u1_live)) < TOL, "tick-1 kernel != live PID"
 
@@ -222,18 +216,18 @@ def test_deterministic_repeat_calls(tmp_path):
     d.mkdir()
     cg = _plant_graph(d, case_name, plant_name, plant_cfg, n_x, n_u, dt, controller, estimator)
     lib, cg = _build_so(cg, d / "build", graph_path=d / "graph_data.zig")
-    n_out, n_state = _output_split(cg)
-    sl = _state_slices(cg)
+    n_out, n_state = output_split(cg)
+    sl = state_slices(cg)
 
     rng = np.random.default_rng(5)
     ports = {"y": rng.normal(0, 0.1, n_x), "x_ref": rng.normal(0, 0.05, n_x), "u_prev": np.zeros(n_u)}
     for port in cg.state_outputs:
         ports[port] = rng.normal(0, 0.05, sl[port][1] - sl[port][0])
-    inp = _pack_arrays(cg, {k: np.asarray(v).ravel() for k, v in ports.items()})
+    inp = pack_arrays(cg, {k: np.asarray(v).ravel() for k, v in ports.items()})
 
     results = []
     for _ in range(3):
-        out, state = _step(lib, inp.copy(), n_out, n_state)
+        out, state = step_so(lib, inp.copy(), n_out, n_state)
         results.append((out.copy(), state.copy()))
 
     for out, state in results[1:]:

@@ -654,6 +654,14 @@
       ]
     }
   ],
+  "provenance": {
+    "configs": {
+      "configs/controllers/lqr_base.toml": "6257b61387fc3a2bd3a150f070ce02e15807921e2686eb0b7b99bb27b48e93a0",
+      "configs/estimators/kalman_base.toml": "693a1a66de459581014b981b35e5ed634ecf84223f67c8a2f89b05c94d61b428"
+    },
+    "numpy_version": "2.4.6",
+    "python_version": "3.12.3"
+  },
   "solve_qp": null,
   "state_outputs": [
     {

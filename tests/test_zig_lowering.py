@@ -18,8 +18,9 @@ import json
 import re
 import shutil
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 import pytest
@@ -28,13 +29,7 @@ from scripts.gen_base import build_base_graph
 from shinro.codegen import interpret
 from shinro.codegen.compose import ComposedGraph, compose
 from shinro.codegen.lower_zig import lower_zig
-from shinro.codegen.oracle import (
-    input_shape as _input_shape,
-    output_split as _output_split,
-    pack_arrays as _pack_arrays,
-    state_slices as _state_slices,
-    step_so as _step,
-)
+from shinro.codegen.oracle import input_shape, output_split, pack_arrays, state_slices, step_so
 from shinro.codegen.trace_node import trace_node
 from shinro.codegen.tracing import Graph
 from shinro.controllers.pid import PIDController
@@ -313,7 +308,7 @@ def _pack_inputs(cg, y, x_ref, u_prev, x_hat_init, P_init):
         "state_x_hat": x_hat_init.ravel(),
         "state_P": P_init.ravel(),
     }
-    return _pack_arrays(cg, port_arrays)
+    return pack_arrays(cg, port_arrays)
 
 
 def _build_matmul_shapes_graph():
@@ -401,8 +396,8 @@ class TestZigLowering:
         """The .so's shinro_step equals interpret() on 50 random inputs."""
         lib, cg = base_so
         rng = np.random.default_rng(42)
-        n_out, n_state = _output_split(cg)
-        sl = _state_slices(cg)
+        n_out, n_state = output_split(cg)
+        sl = state_slices(cg)
 
         max_err = 0.0
         for _ in range(50):
@@ -416,7 +411,7 @@ class TestZigLowering:
             P_init = P_init @ P_init.T + 0.1 * np.eye(3)
 
             inputs = _pack_inputs(cg, y, x_ref, u_prev, x_hat_init, P_init)
-            out, state = _step(lib, inputs, n_out, n_state)
+            out, state = step_so(lib, inputs, n_out, n_state)
 
             traced = interpret(
                 cg.graph,
@@ -448,8 +443,8 @@ class TestZigLowering:
         """state outputs feed back as next-tick state inputs (recurrent edges)."""
         lib, cg = base_so
         rng = np.random.default_rng(1)
-        n_out, n_state = _output_split(cg)
-        sl = _state_slices(cg)
+        n_out, n_state = output_split(cg)
+        sl = state_slices(cg)
 
         y = rng.normal(0.0, 0.1, (3,))
         x_ref = rng.normal(0.0, 0.1, (3,))
@@ -460,7 +455,7 @@ class TestZigLowering:
         # Run the .so for three ticks, threading state out -> next-tick state in.
         for _ in range(3):
             inputs = _pack_inputs(cg, y, x_ref, u, x_hat, P)
-            out, state = _step(lib, inputs, n_out, n_state)
+            out, state = step_so(lib, inputs, n_out, n_state)
             u = out
             x_hat = state[sl["state_x_hat"][0] : sl["state_x_hat"][1]].reshape(3, 1)
             P = state[sl["state_P"][0] : sl["state_P"][1]].reshape(3, 3)
@@ -475,7 +470,7 @@ class TestMatmulShapeDispatch:
         column-times-scalar-width (m,1)@(1,1) case that was misrouted."""
         lib, cg = matmul_shapes_so
         rng = np.random.default_rng(7)
-        n_out, _ = _output_split(cg)
+        n_out, _ = output_split(cg)
 
         offsets = {}
         off = 0
@@ -502,7 +497,7 @@ class TestMatmulShapeDispatch:
             vcol = rng.normal(0.0, 0.1, (2, 1))
             scol = rng.normal(0.0, 0.1, (1, 1))
             row = rng.normal(0.0, 0.1, (1, 2))
-            inputs = _pack_arrays(
+            inputs = pack_arrays(
                 cg,
                 {
                     "a": a.ravel(),
@@ -512,7 +507,7 @@ class TestMatmulShapeDispatch:
                     "row": row.ravel(),
                 },
             )
-            out, _ = _step(lib, inputs, n_out, 1)
+            out, _ = step_so(lib, inputs, n_out, 1)
             for name in cg.outputs:
                 got = out[offsets[name][0] : offsets[name][1]]
                 exp = np.asarray(refs[name](a, v, vcol, scol, row)).ravel()
@@ -531,8 +526,8 @@ class TestSingleInputKfLqr:
         """
         lib, cg = single_input_kf_lqr_so
         rng = np.random.default_rng(3)
-        n_out, n_state = _output_split(cg)
-        sl = _state_slices(cg)
+        n_out, n_state = output_split(cg)
+        sl = state_slices(cg)
         max_err = 0.0
         for _ in range(30):
             y = rng.normal(0.0, 0.1, (2,))
@@ -543,7 +538,7 @@ class TestSingleInputKfLqr:
             P = P @ P.T + 0.1 * np.eye(2)
 
             inputs = _pack_inputs(cg, y, x_ref, u_prev, x_hat, P)
-            out, state = _step(lib, inputs, n_out, n_state)
+            out, state = step_so(lib, inputs, n_out, n_state)
             traced = interpret(
                 cg.graph,
                 {
@@ -852,9 +847,9 @@ class TestGlueOpShapeSemantics:
         d = tmp_path / name
         d.mkdir()
         lib, cg2 = _build_so(cg, d / "build", graph_path=d / "graph_data.zig")
-        n_out, n_state = _output_split(cg2)
+        n_out, n_state = output_split(cg2)
         inp = np.concatenate([np.asarray(feed[k]).ravel() for k, _ in in_specs])
-        out, _ = _step(lib, inp, n_out, n_state)
+        out, _ = step_so(lib, inp, n_out, n_state)
         traced = interpret(cg2.graph, dict(feed))
         off = 0
         max_err = 0.0
@@ -873,13 +868,13 @@ class TestPlantCompileScan:
     def test_so_matches_interpret_for_each_plant(self, plant_so):
         lib, cg, n_x, n_u, name = plant_so
         rng = np.random.default_rng(5)
-        n_out, n_state = _output_split(cg)
-        sl = _state_slices(cg)
+        n_out, n_state = output_split(cg)
+        sl = state_slices(cg)
         max_err = 0.0
         for _ in range(20):
             ports = _scan_input_ports(cg, n_x, n_u, rng)
-            inputs = _pack_arrays(cg, {k: v.ravel() for k, v in ports.items()})
-            out, state = _step(lib, inputs, n_out, n_state)
+            inputs = pack_arrays(cg, {k: v.ravel() for k, v in ports.items()})
+            out, state = step_so(lib, inputs, n_out, n_state)
             traced = interpret(cg.graph, ports)
             off = 0
             for pname in cg.outputs:
@@ -950,7 +945,7 @@ class TestLoweredOpsOracle:
     def test_lowered_ops_match_interpreter(self, lowered_ops_so):
         lib, cg = lowered_ops_so
         rng = np.random.default_rng(7)
-        n_out, n_state = _output_split(cg)
+        n_out, n_state = output_split(cg)
         assert n_state == 0
 
         exact_ops = {"copy", "slice", "relu", "argmax", "one_hot", "stack", "ne_zero", "ne_one"}
@@ -958,8 +953,8 @@ class TestLoweredOpsOracle:
 
         for _ in range(20):
             x = rng.normal(0.0, 1.0, (4,))
-            inputs = _pack_arrays(cg, {"x": x})
-            out, _ = _step(lib, inputs, n_out, n_state)
+            inputs = pack_arrays(cg, {"x": x})
+            out, _ = step_so(lib, inputs, n_out, n_state)
 
             traced = interpret(cg.graph, {"x": x})
             off = 0
@@ -990,7 +985,7 @@ class TestSolveQpOracle:
     def test_mpc_solve_matches_interpreter(self, mpc_so):
         lib, cg = mpc_so
         rng = np.random.default_rng(3)
-        n_out, n_state = _output_split(cg)
+        n_out, n_state = output_split(cg)
         assert n_state == 0
         assert n_out == 3
 
@@ -998,8 +993,8 @@ class TestSolveQpOracle:
         for _ in range(10):
             x0 = rng.normal(0.0, 0.1, (3,))
             zero = np.zeros(3)
-            inputs = _pack_arrays(cg, {"current_state": x0, "target_state": zero})
-            out, _ = _step(lib, inputs, n_out, n_state)
+            inputs = pack_arrays(cg, {"current_state": x0, "target_state": zero})
+            out, _ = step_so(lib, inputs, n_out, n_state)
 
             traced = interpret(cg.graph, {"current_state": x0, "target_state": zero})["out"]
             max_err = max(max_err, float(np.max(np.abs(out - np.asarray(traced).ravel()))))
@@ -1165,10 +1160,10 @@ def _run_closed_loop(lib, cg, case, ticks=100):
     between the two controls is the oracle metric.
     """
     rng = np.random.default_rng(case.seed)
-    n_out, n_state = _output_split(cg)
-    sl = _state_slices(cg)
-    n_x = int(np.prod(_input_shape(cg.graph, "y")))
-    n_u = int(np.prod(_input_shape(cg.graph, "u_prev")))
+    n_out, n_state = output_split(cg)
+    sl = state_slices(cg)
+    n_x = int(np.prod(input_shape(cg.graph, "y")))
+    n_u = int(np.prod(input_shape(cg.graph, "u_prev")))
     est = case.estimator()
     ctrl = case.controller()
 
@@ -1221,7 +1216,7 @@ def _run_closed_loop(lib, cg, case, ticks=100):
             ports[port] = so_est[port].reshape(shape)
         for port, _, shape in case.ctrl_state_ports:
             ports[port] = so_ctrl[port].reshape(shape)
-        out, state = _step(lib, _pack_arrays(cg, ports), n_out, n_state)
+        out, state = step_so(lib, pack_arrays(cg, ports), n_out, n_state)
         max_err = max(max_err, float(np.max(np.abs(out - u_np))))
         for port, _, shape in case.est_state_ports:
             a, b = sl[port]

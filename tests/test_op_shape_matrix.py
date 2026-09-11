@@ -30,10 +30,9 @@ import numpy as np
 import pytest
 from test_zig_lowering import _build_so
 
-from shinro.codegen.oracle import output_split as _output_split, step_so as _step
-
 from shinro.codegen import interpret
 from shinro.codegen.compose import ComposedGraph
+from shinro.codegen.oracle import output_split, step_so
 from shinro.codegen.tracing import Graph
 
 TOL = 1e-12
@@ -306,12 +305,12 @@ class TestOpShapeMatrix:
     @pytest.mark.parametrize("matrix_so", list(GRAPHS), indirect=True, ids=list(GRAPHS))
     def test_so_matches_numpy(self, matrix_so):
         name, lib, cg, feeds, manifest = matrix_so
-        n_out, n_state = _output_split(cg)
+        n_out, n_state = output_split(cg)
         declared = {o["name"]: tuple(o["shape"]) for o in manifest["outputs"]}
 
         for feed, feed_tag in feeds:
             inp = np.concatenate([np.asarray(feed[k]).ravel() for k in cg.inputs])
-            out, _ = _step(lib, inp, n_out, n_state)
+            out, _ = step_so(lib, inp, n_out, n_state)
             traced = interpret(cg.graph, dict(feed))
             off = 0
             for oname in cg.outputs:
