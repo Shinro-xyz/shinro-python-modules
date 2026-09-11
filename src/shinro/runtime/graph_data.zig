@@ -17,12 +17,12 @@ pub const Node = struct {
     vec: bool,
 };
 
-pub const buf_len = 318;
+pub const buf_len = 120;
 pub const has_solve_qp = false;
 pub const n_outputs = 1;
 
 pub const offsets = [_]usize{
-    0, 3, 6, 9, 12, 21, 24, 27, 36, 39, 48, 51, 54, 63, 72, 81, 90, 99, 108, 117, 126, 135, 144, 153, 162, 171, 180, 189, 198, 207, 210, 219, 222, 225, 228, 231, 234, 243, 252, 261, 270, 279, 282, 285, 294, 297, 300, 303, 306, 315,
+    0, 3, 6, 9, 12, 15, 18, 27, 30, 39, 42, 45, 54, 57, 66, 69, 72, 75, 84, 87, 90, 93, 96, 105, 108, 111, 114, 117,
 };
 
 pub const nodes = [_]Node{
@@ -30,61 +30,39 @@ pub const nodes = [_]Node{
     .{ .op = .inp, .inputs = &.{}, .rows = 3, .cols = 1, .aux = 3, .vec = true },
     .{ .op = .inp, .inputs = &.{}, .rows = 3, .cols = 1, .aux = 6, .vec = true },
     .{ .op = .inp, .inputs = &.{}, .rows = 3, .cols = 1, .aux = 9, .vec = false },
-    .{ .op = .inp, .inputs = &.{}, .rows = 3, .cols = 3, .aux = 12, .vec = false },
     .{ .op = .reshape, .inputs = &.{0}, .rows = 3, .cols = 1, .aux = 0, .vec = false },
     .{ .op = .reshape, .inputs = &.{2}, .rows = 3, .cols = 1, .aux = 0, .vec = false },
     .{ .op = .cst, .inputs = &.{}, .rows = 3, .cols = 3, .aux = 0, .vec = false },
-    .{ .op = .matmul, .inputs = &.{7, 3}, .rows = 3, .cols = 1, .aux = 0, .vec = false },
+    .{ .op = .matmul, .inputs = &.{6, 3}, .rows = 3, .cols = 1, .aux = 0, .vec = false },
     .{ .op = .cst, .inputs = &.{}, .rows = 3, .cols = 3, .aux = 9, .vec = false },
-    .{ .op = .matmul, .inputs = &.{9, 6}, .rows = 3, .cols = 1, .aux = 0, .vec = false },
-    .{ .op = .add, .inputs = &.{8, 10}, .rows = 3, .cols = 1, .aux = 0, .vec = false },
+    .{ .op = .matmul, .inputs = &.{8, 5}, .rows = 3, .cols = 1, .aux = 0, .vec = false },
+    .{ .op = .add, .inputs = &.{7, 9}, .rows = 3, .cols = 1, .aux = 0, .vec = false },
     .{ .op = .cst, .inputs = &.{}, .rows = 3, .cols = 3, .aux = 18, .vec = false },
-    .{ .op = .matmul, .inputs = &.{12, 4}, .rows = 3, .cols = 3, .aux = 0, .vec = false },
+    .{ .op = .matmul, .inputs = &.{11, 10}, .rows = 3, .cols = 1, .aux = 0, .vec = false },
     .{ .op = .cst, .inputs = &.{}, .rows = 3, .cols = 3, .aux = 27, .vec = false },
-    .{ .op = .matmul, .inputs = &.{13, 14}, .rows = 3, .cols = 3, .aux = 0, .vec = false },
+    .{ .op = .matmul, .inputs = &.{13, 5}, .rows = 3, .cols = 1, .aux = 0, .vec = false },
+    .{ .op = .add, .inputs = &.{12, 14}, .rows = 3, .cols = 1, .aux = 0, .vec = false },
+    .{ .op = .sub, .inputs = &.{4, 15}, .rows = 3, .cols = 1, .aux = 0, .vec = false },
     .{ .op = .cst, .inputs = &.{}, .rows = 3, .cols = 3, .aux = 36, .vec = false },
-    .{ .op = .add, .inputs = &.{15, 16}, .rows = 3, .cols = 3, .aux = 0, .vec = false },
+    .{ .op = .matmul, .inputs = &.{17, 16}, .rows = 3, .cols = 1, .aux = 0, .vec = false },
+    .{ .op = .add, .inputs = &.{10, 18}, .rows = 3, .cols = 1, .aux = 0, .vec = false },
+    .{ .op = .reshape, .inputs = &.{19}, .rows = 3, .cols = 1, .aux = 0, .vec = true },
+    .{ .op = .sub, .inputs = &.{1, 20}, .rows = 3, .cols = 1, .aux = 0, .vec = true },
     .{ .op = .cst, .inputs = &.{}, .rows = 3, .cols = 3, .aux = 45, .vec = false },
-    .{ .op = .matmul, .inputs = &.{18, 17}, .rows = 3, .cols = 3, .aux = 0, .vec = false },
-    .{ .op = .cst, .inputs = &.{}, .rows = 3, .cols = 3, .aux = 54, .vec = false },
-    .{ .op = .matmul, .inputs = &.{19, 20}, .rows = 3, .cols = 3, .aux = 0, .vec = false },
-    .{ .op = .cst, .inputs = &.{}, .rows = 3, .cols = 3, .aux = 63, .vec = false },
-    .{ .op = .add, .inputs = &.{21, 22}, .rows = 3, .cols = 3, .aux = 0, .vec = false },
-    .{ .op = .cst, .inputs = &.{}, .rows = 3, .cols = 3, .aux = 72, .vec = false },
-    .{ .op = .matmul, .inputs = &.{17, 24}, .rows = 3, .cols = 3, .aux = 0, .vec = false },
-    .{ .op = .inv, .inputs = &.{23}, .rows = 3, .cols = 3, .aux = 0, .vec = false },
-    .{ .op = .matmul, .inputs = &.{25, 26}, .rows = 3, .cols = 3, .aux = 0, .vec = false },
-    .{ .op = .cst, .inputs = &.{}, .rows = 3, .cols = 3, .aux = 81, .vec = false },
-    .{ .op = .matmul, .inputs = &.{28, 11}, .rows = 3, .cols = 1, .aux = 0, .vec = false },
-    .{ .op = .cst, .inputs = &.{}, .rows = 3, .cols = 3, .aux = 90, .vec = false },
-    .{ .op = .matmul, .inputs = &.{30, 6}, .rows = 3, .cols = 1, .aux = 0, .vec = false },
-    .{ .op = .add, .inputs = &.{29, 31}, .rows = 3, .cols = 1, .aux = 0, .vec = false },
-    .{ .op = .sub, .inputs = &.{5, 32}, .rows = 3, .cols = 1, .aux = 0, .vec = false },
-    .{ .op = .matmul, .inputs = &.{27, 33}, .rows = 3, .cols = 1, .aux = 0, .vec = false },
-    .{ .op = .add, .inputs = &.{11, 34}, .rows = 3, .cols = 1, .aux = 0, .vec = false },
-    .{ .op = .cst, .inputs = &.{}, .rows = 3, .cols = 3, .aux = 99, .vec = false },
-    .{ .op = .cst, .inputs = &.{}, .rows = 3, .cols = 3, .aux = 108, .vec = false },
-    .{ .op = .matmul, .inputs = &.{27, 37}, .rows = 3, .cols = 3, .aux = 0, .vec = false },
-    .{ .op = .sub, .inputs = &.{36, 38}, .rows = 3, .cols = 3, .aux = 0, .vec = false },
-    .{ .op = .matmul, .inputs = &.{39, 17}, .rows = 3, .cols = 3, .aux = 0, .vec = false },
-    .{ .op = .reshape, .inputs = &.{35}, .rows = 3, .cols = 1, .aux = 0, .vec = true },
-    .{ .op = .sub, .inputs = &.{1, 41}, .rows = 3, .cols = 1, .aux = 0, .vec = true },
-    .{ .op = .cst, .inputs = &.{}, .rows = 3, .cols = 3, .aux = 117, .vec = false },
-    .{ .op = .matmul, .inputs = &.{43, 42}, .rows = 3, .cols = 1, .aux = 0, .vec = true },
-    .{ .op = .clip, .inputs = &.{44}, .rows = 3, .cols = 1, .aux = 0, .vec = true },
-    .{ .op = .out, .inputs = &.{45}, .rows = 3, .cols = 1, .aux = 0, .vec = true },
-    .{ .op = .out, .inputs = &.{35}, .rows = 3, .cols = 1, .aux = 1, .vec = false },
-    .{ .op = .out, .inputs = &.{40}, .rows = 3, .cols = 3, .aux = 2, .vec = false },
-    .{ .op = .out, .inputs = &.{45}, .rows = 3, .cols = 1, .aux = 3, .vec = true },
+    .{ .op = .matmul, .inputs = &.{22, 21}, .rows = 3, .cols = 1, .aux = 0, .vec = true },
+    .{ .op = .clip, .inputs = &.{23}, .rows = 3, .cols = 1, .aux = 0, .vec = true },
+    .{ .op = .out, .inputs = &.{24}, .rows = 3, .cols = 1, .aux = 0, .vec = true },
+    .{ .op = .out, .inputs = &.{19}, .rows = 3, .cols = 1, .aux = 1, .vec = false },
+    .{ .op = .out, .inputs = &.{24}, .rows = 3, .cols = 1, .aux = 2, .vec = true },
 };
 
 pub const const_blob = [_]f64{
-    0x1.0000000000000p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x1.0000000000000p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x1.0000000000000p+0, 0x1.47ae147ae147bp-6, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x1.47ae147ae147bp-6, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x1.47ae147ae147bp-6, 0x1.0000000000000p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x1.0000000000000p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x1.0000000000000p+0, 0x1.0000000000000p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x1.0000000000000p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x1.0000000000000p+0, 0x1.47ae147ae147bp-7, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x1.47ae147ae147bp-7, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x1.47ae147ae147bp-7, 0x1.0000000000000p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x1.0000000000000p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x1.0000000000000p+0, 0x1.0000000000000p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x1.0000000000000p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x1.0000000000000p+0, 0x1.999999999999ap-4, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x1.999999999999ap-4, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x1.999999999999ap-4, 0x1.0000000000000p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x1.0000000000000p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x1.0000000000000p+0, 0x1.0000000000000p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x1.0000000000000p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x1.0000000000000p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x1.0000000000000p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x1.0000000000000p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x1.0000000000000p+0, 0x1.0000000000000p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x1.0000000000000p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x1.0000000000000p+0, 0x1.72a8f38fccafdp+4, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x1.72a8f38fccafdp+4, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x1.1e9b2675a6625p+4,
+    0x1.0000000000000p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x1.0000000000000p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x1.0000000000000p+0, 0x1.47ae147ae147bp-6, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x1.47ae147ae147bp-6, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x1.47ae147ae147bp-6, 0x1.0000000000000p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x1.0000000000000p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x1.0000000000000p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x1.999999999999ap-1, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x1.999999999999ap-1, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x1.999999999999ap-1, 0x1.72a8f38fccafdp+4, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x1.72a8f38fccafdp+4, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x1.1e9b2675a6625p+4,
 };
 
 pub const clip_lo = [_]f64{-0x1.0000000000000p-1, -0x1.0000000000000p-1, -0x1.0000000000000p+0};
 pub const clip_hi = [_]f64{0x1.0000000000000p-1, 0x1.0000000000000p-1, 0x1.0000000000000p+0};
 
 pub const output_offsets = [_]usize{0};
-pub const state_offsets = [_]usize{0, 3, 12};
+pub const state_offsets = [_]usize{0, 3};
 
