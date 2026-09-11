@@ -31,6 +31,76 @@ def _make_arm(bk, dt=0.01):
     )
 
 
+def _rotmat_to_quat(R):
+    """Rotation matrix -> quaternion (w, x, y, z)."""
+    tr = np.trace(R)
+    if tr > 0:
+        s = np.sqrt(tr + 1.0) * 2.0
+        w = 0.25 * s
+        x = (R[2, 1] - R[1, 2]) / s
+        y = (R[0, 2] - R[2, 0]) / s
+        z = (R[1, 0] - R[0, 1]) / s
+    elif R[0, 0] > R[1, 1] and R[0, 0] > R[2, 2]:
+        s = np.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2]) * 2.0
+        w = (R[2, 1] - R[1, 2]) / s
+        x = 0.25 * s
+        y = (R[0, 1] + R[1, 0]) / s
+        z = (R[0, 2] + R[2, 0]) / s
+    elif R[1, 1] > R[2, 2]:
+        s = np.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2]) * 2.0
+        w = (R[0, 2] - R[2, 0]) / s
+        x = (R[0, 1] + R[1, 0]) / s
+        y = 0.25 * s
+        z = (R[1, 2] + R[2, 1]) / s
+    else:
+        s = np.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1]) * 2.0
+        w = (R[1, 0] - R[0, 1]) / s
+        x = (R[0, 2] + R[2, 0]) / s
+        y = (R[1, 2] + R[2, 1]) / s
+        z = 0.25 * s
+    return np.array([w, x, y, z])
+
+
+def _make_faithful_engine(bk, arm):
+    """A mock engine that reports EE pose from the arm's own FK/Jacobian.
+
+    Stands in for MuJoCo: ``set_joint_qpos`` mutates a joint buffer, and
+    ``get_body_xpos`` / ``get_body_xquat`` / ``compute_jacobian_for_joints``
+    are derived from the arm's analytic forward kinematics and geometric
+    Jacobian, so 6D engine IK can be exercised without MuJoCo.
+    """
+    engine = MagicMock()
+    engine.backend = bk
+    engine.body_names = ["Moving_Jaw_08d-v1", "base"]
+    engine.get_body_id.return_value = 0
+    joints = np.zeros(arm.num_dof)
+
+    def set_qpos(name, val):
+        joints[arm._joint_names.index(name)] = float(_to_np(val, bk))
+
+    def get_qpos(name):
+        return joints[arm._joint_names.index(name)]
+
+    def get_xpos(name):
+        T, _, _ = arm.forward_kinematics(bk.array(joints))
+        return _to_np(T[:3, 3], bk)
+
+    def get_xquat(name):
+        T, _, _ = arm.forward_kinematics(bk.array(joints))
+        return _rotmat_to_quat(_to_np(T[:3, :3], bk))
+
+    def get_jac(name, joint_names):
+        return _to_np(arm._jacobian(bk.array(joints)), bk)
+
+    engine.set_joint_qpos.side_effect = set_qpos
+    engine.get_joint_qpos.side_effect = get_qpos
+    engine.get_body_xpos.side_effect = get_xpos
+    engine.get_body_xquat.side_effect = get_xquat
+    engine.compute_jacobian_for_joints.side_effect = get_jac
+    engine.forward.side_effect = lambda: None
+    return engine
+
+
 class TestArmRobotModel:
     """Verify ArmRobot state-space model and state access."""
 
@@ -252,19 +322,21 @@ class TestArmRobotInvalidInputs:
             arm.engine_ik(bk.array([0.1, 0.0, 0.0]))
 
 
+@pytest.fixture
+def mock_engine(bk):
+    engine = MagicMock()
+    engine.backend = bk
+    engine.get_body_xpos.return_value = np.array([0.1, 0.0, 0.0])
+    engine.get_body_id.return_value = 0
+    engine.body_names = ["Moving_Jaw_08d-v1", "base"]
+    engine.get_joint_qpos.return_value = 0.0
+    engine.compute_jacobian_for_joints.return_value = np.eye(6)
+    engine.get_body_xquat.return_value = np.array([1.0, 0.0, 0.0, 0.0])
+    return engine
+
+
 class TestArmRobotPhysicsEngine:
     """Verify ArmRobot behavior with a mock physics engine attached."""
-
-    @pytest.fixture
-    def mock_engine(self, bk):
-        engine = MagicMock()
-        engine.backend = bk
-        engine.get_body_xpos.return_value = np.array([0.1, 0.0, 0.0])
-        engine.get_body_id.return_value = 0
-        engine.body_names = ["Moving_Jaw_08d-v1", "base"]
-        engine.get_joint_qpos.return_value = 0.0
-        engine.compute_jacobian_for_joints.return_value = np.eye(6)
-        return engine
 
     def test_physics_engine_attaches(self, bk, mock_engine):
         """Attaching a physics engine inherits its backend and reads EE position."""
@@ -314,3 +386,119 @@ class TestArmRobotPhysicsEngine:
         arm = _make_arm(bk)
         name = arm._find_ee_body_name(mock_engine)
         assert name == "base"
+
+
+class TestQuatEuler:
+    """Verify quaternion -> ZYX Euler conversion (the engine orientation primitive)."""
+
+    def test_identity(self, bk):
+        from shinro.plants.armrobot import _quat_to_euler_zyx
+        e = _quat_to_euler_zyx(np.array([1.0, 0.0, 0.0, 0.0]))
+        assert np.allclose(e, [0.0, 0.0, 0.0], atol=1e-12)
+
+    def test_pure_yaw(self, bk):
+        from shinro.plants.armrobot import _quat_to_euler_zyx
+        q = np.array([np.cos(np.pi / 4), 0.0, 0.0, np.sin(np.pi / 4)])  # 90 deg about z
+        e = _quat_to_euler_zyx(q)
+        assert np.allclose(e, [0.0, 0.0, np.pi / 2], atol=1e-9)
+
+    def test_pure_pitch(self, bk):
+        from shinro.plants.armrobot import _quat_to_euler_zyx
+        q = np.array([np.cos(np.pi / 6), 0.0, np.sin(np.pi / 6), 0.0])  # 60 deg about y
+        e = _quat_to_euler_zyx(q)
+        assert np.allclose(e, [0.0, np.pi / 3, 0.0], atol=1e-9)
+
+    def test_pure_roll(self, bk):
+        from shinro.plants.armrobot import _quat_to_euler_zyx
+        q = np.array([np.cos(np.pi / 8), np.sin(np.pi / 8), 0.0, 0.0])  # 45 deg about x
+        e = _quat_to_euler_zyx(q)
+        assert np.allclose(e, [np.pi / 4, 0.0, 0.0], atol=1e-9)
+
+    def test_matches_scipy(self, bk):
+        from scipy.spatial.transform import Rotation
+        from shinro.plants.armrobot import _quat_to_euler_zyx
+        rng = np.random.default_rng(0)
+        for _ in range(20):
+            q_xyzw = Rotation.random(random_state=rng).as_quat()
+            e = _quat_to_euler_zyx(np.roll(q_xyzw, 1))  # (x,y,z,w) -> (w,x,y,z)
+            roll, pitch, yaw = e
+            Rx = np.array([[1, 0, 0], [0, np.cos(roll), -np.sin(roll)], [0, np.sin(roll), np.cos(roll)]])
+            Ry = np.array([[np.cos(pitch), 0, np.sin(pitch)], [0, 1, 0], [-np.sin(pitch), 0, np.cos(pitch)]])
+            Rz = np.array([[np.cos(yaw), -np.sin(yaw), 0], [np.sin(yaw), np.cos(yaw), 0], [0, 0, 1]])
+            R_mine = Rz @ Ry @ Rx
+            R_ref = Rotation.from_quat(q_xyzw).as_matrix()
+            assert np.allclose(R_mine, R_ref, atol=1e-9)
+
+
+class TestArmRobotOrientation:
+    """Verify the 6D engine path: honest state, orientation error, 6D IK."""
+
+    def test_get_state_returns_engine_orientation(self, bk, mock_engine):
+        mock_engine.get_body_xquat.return_value = np.array([np.cos(np.pi / 4), 0.0, 0.0, np.sin(np.pi / 4)])
+        arm = _make_arm(bk)
+        arm.physics_engine(mock_engine)
+        state = arm.get_state()
+        assert np.allclose(_to_np(state, bk)[3:], [0.0, 0.0, np.pi / 2], atol=1e-6)
+
+    def test_attach_seeds_orientation(self, bk, mock_engine):
+        mock_engine.get_body_xquat.return_value = np.array([np.cos(np.pi / 4), 0.0, 0.0, np.sin(np.pi / 4)])
+        arm = _make_arm(bk)
+        arm.physics_engine(mock_engine)
+        assert np.allclose(_to_np(arm.state, bk)[3:], [0.0, 0.0, np.pi / 2], atol=1e-6)
+
+    def test_orientation_error_zero_when_aligned(self, bk):
+        arm = _make_arm(bk)
+        e = arm._orientation_error(bk.array([0.1, 0.2, 0.3]), bk.array([0.1, 0.2, 0.3]))
+        assert np.allclose(_to_np(e, bk), 0.0, atol=1e-9)
+
+    def test_orientation_error_pure_yaw(self, bk):
+        arm = _make_arm(bk)
+        e = arm._orientation_error(bk.array([0.0, 0.0, np.pi / 2]), bk.array([0.0, 0.0, 0.0]))
+        assert np.allclose(_to_np(e, bk), [0.0, 0.0, np.pi / 2], atol=1e-6)
+
+    def test_step_engine_uses_6d_path_when_rotating(self, bk, mock_engine):
+        arm = _make_arm(bk)
+        arm.physics_engine(mock_engine)
+        arm.engine_ik = MagicMock(wraps=arm.engine_ik)
+        u = bk.array([0.0, 0.0, 0.0, 0.1, 0.0, 0.0])
+        arm.step(u)
+        assert "target_euler" in arm.engine_ik.call_args.kwargs
+
+    def test_step_engine_keeps_3d_path_translation_only(self, bk, mock_engine):
+        arm = _make_arm(bk)
+        arm.physics_engine(mock_engine)
+        arm.engine_ik = MagicMock(wraps=arm.engine_ik)
+        u = bk.array([0.1, 0.0, 0.0, 0.0, 0.0, 0.0])
+        arm.step(u)
+        assert "target_euler" not in arm.engine_ik.call_args.kwargs
+
+    def test_engine_ik_6d_reaches_pose(self, bk):
+        from scipy.spatial.transform import Rotation
+
+        arm = _make_arm(bk)
+        engine = _make_faithful_engine(bk, arm)
+        arm.physics_engine(engine)
+        q_known = bk.array([0.3, -0.2, 0.1, 0.0, 0.0, 0.0])
+        T_known, _, _ = arm.forward_kinematics(q_known)
+        target_ee = T_known[:3, 3]
+        R = _to_np(T_known[:3, :3], bk)
+        target_euler = bk.array(Rotation.from_matrix(R).as_euler("zyx")[::-1].copy())  # [roll, pitch, yaw]
+        q = arm.engine_ik(target_ee, target_euler=target_euler)
+        T, _, _ = arm.forward_kinematics(q)
+        pos_err = np.linalg.norm(_to_np(T[:3, 3], bk) - _to_np(target_ee, bk))
+        assert pos_err < 1e-3
+        R_target = _to_np(arm._pose_to_transform(bk.hstack([bk.zeros(3), target_euler]))[:3, :3], bk)
+        R_reached = _to_np(T[:3, :3], bk)
+        R_err = R_target @ R_reached.T
+        angle = np.arccos(np.clip((np.trace(R_err) - 1) / 2, -1, 1))
+        assert angle < 1e-3
+
+    def test_engine_ik_3d_still_reaches_position(self, bk):
+        arm = _make_arm(bk)
+        engine = _make_faithful_engine(bk, arm)
+        arm.physics_engine(engine)
+        target_ee = bk.array([0.1, 0.0, 0.0])
+        q = arm.engine_ik(target_ee)
+        T, _, _ = arm.forward_kinematics(q)
+        pos_err = np.linalg.norm(_to_np(T[:3, 3], bk) - _to_np(target_ee, bk))
+        assert pos_err < 1e-3

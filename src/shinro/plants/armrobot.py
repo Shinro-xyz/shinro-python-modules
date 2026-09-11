@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import warnings
 
 import numpy as np
 
@@ -6,6 +7,26 @@ from shinro.components import PhysicsEngine, Plant
 from shinro.factories.registry import register_plant, register_plant_detector
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend
 from shinro.utils.config_spec import strip_runtime_keys
+
+
+def _quat_to_euler_zyx(q) -> np.ndarray:
+    """Convert a quaternion (w, x, y, z) to ZYX Euler angles [roll, pitch, yaw].
+
+    Matches the ZYX convention of :meth:`ArmRobot._pose_to_transform`
+    (``R = Rz(yaw) @ Ry(pitch) @ Rx(roll)``). Gimbal lock (pitch = ±90 deg)
+    resolves roll to zero, matching the standard aerospace convention.
+    """
+    w, x, y, z = q
+    sinp = 2.0 * (w * y - z * x)
+    if np.abs(sinp) >= 1.0:
+        pitch = np.copysign(np.pi / 2.0, sinp)
+        roll = 0.0
+        yaw = np.arctan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+    else:
+        pitch = np.arcsin(sinp)
+        roll = np.arctan2(2.0 * (w * x + y * z), 1.0 - 2.0 * (x * x + y * y))
+        yaw = np.arctan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+    return np.array([roll, pitch, yaw])
 
 
 @dataclass(frozen=True)
@@ -87,6 +108,12 @@ class ArmRobot(Plant):
         pos = self._engine.get_body_xpos(self._ee_body_name)
         return self.bk.array(pos)
 
+    def _get_ee_euler(self):
+        assert self._engine is not None
+        assert self._ee_body_name is not None
+        quat = self._engine.get_body_xquat(self._ee_body_name)
+        return self.bk.array(_quat_to_euler_zyx(np.asarray(quat, dtype=np.float64)))
+
     def _get_ee_jacobian(self):
         assert self._engine is not None
         assert self._ee_body_name is not None
@@ -112,7 +139,7 @@ class ArmRobot(Plant):
             assert self._engine is not None
             self._engine.forward()
             ee = self._get_ee_pos()
-            self.state = self.bk.hstack([ee, self.bk.zeros(3)])
+            self.state = self.bk.hstack([ee, self._get_ee_euler()])
         else:
             T_home, _, _ = self.forward_kinematics(self.bk.zeros(self.num_dof))
             pos = T_home[:3, 3]
@@ -139,7 +166,7 @@ class ArmRobot(Plant):
     def get_state(self):
         if self._engine is not None:
             ee = self._get_ee_pos()
-            return self.bk.hstack([ee, self.bk.zeros(3)])
+            return self.bk.hstack([ee, self._get_ee_euler()])
         return self.bk.copy(self.state)
 
     def get_model(self):
@@ -176,7 +203,8 @@ class ArmRobot(Plant):
         """Execute one control step.
 
         When a physics engine is attached:
-        - Integrates the Cartesian velocity twist to get a target EE position.
+        - Integrates the Cartesian velocity twist to get a target EE pose
+          (position + orientation, ZYX Euler rates — same math as standalone).
         - Runs ``engine_ik()`` to compute joint angles.
         - Sends joint angles to the engine via ``set_joint_ctrl``.
 
@@ -194,12 +222,17 @@ class ArmRobot(Plant):
         if self._engine is not None:
             current_ee = self._get_ee_pos()
             target_ee = current_ee + u[:3] * self.dt
-            joint_targets = self.engine_ik(target_ee)
+            if np.any(np.abs(self.bk.to_numpy(u[3:])) > 1e-12):
+                current_euler = self._get_ee_euler()
+                target_euler = current_euler + u[3:6] * self.dt
+                joint_targets = self.engine_ik(target_ee, target_euler=target_euler)
+            else:
+                joint_targets = self.engine_ik(target_ee)
             for name, val in zip(self._joint_names, joint_targets):
                 self._engine.set_joint_ctrl(name, val)
             self._last_joints = self.bk.array([self._engine.get_joint_qpos(n) for n in self._joint_names])
             ee = self._get_ee_pos()
-            self.state = self.bk.hstack([ee, self.bk.zeros(3)])
+            self.state = self.bk.hstack([ee, self._get_ee_euler()])
             return self._last_joints
 
         self.state = self.state + self.dt * u
@@ -341,27 +374,48 @@ class ArmRobot(Plant):
 
         return q
 
+    def _orientation_error(self, target_euler, current_euler):
+        """World-frame orientation error (axis-angle 3-vector) between two ZYX Euler poses.
+
+        Computes the log map of ``R_target @ R_current.T`` — the same
+        rotation-matrix error the standalone :meth:`inverse_kinematics` uses,
+        so the engine path and the standalone path share one convention.
+        """
+        R_target = self._pose_to_transform(self.bk.hstack([self.bk.zeros(3), target_euler]))[:3, :3]
+        R_current = self._pose_to_transform(self.bk.hstack([self.bk.zeros(3), current_euler]))[:3, :3]
+        R_err = R_target @ R_current.T
+        angle = self.bk.arccos(self.bk.clip((self.bk.trace(R_err) - 1) / 2, -1, 1))
+        axis = self.bk.array([R_err[2, 1] - R_err[1, 2], R_err[0, 2] - R_err[2, 0], R_err[1, 0] - R_err[0, 1]])
+        if self.bk.norm(axis) > 1e-6:
+            return (axis / self.bk.norm(axis)) * angle
+        return self.bk.zeros(3)
+
     def engine_ik(
         self,
         target_ee,
+        target_euler=None,
         max_iters: int = 20,
         lam: float = 0.01,
         max_dq: float = 0.5,
     ):
         """Compute inverse kinematics using the physics engine's Jacobian.
 
-        Uses the engine's mesh-accurate Jacobian (position rows only) with
-        damped least squares. Sets joint positions in the engine and calls
-        ``forward()`` each iteration.
+        Uses the engine's mesh-accurate Jacobian with damped least squares.
+        With ``target_euler`` given, solves the full 6D pose error (position +
+        orientation, world-frame log map); without it, solves position only
+        (the historical 3D path, byte-identical to previous behavior). Sets
+        joint positions in the engine and calls ``forward()`` each iteration.
 
         Args:
             target_ee: Target end-effector position (3,).
+            target_euler: Optional target orientation as ZYX Euler [roll,
+                pitch, yaw] (3,). When given, the 6D pose error is minimized.
             max_iters: Maximum IK iterations.
             lam: Damping factor for the least squares solve.
             max_dq: Maximum joint angle change per iteration.
 
         Returns:
-            Joint angle vector (num_dof,) that achieves the target position.
+            Joint angle vector (num_dof,) that achieves the target pose.
 
         Raises:
             RuntimeError: If no physics engine is attached.
@@ -370,7 +424,13 @@ class ArmRobot(Plant):
             raise RuntimeError("engine_ik requires a physics engine (call physics_engine first)")
 
         current_ee = self._get_ee_pos()
-        error = target_ee - current_ee
+        if target_euler is None:
+            error = target_ee - current_ee
+            jac_rows = 3
+        else:
+            current_euler = self._get_ee_euler()
+            error = self.bk.hstack([target_ee - current_ee, self._orientation_error(target_euler, current_euler)])
+            jac_rows = 6
 
         if self.bk.norm(error) < 0.001:
             return self.bk.array([self._engine.get_joint_qpos(n) for n in self._joint_names])
@@ -378,10 +438,10 @@ class ArmRobot(Plant):
         current_joints = self.bk.array([self._engine.get_joint_qpos(n) for n in self._joint_names])
 
         for _ in range(max_iters):
-            J = self._get_ee_jacobian()[:3, :]
+            J = self._get_ee_jacobian()[:jac_rows, :]
 
             JJT = J @ J.T
-            dq = J.T @ self.bk.solve(JJT + lam**2 * self.bk.eye(3), error)
+            dq = J.T @ self.bk.solve(JJT + lam**2 * self.bk.eye(jac_rows), error)
             dq = self.bk.clip(dq, -max_dq, max_dq)
             current_joints = current_joints + dq
             current_joints = self.bk.clip(current_joints, self.joint_limits[:, 0], self.joint_limits[:, 1])
@@ -391,7 +451,11 @@ class ArmRobot(Plant):
             self._engine.forward()
 
             current_ee = self._get_ee_pos()
-            error = target_ee - current_ee
+            if target_euler is None:
+                error = target_ee - current_ee
+            else:
+                current_euler = self._get_ee_euler()
+                error = self.bk.hstack([target_ee - current_ee, self._orientation_error(target_euler, current_euler)])
             if self.bk.norm(error) < 0.001:
                 break
 

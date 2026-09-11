@@ -90,3 +90,33 @@ class TestFeedforwardBranch:
         )
         with pytest.raises(ValueError, match="sim-backed"):
             scenario.run()
+
+    def test_phase_schedule_drives_jaw_explicitly(self):
+        """The jaw setpoint is applied via the engine actuator, not twist channel 5."""
+        from unittest.mock import MagicMock
+
+        from shinro.factories.scenario_factory import Scenario
+        from shinro.simulation.runner import iter_phase_schedule
+
+        engine = MagicMock()
+        sim = MagicMock()
+        sim.engine = engine
+        arm_plant = MagicMock()
+        base_plant = MagicMock()
+        sim.get_plant.side_effect = lambda name: {"arm": arm_plant, "base": base_plant}[name]
+
+        scenario = Scenario(
+            sim=sim,
+            plant=None,
+            controller=None,
+            estimator=None,
+            trajectory={"arm": [[0.0] * 6, [0.0] * 6], "base": [[0.0] * 3, [0.0] * 3], "jaw": [0.0, 0.5]},
+            config={"scenario": {"dt": 0.02}, "plant": {"jaw_joint": "Jaw"}},
+        )
+        list(iter_phase_schedule(scenario))
+
+        jaw_calls = [c.args for c in engine.set_joint_ctrl.call_args_list]
+        assert ("Jaw", 0.0) in jaw_calls
+        assert ("Jaw", 0.5) in jaw_calls
+        twists = [c.args[0] for c in arm_plant.step.call_args_list]
+        assert all(len(t) == 6 for t in twists)

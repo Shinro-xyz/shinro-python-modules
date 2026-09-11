@@ -12,6 +12,7 @@ free_joint = true
 
 [plant]
 name = "base"
+jaw_joint = "Jaw"
 
 [trajectory]
 type = "phase_list"

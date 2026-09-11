@@ -124,6 +124,11 @@ class PhysicsEngine(ABC):
         pass
 
     @abstractmethod
+    def get_body_xquat(self, name: str) -> np.ndarray:
+        """Get 3D orientation of a body by name as a quaternion (w, x, y, z)."""
+        pass
+
+    @abstractmethod
     def get_body_id(self, name: str) -> int:
         """Get the internal body ID for a named body. Returns -1 if not found."""
         pass

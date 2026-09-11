@@ -358,9 +358,10 @@ def iter_phase_schedule(scenario, steps: int | None = None) -> Iterator[StepReco
     """Run a ``phase_list`` schedule feedforward through the composed RobotSim.
 
     The schedule is a dict of ``{"arm", "base", "jaw"}`` per-step setpoints:
-    the arm setpoint is the 6D twist passed to ``sim.arm.step()`` (jaw injected
-    as the last channel), the base setpoint the 3D velocity for
-    ``sim.base.step()``.
+    the arm setpoint is the 6D twist passed to ``sim.arm.step()``, the base
+    setpoint the 3D velocity for ``sim.base.step()``, and the jaw setpoint is
+    applied directly to the engine actuator (``[plant].jaw_joint``, default
+    ``"Jaw"``) — it is not part of the arm twist.
 
     Args:
         scenario: Composed scenario (its trajectory must be a phase dict).
@@ -385,7 +386,6 @@ def iter_phase_schedule(scenario, steps: int | None = None) -> Iterator[StepReco
 
     for step in range(n):
         arm_twist = np.asarray(schedule["arm"][step], dtype=np.float64).flatten().copy()
-        arm_twist[5] = float(schedule["jaw"][step])
         base_vel = np.asarray(schedule["base"][step], dtype=np.float64).flatten()
 
         arm_plant = scenario.sim.get_plant("arm")
@@ -393,6 +393,9 @@ def iter_phase_schedule(scenario, steps: int | None = None) -> Iterator[StepReco
 
         arm_plant.step(arm_twist)
         base_plant.step(base_vel)
+        if "jaw" in schedule:
+            jaw_joint = scenario.config.get("plant", {}).get("jaw_joint", "Jaw")
+            scenario.sim.engine.set_joint_ctrl(jaw_joint, float(schedule["jaw"][step]))
         scenario.sim.step()
 
         arm_state = np.asarray(arm_plant.get_state(), dtype=np.float64).flatten()

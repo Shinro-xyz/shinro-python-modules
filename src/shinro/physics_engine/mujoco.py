@@ -82,6 +82,10 @@ class MuJoCoEngine(PhysicsEngine):
         bid = self._body_name_to_id[name]
         return self.data.xpos[bid].copy()
 
+    def get_body_xquat(self, name: str) -> np.ndarray:
+        bid = self._body_name_to_id[name]
+        return self.data.xquat[bid].copy()
+
     def get_body_id(self, name: str) -> int:
         bid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, name)
         if bid >= 0:
