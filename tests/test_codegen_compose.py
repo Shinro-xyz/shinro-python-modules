@@ -48,7 +48,7 @@ def _load_lqr() -> LQR:
 
 
 def _load_pid() -> PIDController:
-    return ControllerFactory("configs/controllers/pid_arm.toml").create(backend=NumpyBackend())
+    return ControllerFactory("tests/fixtures/configs/controllers/pid_arm.toml").create(backend=NumpyBackend())
 
 
 # Input limits from base_tracking.toml's [scenario.input_limits].

@@ -15,15 +15,15 @@ initial_state = [0.2, 0.0]
 
 [controller]
 type = "LQR"
-config = "configs/controllers/lqr_pendulum.toml"
+config = "tests/fixtures/configs/controllers/lqr_pendulum.toml"
 
 [estimator]
 type = "KalmanFilter"
-config = "configs/estimators/kalman_pendulum.toml"
+config = "tests/fixtures/configs/estimators/kalman_pendulum.toml"
 
 [trajectory]
 type = "waypoints"
-config = "configs/trajectories/pendulum_upright.toml"
+config = "tests/fixtures/configs/trajectories/pendulum_upright.toml"
 
 [noise.measurement]
 std = [0.005, 0.02]

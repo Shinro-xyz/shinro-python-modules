@@ -56,8 +56,8 @@ class TestArmCartesian:
 @pytest.mark.parametrize(
     ("est_type", "estimator_cfg"),
     [
-        ("KalmanFilter", "configs/estimators/kalman_arm.toml"),
-        ("LuenbergerObserver", "configs/estimators/luenberger_arm.toml"),
+        ("KalmanFilter", "tests/fixtures/configs/estimators/kalman_arm.toml"),
+        ("LuenbergerObserver", "tests/fixtures/configs/estimators/luenberger_arm.toml"),
     ],
 )
 class TestArmEstimatorVariants:
@@ -86,7 +86,7 @@ class TestArmEstimatorVariants:
 
                 [controller]
                 type = "PID"
-                config = "configs/controllers/pid_arm.toml"
+                config = "tests/fixtures/configs/controllers/pid_arm.toml"
 
                 [estimator]
                 type = "{est_type}"
@@ -94,7 +94,7 @@ class TestArmEstimatorVariants:
 
                 [trajectory]
                 type = "waypoints"
-                config = "configs/trajectories/arm_lift.toml"
+                config = "tests/fixtures/configs/trajectories/arm_lift.toml"
 
                 [sim]
                 config = "robot_config.toml"

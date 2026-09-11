@@ -20,7 +20,7 @@ CONFIG = REPO_ROOT / "src" / "shinro" / "configs"
 
 LQR = str(CONFIG / "controllers" / "lqr_base.toml")
 KF = str(CONFIG / "estimators" / "kalman_base.toml")
-PID = str(CONFIG / "controllers" / "pid_arm.toml")
+PID = str(REPO_ROOT / "tests" / "fixtures" / "configs" / "controllers" / "pid_arm.toml")
 TRAJ = str(CONFIG / "trajectories" / "base_straight.toml")
 
 

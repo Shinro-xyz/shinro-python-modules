@@ -55,8 +55,8 @@ class TestCartPoleBalance:
 @pytest.mark.parametrize(
     ("est_type", "estimator_cfg"),
     [
-        ("KalmanFilter", "configs/estimators/kalman_cartpole.toml"),
-        ("LuenbergerObserver", "configs/estimators/luenberger_cartpole.toml"),
+        ("KalmanFilter", "tests/fixtures/configs/estimators/kalman_cartpole.toml"),
+        ("LuenbergerObserver", "tests/fixtures/configs/estimators/luenberger_cartpole.toml"),
     ],
 )
 class TestCartPoleEstimatorVariants:
@@ -84,7 +84,7 @@ class TestCartPoleEstimatorVariants:
 
                 [controller]
                 type = "LQR"
-                config = "configs/controllers/lqr_cartpole.toml"
+                config = "tests/fixtures/configs/controllers/lqr_cartpole.toml"
 
                 [estimator]
                 type = "{est_type}"
@@ -92,7 +92,7 @@ class TestCartPoleEstimatorVariants:
 
                 [trajectory]
                 type = "waypoints"
-                config = "configs/trajectories/cartpole_upright.toml"
+                config = "tests/fixtures/configs/trajectories/cartpole_upright.toml"
 
                 [noise.measurement]
                 std = [0.005, 0.01, 0.005, 0.02]

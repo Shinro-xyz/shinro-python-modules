@@ -416,6 +416,7 @@ class TestQuatEuler:
 
     def test_matches_scipy(self, bk):
         from scipy.spatial.transform import Rotation
+
         from shinro.plants.armrobot import _quat_to_euler_zyx
         rng = np.random.default_rng(0)
         for _ in range(20):

@@ -1,7 +1,6 @@
-# Stabilize the CartPole at the upright equilibrium.
 type = "waypoints"
 dt = 0.01
 
 [[waypoints]]
 position = [0.0, 0.0, 0.0, 0.0]
-duration = 20.0
+duration = 12.0

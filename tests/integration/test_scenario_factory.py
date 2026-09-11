@@ -111,7 +111,7 @@ class TestDimensionValidation:
 
                 [estimator]
                 type = "KalmanFilter"
-                config = "configs/estimators/kalman_arm.toml"
+                config = "tests/fixtures/configs/estimators/kalman_arm.toml"
 
                 [trajectory]
                 type = "waypoints"
@@ -186,7 +186,7 @@ class TestPlantOnlyValidation:
 
                 [trajectory]
                 type = "waypoints"
-                config = "configs/trajectories/pendulum_upright.toml"
+                config = "tests/fixtures/configs/trajectories/pendulum_upright.toml"
                 """
             )
         )
@@ -212,7 +212,7 @@ class TestPlantOnlyValidation:
 
                 [trajectory]
                 type = "waypoints"
-                config = "configs/trajectories/pendulum_upright.toml"
+                config = "tests/fixtures/configs/trajectories/pendulum_upright.toml"
                 """
             )
         )
@@ -238,7 +238,7 @@ class TestPlantOnlyValidation:
 
                 [trajectory]
                 type = "waypoints"
-                config = "configs/trajectories/pendulum_upright.toml"
+                config = "tests/fixtures/configs/trajectories/pendulum_upright.toml"
                 """
             )
         )
@@ -265,7 +265,7 @@ class TestPlantOnlyValidation:
 
                 [trajectory]
                 type = "waypoints"
-                config = "configs/trajectories/pendulum_upright.toml"
+                config = "tests/fixtures/configs/trajectories/pendulum_upright.toml"
                 """
             )
         )

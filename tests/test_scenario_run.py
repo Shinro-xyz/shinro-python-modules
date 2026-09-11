@@ -10,7 +10,7 @@ import pytest
 from shinro.factories import ScenarioFactory
 
 BALANCE = "tests/integration/scenarios/cartpole_balance.toml"
-DERIVED = "configs/scenarios/cartpole_lqr_kf_derived.toml"
+DERIVED = "tests/fixtures/configs/scenarios/cartpole_lqr_kf_derived.toml"
 
 
 @pytest.fixture()

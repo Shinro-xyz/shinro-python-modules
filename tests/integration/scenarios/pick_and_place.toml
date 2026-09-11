@@ -16,7 +16,7 @@ jaw_joint = "Jaw"
 
 [trajectory]
 type = "phase_list"
-config = "configs/trajectories/pick_and_place.toml"
+config = "tests/fixtures/configs/trajectories/pick_and_place.toml"
 
 [sim]
 config = "robot_config.toml"

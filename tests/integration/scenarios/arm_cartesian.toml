@@ -15,15 +15,15 @@ name = "arm"
 
 [controller]
 type = "PID"
-config = "configs/controllers/pid_arm.toml"
+config = "tests/fixtures/configs/controllers/pid_arm.toml"
 
 [estimator]
 type = "KalmanFilter"
-config = "configs/estimators/kalman_arm.toml"
+config = "tests/fixtures/configs/estimators/kalman_arm.toml"
 
 [trajectory]
 type = "waypoints"
-config = "configs/trajectories/arm_lift.toml"
+config = "tests/fixtures/configs/trajectories/arm_lift.toml"
 
 [sim]
 config = "robot_config.toml"

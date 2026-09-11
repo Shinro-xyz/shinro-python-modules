@@ -1,4 +1,5 @@
+# Kalman filter for CartPole (4 states). dt is inherited from the plant.
 type = "KalmanFilter"
 name = "cartpole_estimator"
-process_noise = [0.001, 0.01, 0.001, 0.01]
-measurement_noise = [0.005, 0.05, 0.005, 0.05]
+process_noise = [0.01, 0.01, 0.01, 0.01]
+measurement_noise = [0.1, 0.1, 0.1, 0.1]

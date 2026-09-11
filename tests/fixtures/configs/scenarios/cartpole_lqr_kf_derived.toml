@@ -15,11 +15,11 @@ config = "configs/plants/cartpole.toml"
 
 [controller]
 type = "LQR"
-config = "configs/controllers/lqr_cartpole.toml"
+config = "tests/fixtures/configs/controllers/lqr_cartpole.toml"
 
 [estimator]
 type = "KalmanFilter"
-config = "configs/estimators/kalman_cartpole.toml"
+config = "tests/fixtures/configs/estimators/kalman_cartpole.toml"
 
 [scenario]
 name = "cartpole_lqr_kf_derived"

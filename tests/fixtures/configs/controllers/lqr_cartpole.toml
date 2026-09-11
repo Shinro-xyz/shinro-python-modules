@@ -1,0 +1,4 @@
+type = "LQR"
+name = "cartpole_controller"
+state_cost = [20.0, 2.0, 100.0, 10.0]
+control_cost = [0.1]

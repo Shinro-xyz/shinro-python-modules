@@ -48,8 +48,8 @@ class TestPendulumBalance:
 @pytest.mark.parametrize(
     ("est_type", "estimator_cfg"),
     [
-        ("KalmanFilter", "configs/estimators/kalman_pendulum.toml"),
-        ("LuenbergerObserver", "configs/estimators/luenberger_pendulum.toml"),
+        ("KalmanFilter", "tests/fixtures/configs/estimators/kalman_pendulum.toml"),
+        ("LuenbergerObserver", "tests/fixtures/configs/estimators/luenberger_pendulum.toml"),
     ],
 )
 class TestPendulumEstimatorVariants:
@@ -77,7 +77,7 @@ class TestPendulumEstimatorVariants:
 
                 [controller]
                 type = "LQR"
-                config = "configs/controllers/lqr_pendulum.toml"
+                config = "tests/fixtures/configs/controllers/lqr_pendulum.toml"
 
                 [estimator]
                 type = "{est_type}"
@@ -85,7 +85,7 @@ class TestPendulumEstimatorVariants:
 
                 [trajectory]
                 type = "waypoints"
-                config = "configs/trajectories/pendulum_upright.toml"
+                config = "tests/fixtures/configs/trajectories/pendulum_upright.toml"
 
                 [noise.measurement]
                 std = [0.005, 0.02]

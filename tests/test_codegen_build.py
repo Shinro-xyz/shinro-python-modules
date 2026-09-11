@@ -238,7 +238,7 @@ class TestLoadConfigPlantInjection:
         from shinro.controllers.lqr import LQR
         from shinro.utils.array_backend import NumpyBackend
 
-        cfg = LQR.load_config("configs/controllers/lqr_cartpole.toml", plant=cartpole, derive_model=True)
+        cfg = LQR.load_config("tests/fixtures/configs/controllers/lqr_cartpole.toml", plant=cartpole, derive_model=True)
         assert cfg.dt == cartpole.dt
         lqr = LQR.from_config(cfg, backend=NumpyBackend())
         assert lqr.K is not None
@@ -267,7 +267,7 @@ def test_derived_plant_scenario_matches_explicit(tmp_path):
 
     # 1. Derived path: gen_scenario on the [plant] scenario (omits A/B + dims).
     cg_derived, _ = gen_scenario(
-        "configs/scenarios/cartpole_lqr_kf_derived.toml", str(tmp_path / "derived")
+        "tests/fixtures/configs/scenarios/cartpole_lqr_kf_derived.toml", str(tmp_path / "derived")
     )
 
     # 2. Explicit path: write configs with A/B from the plant, build directly.
