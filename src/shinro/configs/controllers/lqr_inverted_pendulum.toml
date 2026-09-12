@@ -1,0 +1,6 @@
+# LQR for InvertedPendulum (2 states, 1 input). dt is inherited from the plant.
+# State [theta, theta_dot]; penalize angle hard, velocity mildly, torque lightly.
+type = "LQR"
+name = "inverted_pendulum_controller"
+state_cost = [200.0, 10.0]
+control_cost = [0.05]

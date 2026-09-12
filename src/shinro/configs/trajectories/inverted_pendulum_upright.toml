@@ -1,0 +1,14 @@
+# Drive the InvertedPendulum back to the upright equilibrium.
+# Two waypoints: hold off-vertical briefly, then settle at upright so the
+# controller has a nonzero error signal to work against and the transient
+# is visible in the run history.
+type = "waypoints"
+dt = 0.01
+
+[[waypoints]]
+position = [0.10, 0.0]
+duration = 2.0
+
+[[waypoints]]
+position = [0.0, 0.0]
+duration = 8.0

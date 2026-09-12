@@ -1,0 +1,36 @@
+# InvertedPendulum balance — full pipeline: simulate AND compile.
+#
+# This is the runnable end-to-end example: no MuJoCo required (plant-only),
+# and it carries [compile] so `make compile SCENARIO=<this file>` lowers the
+# same config to a verified .so.
+#
+# Plant: InvertedPendulum — state (2) = [theta, theta_dot], input (1) = torque.
+# Start off-vertical (theta = 0.3 rad) so the stabilization transient is real.
+
+[scenario]
+name = "inverted_pendulum_balance"
+dt = 0.01
+duration = 10.0
+input_limits = { min = [-5.0], max = [5.0] }
+
+[plant]
+type = "InvertedPendulum"
+config = "configs/plants/inverted_pendulum.toml"
+initial_state = [0.30, 0.0]
+
+[controller]
+type = "LQR"
+config = "configs/controllers/lqr_inverted_pendulum.toml"
+
+[estimator]
+type = "KalmanFilter"
+config = "configs/estimators/kalman_inverted_pendulum.toml"
+
+[trajectory]
+type = "waypoints"
+config = "configs/trajectories/inverted_pendulum_upright.toml"
+
+[compile]
+n_x = 2
+n_u = 1
+optimize = "debug"

@@ -1,0 +1,5 @@
+# Kalman filter for InvertedPendulum (2 states). dt is inherited from the plant.
+type = "KalmanFilter"
+name = "inverted_pendulum_estimator"
+process_noise = [0.001, 0.01]
+measurement_noise = [0.05, 0.05]
