@@ -1,0 +1,4 @@
+# Luenberger observer for InvertedPendulum (2 states). dt is inherited from the plant.
+type = "LuenbergerObserver"
+name = "inverted_pendulum_observer"
+observer_gain = [0.8, 0.8]
