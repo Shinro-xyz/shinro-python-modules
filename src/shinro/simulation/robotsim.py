@@ -16,8 +16,6 @@ import tomllib
 import warnings
 from typing import Any
 
-import numpy as np
-
 from shinro.factories.registry import _ENGINE_REGISTRY
 from shinro.utils.config_resolver import resolve_config_path
 
@@ -87,9 +85,8 @@ class RobotSim:
 
     def reset(self):
         self.engine.reset()
-        for name, plant in self._plants.items():
-            if hasattr(plant, "state") and isinstance(plant.state, np.ndarray):
-                plant.state = np.zeros_like(plant.state)
+        for plant in self._plants.values():
+            plant.reset_state()
 
     def step(self):
         """Advance the world one tick, then let each plant reconcile.

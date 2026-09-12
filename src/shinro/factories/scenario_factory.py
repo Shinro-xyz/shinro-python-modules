@@ -165,6 +165,16 @@ class ScenarioFactory:
         if "sim" in self.config:
             sim, plant = self._build_sim_plant(plant_cfg, sim_cfg, physics_cfg)
             derive_model = False
+            scenario_dt = self.config.get("scenario", {}).get("dt")
+            if scenario_dt is not None:
+                engine_dt = float(sim.engine.dt)
+                ratio = float(scenario_dt) / engine_dt
+                if abs(ratio - round(ratio)) > 1e-9 or ratio < 1:
+                    raise ValueError(
+                        f"[scenario].dt ({scenario_dt}) must be an integer multiple of "
+                        f"[engine].dt ({engine_dt}): the plant integrates every "
+                        f"{round(ratio) if ratio >= 1 else '<1'} engine step(s)."
+                    )
         else:
             sim, plant = self._build_plant_only(plant_cfg)
             derive_model = True
@@ -284,28 +294,64 @@ class ScenarioFactory:
     def _physics_xml(physics_cfg: dict) -> tuple[str, dict] | tuple[None, None]:
         """Build the (xml_string, assets) pair for RobotSim from a physics config.
 
-        When ``free_joint`` is truthy, loads the stock LeKiwi MJCF, rewrites it
-        with :func:`demos.helpers.inject_free_joint`, and loads the mesh assets
-        so the model can be built from the string.
+        The manifest's ``[engine].model`` is always authoritative; ``[physics]``
+        only ever adds an explicit override:
+
+        - ``[physics].preset = "lekiwi"`` — LeKiwi-specific: loads the stock
+          LeKiwi MJCF, rewrites the arm base onto a free-jointed wheel chassis,
+          and loads its mesh assets (requires the ``lekiwi_sim`` package and
+          the demo helpers).
+        - ``[physics].xml = "path.mjcf"`` — generic per-scenario model override.
+        - ``free_joint = true`` (legacy) — deprecated alias for
+          ``preset = "lekiwi"``; warns loudly instead of silently swapping the
+          manifest's model out from under the scenario.
 
         Args:
             physics_cfg: The ``[physics]`` section of the scenario config.
 
         Returns:
-            Tuple of (xml_string, assets). Both are None when the stock MJCF is
-            loaded from the model path.
+            Tuple of (xml_string, assets). Both are None when the manifest's
+            own ``[engine].model`` should be used as-is.
         """
-        if not physics_cfg.get("free_joint"):
+        if not physics_cfg:
             return None, None
 
-        from pathlib import Path
+        import warnings
 
-        from demos.helpers import inject_free_joint, load_model_assets
-        from lekiwi_sim import HERE, MJCF_PATH
+        preset = physics_cfg.get("preset")
+        if physics_cfg.get("free_joint"):
+            if preset is None:
+                warnings.warn(
+                    "[physics].free_joint = true is LeKiwi-specific: it loads and rewrites "
+                    "the stock LeKiwi MJCF, ignoring the manifest's [engine].model. Use "
+                    "[physics].preset = \"lekiwi\" to say so explicitly (this fallback will "
+                    "be removed).",
+                    DeprecationWarning,
+                    stacklevel=3,
+                )
+                preset = "lekiwi"
 
-        xml = inject_free_joint(Path(MJCF_PATH).read_text())
-        assets = load_model_assets(HERE / "lekiwi-sim" / "meshes")
-        return xml, assets
+        if preset is not None:
+            if preset != "lekiwi":
+                raise ValueError(f"Unknown [physics].preset '{preset}' (available: ['lekiwi'])")
+            from pathlib import Path
+
+            from demos.helpers import inject_free_joint, load_model_assets
+            from lekiwi_sim import HERE, MJCF_PATH
+
+            xml = inject_free_joint(Path(MJCF_PATH).read_text())
+            assets = load_model_assets(HERE / "lekiwi-sim" / "meshes")
+            return xml, assets
+
+        if physics_cfg.get("xml") is not None:
+            from pathlib import Path
+
+            from shinro.utils.config_resolver import resolve_config_path
+
+            xml_path = Path(resolve_config_path(physics_cfg["xml"]))
+            return xml_path.read_text(), {}
+
+        return None, None
 
     @staticmethod
     def _validate_dimensions(n_x: int, n_u: int, controller: Controller, estimator: StateEstimator) -> None:

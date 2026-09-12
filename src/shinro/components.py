@@ -327,6 +327,18 @@ class Plant(ConfigDriven, ABC):
         """
         pass
 
+    def reset_state(self) -> None:
+        """Zero the plant's analytic state at a run boundary.
+
+        Concrete default preserves historical behavior (``RobotSim.reset`` zeroed
+        ``self.state`` whenever it was a numpy array); plants with custom reset
+        semantics (e.g. state derived from the engine) override this. Called by
+        the simulation factory's ``reset`` for every plant.
+        """
+        state = getattr(self, "state", None)
+        if isinstance(state, np.ndarray):
+            self.state = np.zeros_like(state)
+
     def post_engine_step(self, engine: "PhysicsEngine") -> None:
         """Reconcile plant state with the engine after ``engine.step()``.
 

@@ -63,7 +63,7 @@ class StepRecord:
 def _stack(values: list) -> Any:
     """Stack per-step values into an (n, k) array when they are homogeneous.
 
-    Feedforward runs record dict setpoints (``{"arm": ..., "base": ...}``) as
+    Feedforward runs record dict setpoints (``{"left_arm": ..., "torso": ...}``) as
     ``reference``/``control`` — those are returned as the raw list.
     """
     if not values:
