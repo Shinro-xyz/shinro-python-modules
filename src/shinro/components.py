@@ -195,6 +195,22 @@ class PhysicsEngine(ABC):
         pass
 
     @property
+    def has_free_joint(self) -> bool:
+        """Whether the model's first joint is a free (floating) joint."""
+        return False
+
+    def pin_free_base(self, x: float, y: float) -> None:
+        """Pin a floating planar base to (x, y) with upright orientation.
+
+        For engines whose world contains a free joint driven by a
+        self-integrating plant (see :meth:`Plant.post_engine_step`): writes the
+        plant's planar pose into the base, pins its orientation upright, and
+        zeroes the floating-base velocities. Default: no-op — engines without a
+        floating base (or with a contact-physics-owned base) need not override.
+        """
+        return None
+
+    @property
     def backend(self) -> ArrayBackend:
         """Array backend for this engine. Subclasses may override."""
         return NumpyBackend()

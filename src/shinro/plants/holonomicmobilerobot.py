@@ -166,11 +166,8 @@ class HolonomicMobileRobot(Plant):
         if self._engine is None or not engine.has_free_joint:
             return
 
-        x, y = float(self.bk.to_numpy(self.state)[0]), float(self.bk.to_numpy(self.state)[1])
-        engine.data.qpos[0] = x
-        engine.data.qpos[1] = y
-        engine.data.qpos[3:7] = [1.0, 0.0, 0.0, 0.0]
-        engine.data.qvel[engine.free_qvel_slice] = 0.0
+        state = self.bk.to_numpy(self.state)
+        engine.pin_free_base(float(state[0]), float(state[1]))
 
         if self._target_wheel_delta is not None:
             deltas = self.bk.to_numpy(self._target_wheel_delta)

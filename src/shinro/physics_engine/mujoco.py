@@ -89,11 +89,8 @@ class MuJoCoEngine(PhysicsEngine):
             name = self.model.body(bid).name
             self._body_name_to_id[name] = bid
 
-        self.has_free_joint = (self.model.jnt_type[0] == mujoco.mjtJoint.mjJNT_FREE.value)
-        if self.has_free_joint:
-            self.free_qvel_slice = slice(0, 6)
-        else:
-            self.free_qvel_slice = slice(0, 0)
+        self._has_free_joint = (self.model.jnt_type[0] == mujoco.mjtJoint.mjJNT_FREE.value)
+        self._free_qvel_slice = slice(0, 6) if self._has_free_joint else slice(0, 0)
 
         mujoco.mj_forward(self.model, self.data)
 
@@ -156,6 +153,19 @@ class MuJoCoEngine(PhysicsEngine):
             cols.append(dof_adr)
         return np.vstack([jacp[:, cols], jacr[:, cols]])
 
+    @property
+    def has_free_joint(self) -> bool:
+        return self._has_free_joint
+
+    def pin_free_base(self, x: float, y: float) -> None:
+        """Write (x, y) into the free joint, pin orientation upright, zero base velocities."""
+        if not self._has_free_joint:
+            return
+        self.data.qpos[0] = x
+        self.data.qpos[1] = y
+        self.data.qpos[3:7] = [1.0, 0.0, 0.0, 0.0]
+        self.data.qvel[self._free_qvel_slice] = 0.0
+
     def forward(self):
         mujoco.mj_forward(self.model, self.data)
 
@@ -167,7 +177,7 @@ class MuJoCoEngine(PhysicsEngine):
             self.data.qpos[:] = qpos
         else:
             self.data.qpos[:] = 0.0
-            if self.has_free_joint:
+            if self._has_free_joint:
                 self.data.qpos[3:7] = [1.0, 0.0, 0.0, 0.0]
         self.data.qvel[:] = 0.0
         mujoco.mj_forward(self.model, self.data)
@@ -207,7 +217,7 @@ class MuJoCoEngine(PhysicsEngine):
         return np.array([self.get_joint_qpos(n) for n in drive_joint_names])
 
     def get_base_pose(self) -> np.ndarray:
-        if self.has_free_joint:
+        if self._has_free_joint:
             x = self.data.qpos[0]
             y = self.data.qpos[1]
             qw, qx, qy, qz = self.data.qpos[3:7]
