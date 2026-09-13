@@ -1,26 +1,33 @@
 {
   "languages": {
     "Python": {
-      "language_servers": ["pyright"],
+      "language_servers": ["pyrefly", "ruff"],
       "formatter": {
         "language_server": {
-          "name": "pyright"
+          "name": "ruff"
         }
+      },
+      "format_on_save": "on",
+      "code_actions_on_format": {
+        "source.organizeImports.ruff": true,
+        "source.fixAll.ruff": true
       }
     }
   },
   "lsp": {
-    "pyright": {
-      "settings": {
-        "python": {
-          "pythonPath": "/home/adilfaisal01/.pyenv/versions/lebrobot/bin/python3",
-          "venvPath": "/home/adilfaisal01/.pyenv/versions/lebrobot",
-          "analysis": {
-            "typeCheckingMode": "basic",
-            "autoSearchPaths": true,
-            "useLibraryCodeForTypes": false
-          }
+    "pyrefly": {
+      "binary": {
+        "path": "/home/adilfaisal01/.local/bin/pyrefly",
+        "arguments": ["lsp"],
+        "env": {
+          "PYENV_VERSION": "lebrobot"
         }
+      }
+    },
+    "ruff": {
+      "binary": {
+        "path": "/home/adilfaisal01/.local/bin/ruff",
+        "arguments": ["server"]
       }
     }
   },
