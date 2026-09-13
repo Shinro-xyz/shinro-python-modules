@@ -71,3 +71,9 @@ select = ["E", "F", "I", "W", "UP"]
 
 [tool.ruff.format]
 quote-style = "double"
+
+[tool.pyrefly]
+project-includes = [
+    "**/*.py*",
+    "**/*.ipynb",
+]
