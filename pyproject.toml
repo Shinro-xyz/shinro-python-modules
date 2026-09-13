@@ -73,6 +73,7 @@ select = ["E", "F", "I", "W", "UP"]
 quote-style = "double"
 
 [tool.pyrefly]
+preset = "default"
 project-includes = [
     "**/*.py*",
     "**/*.ipynb",

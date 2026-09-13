@@ -1,7 +1,10 @@
 {
   "languages": {
     "Python": {
-      "language_servers": ["pyrefly", "ruff"],
+      "language_servers": [
+        "pyrefly",
+        "ruff"
+      ],
       "formatter": {
         "language_server": {
           "name": "ruff"
@@ -16,18 +19,18 @@
   },
   "lsp": {
     "pyrefly": {
-      "binary": {
-        "path": "/home/adilfaisal01/.local/bin/pyrefly",
-        "arguments": ["lsp"],
-        "env": {
-          "PYENV_VERSION": "lebrobot"
+      "settings": {
+        "pyrefly": {
+          "python_interpreter": "/home/adilfaisal01/.pyenv/versions/lebrobot/bin/python"
         }
       }
     },
     "ruff": {
       "binary": {
         "path": "/home/adilfaisal01/.local/bin/ruff",
-        "arguments": ["server"]
+        "arguments": [
+          "server"
+        ]
       }
     }
   },
