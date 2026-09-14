@@ -192,15 +192,22 @@ relying on `build_composed_graph`'s role map.
 
 Two behavioral conventions make it lowerable at all:
 
-- **Shape-driven branches.** The scalar-vs-least-squares split keys off
-  `g_x`'s trace-time shape, not on traced values (`np.linalg.lstsq` has no
-  graph op, so the multi-input branch raises when traced). Dot products use
-  column-vector form because the tracer rejects 1D @ 1D.
-- **Guards become data.** `c^T g` near-zero is a `RuntimeError` on the live
-  numpy path, but a graph cannot raise (a Zig panic across the C ABI aborts
-  the host process). The traced path emits the same condition as nodes:
-  `cond = lt(abs(cg), eps)` then `u = where(cond, 0.0, u_raw)` — a fail-safe
-  zero command — and publishes `healthy = 1 - cond` through
+- **Shape-driven branches.** The scalar-vs-multi-input split keys off
+  `g_x`'s trace-time shape, not on traced values, and both regimes lower:
+  `n_u == 1` divides directly, while `n_u > 1` uses the closed-form
+  minimum-norm solution `u = cg^T (cg cg^T)^{-1} num` — the same point
+  `np.linalg.lstsq` returned, but written as matmul/transpose/div, which are
+  graph ops (`lstsq`'s SVD is not). Dot products use column-vector form
+  because the tracer rejects 1D @ 1D.
+- **Guards become data.** The controllability denominator going near-zero is
+  a `RuntimeError` on the live numpy path, but a graph cannot raise (a Zig
+  panic across the C ABI aborts the host process). The traced path emits the
+  same condition as nodes: `cond = lt(norm, eps)`, where `norm` is `abs(c^T g)`
+  for `n_u == 1` and `‖c^T g‖` otherwise (the two agree when `n_u == 1`), then
+  forces the fail-safe zero command — the scalar branch zeroes `u` with
+  `where(cond, 0.0, u_raw)`, the multi-input branch zeroes its `(1,1)` scalar
+  factor before the final matmul (same effect, and `where`'s operands stay the
+  same shape). It also publishes `healthy = 1 - cond` through
   `ArrayBackend.emit_named_output`, an auxiliary output port. `eps`
   (`controllability_eps`) is a per-plant deployment design parameter, not a
   numerical constant: the law amplifies `1/c^T g`, so command saturation and
