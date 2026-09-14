@@ -162,6 +162,22 @@ class Tracer:
         node = self._g.emit("neg", [self.node], self.shape)
         return Tracer(self._g, self.shape, node)
 
+    def __pow__(self, other: Any) -> Tracer:
+        # The exponent is usually a concrete config scalar (e.g. SMC's alpha),
+        # which _lift freezes as a 0-d const — the graph stores one specialized
+        # power. Emitting a `pow` node (rather than numerically baking x**alpha)
+        # keeps the exponent a compile-time literal while the base stays live.
+        other = _lift(self._g, other)
+        out_shape = _broadcast_shape(self.shape, other.shape)
+        node = self._g.emit("pow", [self.node, other.node], out_shape)
+        return Tracer(self._g, out_shape, node)
+
+    def __rpow__(self, other: Any) -> Tracer:
+        other = _lift(self._g, other)
+        out_shape = _broadcast_shape(other.shape, self.shape)
+        node = self._g.emit("pow", [other.node, self.node], out_shape)
+        return Tracer(self._g, out_shape, node)
+
     def __truediv__(self, other: Any) -> Tracer:
         other = _lift(self._g, other)
         out_shape = _broadcast_shape(self.shape, other.shape)
@@ -177,6 +193,16 @@ class Tracer:
         other = _lift(self._g, other)
         out_shape = _broadcast_shape(self.shape, other.shape)
         node = self._g.emit("ne", [self.node, other.node], out_shape)
+        return Tracer(self._g, out_shape, node)
+
+    def __lt__(self, other: Any) -> Tracer:  # type: ignore[override]
+        # Ordered comparison recorded as an `lt` node producing 1.0/0.0 flags —
+        # `ne`'s ordered sibling, the predicate behind threshold guards (e.g.
+        # "is |c^T g| below eps?"). Like `__ne__`, deliberately returns a
+        # Tracer: under tracing `<` is data flow, not a Python boolean.
+        other = _lift(self._g, other)
+        out_shape = _broadcast_shape(self.shape, other.shape)
+        node = self._g.emit("lt", [self.node, other.node], out_shape)
         return Tracer(self._g, out_shape, node)
 
     @property
