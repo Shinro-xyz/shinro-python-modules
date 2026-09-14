@@ -91,17 +91,19 @@ class SlidingModeController(Controller):
             ``"tanh"``, or ``"sigmoid"``.
         alpha: Fractional power exponent for the switching term
             :math:`|s|^\\alpha`. 0 gives sign-only; 1 gives linear.
-        controllability_eps: Near-zero threshold on :math:`|c^T g(x)|`, the
-            controllability denominator. **A deployment design parameter, not
-            a numerical constant** — set it above the smallest
-            :math:`|c^T g|` the plant can legitimately produce (the law
-            amplifies :math:`1/c^T g`, so command saturation and chattering
-            arrive long before the arithmetic floor). The 1e-12 default only
-            protects the division itself, for plants whose ``g`` is
-            well-conditioned everywhere. Live numpy calls raise
-            ``RuntimeError`` below it; the lowered (compiled) graph instead
-            emits a fail-safe zero command and reports a ``healthy`` flag,
-            since a straight-line kernel cannot raise.
+        controllability_eps: Near-zero threshold on the controllability
+            denominator: :math:`|c^T g(x)|` for a scalar input, and its
+            multi-input generalization :math:`\\|c^T g(x)\\|` (the two agree
+            when ``n_u == 1``). **A deployment design parameter, not a
+            numerical constant** — set it above the smallest value the plant
+            can legitimately produce (the law amplifies :math:`1/c^T g`, so
+            command saturation and chattering arrive long before the
+            arithmetic floor). The 1e-12 default only protects the division
+            itself, for plants whose ``g`` is well-conditioned everywhere.
+            Live numpy calls raise ``RuntimeError`` below it; the lowered
+            (compiled) graph instead emits a fail-safe zero command and
+            reports a ``healthy`` flag, since a straight-line kernel cannot
+            raise.
         backend: Array backend. Defaults to NumpyBackend.
     """
 
@@ -177,7 +179,11 @@ class SlidingModeController(Controller):
         Evaluates :math:`u = (c^T g)^{-1} ( -c^T f - k_1 |s|^\\alpha \\, \\text{smooth}(s) - k_2 s )`.
 
         For scalar input (``c^T g`` is scalar), uses direct division. For
-        vector input, solves the least-squares problem.
+        vector input the equivalent-control equation ``(c^T g) u = num`` is
+        underdetermined (one surface, ``n_u`` unknowns), so the law takes its
+        minimum-norm solution ``u = cg^T (cg cg^T)^{-1} num`` — the same
+        point ``np.linalg.lstsq`` returned, but written as matmul/transpose/
+        divide so it traces and lowers.
 
         The computation is written so it traces as well as it evaluates: the
         ``u``/``n_u`` branch keys off ``g_x``'s *shape* (known at trace time),
@@ -195,10 +201,8 @@ class SlidingModeController(Controller):
             Control input vector (n_u,).
 
         Raises:
-            RuntimeError: If :math:`c^T g(x)` is near-zero for scalar input
-                (concrete/eager backends only; the traced path cannot raise).
-            NotImplementedError: If the multi-input least-squares branch is
-                traced — ``np.linalg.lstsq`` has no graph op.
+            RuntimeError: If :math:`c^T g(x)` is near-zero and ``g_x`` is
+                concrete (eager backends only; the traced path cannot raise).
         """
         x = self.bk.ravel(self.bk.array(x))
         f_x = self.bk.ravel(self.bk.array(f_x))
@@ -270,10 +274,21 @@ class SlidingModeController(Controller):
         return self.bk.where(fault, self.bk.zeros_like(u_raw), u_raw)
 
     def _vector_control(self, num, cg):
-        """Multi-input law: least-squares solve of ``(c^T g) u = num``.
+        """Multi-input law: minimum-norm solution of ``(c^T g) u = num``.
 
-        ``np.linalg.lstsq`` has no graph op, so this branch is live-only — a
-        traced call raises instead of silently freezing a trace-time solve.
+        ``c^T g`` is a ``1 x n_u`` row, so the equation is underdetermined and
+        ``(c^T g)^{-1}`` does not exist. Writing ``A = c^T g``, the
+        minimum-norm exact solution is the pseudo-inverse ``A^+ b``, which for
+        a single full-rank row collapses to ``A^T (A A^T)^{-1} b`` — the same
+        answer ``np.linalg.lstsq`` gives, but built from matmul/transpose/
+        divide so both the eager backends and the traced/lowered graph share
+        one implementation.
+
+        The guard mirrors :meth:`_scalar_control` (see that docstring for why
+        the concrete and traced backends diverge): it tests ``‖c^T g‖``
+        rather than its square, so ``controllability_eps`` means the same
+        magnitude here as ``|c^T g|`` does on the scalar branch (``n_u == 1``
+        makes them identical).
 
         Args:
             num: ``s_dot_desired - c^T f`` (1,).
@@ -283,20 +298,34 @@ class SlidingModeController(Controller):
             Control input (n_u,).
 
         Raises:
-            NotImplementedError: If called under tracing.
+            RuntimeError: If ``‖c^T g‖ < controllability_eps`` and ``cg``
+                is concrete.
         """
-        concrete = self.bk.to_numpy(cg)
-        if not isinstance(concrete, np.ndarray):
-            raise NotImplementedError(
-                "SMC lowering supports a single control input (n_u == 1); the "
-                "multi-input least-squares branch uses np.linalg.lstsq, which "
-                "has no graph op. Lower n_u > 1 with the closed-form min-norm "
-                "u = cg^T (cg cg^T)^-1 (s_dot_desired - c^T f) — a follow-up."
-            )
-        cg_np = np.asarray(concrete).reshape(1, -1)
-        rhs_np = np.asarray(self.bk.to_numpy(num)).reshape(-1)[:1]
-        u_np, _, _, _ = np.linalg.lstsq(cg_np, rhs_np, rcond=None)
-        return self.bk.from_numpy(u_np.flatten())
+        n_u = cg.shape[0]
+        # Make the row explicit so A^T (A A^T)^-1 is expressible with matmul
+        # and transpose alone (the tracer has no 1-D pseudo-inverse op).
+        cg_row = self.bk.reshape(cg, (1, n_u))
+        denom = cg_row @ cg_row.T  # (1,1) — ||cg||^2, the Gram scalar
+        norm = denom**0.5  # (1,1) — ||cg||; equals |c^T g| when n_u == 1
+        num_col = self.bk.reshape(num, (1, 1))  # (1,) -> (1,1), rank-aligned
+
+        concrete = self.bk.to_numpy(norm)
+        if isinstance(concrete, np.ndarray):
+            # Guard before dividing: on the invalid input the division would
+            # only produce inf/nan (and a numpy divide warning) before the raise.
+            norm_val = np.asarray(concrete).reshape(-1)[0]
+            if norm_val < self.controllability_eps:
+                raise RuntimeError("c^T g(x) is near-zero — loss of controllability")
+            return self.bk.ravel(cg_row.T @ (num_col / denom))
+
+        # Traced: the guard is data, not an exception (see _scalar_control).
+        # Apply it to the (1,1) scalar factor rather than to u: zeroing scale
+        # zeroes u = cg^T scale, and `where`'s operands stay the same shape.
+        scale = num_col / denom  # (1,1) — the A^T b factor; may be inf/nan
+        fault = norm < self.controllability_eps
+        self.bk.emit_named_output("healthy", 1.0 - self.bk.ravel(fault))
+        safe = self.bk.where(fault, self.bk.zeros_like(scale), scale)
+        return self.bk.ravel(cg_row.T @ safe)
 
     def reset(self):
         """No internal state to reset for SMC."""
