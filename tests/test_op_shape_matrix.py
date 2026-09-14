@@ -89,13 +89,22 @@ def _linalg_graph(g: Graph):
     outs["reshape_2d_to_1d"] = g.emit("reshape", [r23], (6,), target_shape=(6,))
 
     specs = {
-        "a22": ((2, 2), "free"), "b22": ((2, 2), "free"),
-        "a21": ((2, 1), "free"), "s11": ((1, 1), "free"),
-        "v2": ((2,), "free"), "r12": ((1, 2), "free"),
-        "a31": ((3, 1), "free"), "b14": ((1, 4), "free"),
-        "t2": ((2, 2), "free"), "t23": ((2, 3), "free"), "t32": ((3, 2), "free"),
-        "i1": ((1, 1), "spd"), "i2": ((2, 2), "spd"), "i4": ((4, 4), "spd"),
-        "r6": ((6,), "free"), "r23": ((2, 3), "free"),
+        "a22": ((2, 2), "free"),
+        "b22": ((2, 2), "free"),
+        "a21": ((2, 1), "free"),
+        "s11": ((1, 1), "free"),
+        "v2": ((2,), "free"),
+        "r12": ((1, 2), "free"),
+        "a31": ((3, 1), "free"),
+        "b14": ((1, 4), "free"),
+        "t2": ((2, 2), "free"),
+        "t23": ((2, 3), "free"),
+        "t32": ((3, 2), "free"),
+        "i1": ((1, 1), "spd"),
+        "i2": ((2, 2), "spd"),
+        "i4": ((4, 4), "spd"),
+        "r6": ((6,), "free"),
+        "r23": ((2, 3), "free"),
     }
     return outs, specs
 
@@ -122,7 +131,7 @@ def _elementwise_graph(g: Graph):
     v4b = g.input("v4b", (4, 1))
     specs["v4b"] = ((4, 1), "free")
 
-    for op, oname in (("add", "add"), ("sub", "sub"), ("mul", "mul"), ("div", "div"), ("ne", "ne")):
+    for op, oname in (("add", "add"), ("sub", "sub"), ("mul", "mul"), ("div", "div"), ("ne", "ne"), ("lt", "lt")):
         outs[f"{oname}_same"] = g.emit(op, [x, same], (3, 2))
         outs[f"{oname}_scalar"] = g.emit(op, [x, scalar], (3, 2))
         outs[f"{oname}_row"] = g.emit(op, [x, row], (3, 2))
@@ -182,22 +191,36 @@ def _selection_graph(g: Graph):
     outs["any_2d"] = g.emit("any", [a23], ())
 
     specs = {
-        "x32": ((3, 2), "free"), "x3": ((3,), "free"),
-        "s6": ((6,), "free"), "s42": ((4, 2), "free"),
-        "stack_a": ((2,), "free"), "stack_b": ((2,), "free"), "stack_c": ((2,), "free"),
-        "cp32": ((3, 2), "free"), "any4": ((4,), "free"), "any23": ((2, 3), "free"),
+        "x32": ((3, 2), "free"),
+        "x3": ((3,), "free"),
+        "s6": ((6,), "free"),
+        "s42": ((4, 2), "free"),
+        "stack_a": ((2,), "free"),
+        "stack_b": ((2,), "free"),
+        "stack_c": ((2,), "free"),
+        "cp32": ((3, 2), "free"),
+        "any4": ((4,), "free"),
+        "any23": ((2, 3), "free"),
     }
     return outs, specs
 
 
 def _pointwise_graph(g: Graph):
-    """tanh/relu/exp/sin/cos, argmax, one_hot."""
+    """tanh/relu/exp/sin/cos/abs/sign, pow, argmax, one_hot."""
     outs = {}
     x1 = g.input("p1", (1,))
     x8 = g.input("p8", (8,))
-    for op in ("tanh", "relu", "exp", "sin", "cos"):
+    for op in ("tanh", "relu", "exp", "sin", "cos", "abs", "sign"):
         outs[f"{op}_1"] = g.emit(op, [x1], (1,))
         outs[f"{op}_8"] = g.emit(op, [x8], (8,))
+
+    # pow on a positive base with a fractional exponent — the shape the SMC
+    # switching term uses (|s|^alpha). Free feeds can be negative, and
+    # pow(negative, fractional) is NaN on both engines; keeping the base abs'd
+    # keeps the cell deterministic rather than NaN-vs-NaN.
+    alpha = g.emit("const", [], (), value=np.float64(0.5))
+    outs["pow_pos_frac_1"] = g.emit("pow", [g.emit("abs", [x1], (1,)), alpha], (1,))
+    outs["pow_pos_frac_8"] = g.emit("pow", [g.emit("abs", [x8], (8,)), alpha], (8,))
 
     am5 = g.input("am5", (5,))
     am23 = g.input("am23", (2, 3))
@@ -208,8 +231,10 @@ def _pointwise_graph(g: Graph):
     outs["one_hot_4"] = g.emit("one_hot", [oh], (4,), depth=4)
 
     specs = {
-        "p1": ((1,), "free"), "p8": ((8,), "free"),
-        "am5": ((5,), "free"), "am23": ((2, 3), "free"),
+        "p1": ((1,), "free"),
+        "p8": ((8,), "free"),
+        "am5": ((5,), "free"),
+        "am23": ((2, 3), "free"),
         "oh_idx": ((1,), "idx"),
     }
     return outs, specs
@@ -316,9 +341,7 @@ class TestOpShapeMatrix:
             for oname in cg.outputs:
                 exp = np.asarray(traced[oname])
                 # shape contract: manifest declaration == numpy result
-                assert declared[oname] == exp.shape, (
-                    f"{name}/{oname}: manifest shape {declared[oname]} != numpy {exp.shape}"
-                )
+                assert declared[oname] == exp.shape, f"{name}/{oname}: manifest shape {declared[oname]} != numpy {exp.shape}"
                 got = out[off : off + exp.size]
                 # NaN-aware: 0/0 in the boundary feeds must agree as NaN
                 ok = np.isclose(got, exp.ravel(), rtol=0.0, atol=TOL, equal_nan=True)
