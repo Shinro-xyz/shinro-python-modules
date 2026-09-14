@@ -443,6 +443,71 @@ class TestSMC:
         u = ctrl.compute(x, f_x, g_x)
         assert _to_np(u, bk).shape == (2,)
 
+    def test_smc_multi_input_matches_min_norm_reference(self, bk):
+        """For n_u > 1 the closed form equals lstsq's minimum-norm solution.
+
+        ``(c^T g) u = num`` is underdetermined (one surface, two inputs), so
+        the branch must return the minimum-norm member of the solution set —
+        the point ``np.linalg.lstsq`` picks, computed as ``cg^T (cg cg^T)^-1
+        num`` so it can be lowered.
+        """
+        from shinro.controllers.smc import SlidingModeController
+        ctrl = SlidingModeController(c=[1.0, 2.0], k1=1.5, k2=0.5, phi=0.1, backend=bk)
+        rng = np.random.default_rng(0)
+        for _ in range(5):
+            x = bk.array(rng.normal(0.0, 0.5, 2))
+            f_x = bk.array(rng.normal(0.0, 0.5, 2))
+            g_x = bk.array(rng.normal(0.0, 0.5, (2, 2)))
+            u = _to_np(ctrl.compute(x, f_x, g_x), bk).ravel()
+
+            c = _to_np(ctrl.c, bk)
+            s = float(c @ _to_np(x, bk))
+            cf = float(c @ _to_np(f_x, bk))
+            cg = c @ _to_np(g_x, bk)
+            smooth_s = np.clip(s / ctrl.phi, -1.0, 1.0)
+            s_dot_desired = -ctrl.k1 * abs(s) ** ctrl.alpha * smooth_s - ctrl.k2 * s
+            num = s_dot_desired - cf
+            want = np.linalg.lstsq(cg.reshape(1, -1), np.array([num]), rcond=None)[0]
+
+            assert u.shape == (2,)
+            assert np.allclose(u, want, atol=1e-10)
+            # The chosen u delivers the desired reaching law along the surface:
+            # s_dot = c^T f + c^T g u == s_dot_desired.
+            assert np.allclose(cf + cg @ u, s_dot_desired, atol=1e-10)
+
+    def test_smc_multi_input_min_norm_is_shortest(self, bk):
+        """The multi-input command is no longer than any other exact solution."""
+        from shinro.controllers.smc import SlidingModeController
+        ctrl = SlidingModeController(c=[1.0, 2.0], k1=1.0, phi=0.1, backend=bk)
+        x = bk.array([1.0, -0.5])
+        f_x = bk.array([0.0, 0.0])
+        g_x = bk.array([[1.0, 1.0], [0.0, 1.0]])
+        u = _to_np(ctrl.compute(x, f_x, g_x), bk).ravel()
+
+        c = _to_np(ctrl.c, bk)
+        cg = c @ _to_np(g_x, bk)
+        s = float(c @ _to_np(x, bk))
+        num = -ctrl.k1 * abs(s) ** ctrl.alpha * np.clip(s / ctrl.phi, -1.0, 1.0)
+        # Any other exact solution is u + v with cg @ v == 0 and is strictly
+        # longer (or equal when v == 0). [cg[1], -cg[0]] spans the null space
+        # of the single row cg.
+        null_dir = np.array([cg[1], -cg[0]])
+        for scale in (1.0, 0.5, -2.0):
+            v = scale * null_dir
+            assert np.isclose(cg @ v, 0.0, atol=1e-10)
+            assert np.linalg.norm(u + v) >= np.linalg.norm(u) - 1e-12
+        assert np.isclose(cg @ u, num, atol=1e-10)
+
+    def test_smc_multi_input_loss_of_controllability(self, bk):
+        """A near-zero ||c^T g|| raises RuntimeError on the multi-input branch."""
+        from shinro.controllers.smc import SlidingModeController
+        ctrl = SlidingModeController(c=[1.0, 2.0], k1=1.0, backend=bk)
+        x = bk.array([1.0, -0.5])
+        f_x = bk.array([0.0, 0.0])
+        g_x = bk.array([[0.0, 0.0], [0.0, 0.0]])
+        with pytest.raises(RuntimeError, match="loss of controllability"):
+            ctrl.compute(x, f_x, g_x)
+
     def test_smc_equivalent_control_analytical(self, bk):
         """For x_dot = f + g u with f=0, g=[0,1]^T, the equivalent control is u = -(c^T g)^{-1} c^T f = 0."""
         from shinro.controllers.smc import SlidingModeController
