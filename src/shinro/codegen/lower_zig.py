@@ -250,9 +250,7 @@ def _graph_manifest(
 
     nodes = []
     for i, node in enumerate(g.nodes):
-        vm_op, aux = _node_vm_info(
-            g, i, node, const_offsets, clip_offsets, input_offsets, cg.outputs, cg.state_outputs
-        )
+        vm_op, aux = _node_vm_info(g, i, node, const_offsets, clip_offsets, input_offsets, cg.outputs, cg.state_outputs)
         rows, cols = _rows_cols(node.shape)
         nodes.append(
             {

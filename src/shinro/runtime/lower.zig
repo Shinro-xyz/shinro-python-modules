@@ -303,7 +303,7 @@ inline fn ew2(nodes: []const g.Node, node: g.Node, self_idx: usize, buf: *[g.buf
     const b = node_input_at(nodes, node.inputs[1], buf);
     const a_n = nodes[node.inputs[0]];
     const b_n = nodes[node.inputs[1]];
-    var out = buf.*[g.offsets[self_idx] ..][0 .. node.rows * node.cols];
+    var out = buf.*[g.offsets[self_idx]..][0 .. node.rows * node.cols];
     inline for (0..node.rows) |i| {
         inline for (0..node.cols) |j| {
             const av = a[bcast_flat(a_n, a_n.vec, node.rows, node.cols, i, j)];

@@ -55,7 +55,7 @@ The pipeline lives in `src/shinro/codegen/`; the Zig VM lives in `src/shinro/run
 ## Module map
 
 | Module | Role |
-|--------|------|
+| -------- | ------ |
 | `codegen/tracing.py` | `Tracer` (abstract value), `Graph` / `Node` (graph records), shape checking. Operator overloads (`@`, `+`, `-`, `*`, `.T`) record nodes. |
 | `codegen/trace_backend.py` | `TraceBackend` — a recording `ArrayBackend` that emits nodes for the named `bk.*` methods components call. |
 | `codegen/trace_node.py` | `trace_node` / `trace_node_with_state` — run one component call under a `TraceBackend` and return a `NodeGraph`. |
@@ -179,6 +179,35 @@ state_P (recurrent) ─────▶ Estimator   (any state_* port the trace d
   `output` nodes are markers and are skipped; `compose` declares the combined
   outputs itself.
 
+### A controller with no dataflow source: SMC (standalone graph)
+
+SMC's `compute(x, f_x, g_x)` takes **live plant evaluations** — `f_x = f(x)`,
+`g_x = g(x)` — not estimator output. The plant is never a graph citizen
+(estimator + controller are lowered; the world stays on the host), so there is
+no valid `compose` wiring: `f_x`/`g_x` become free C-ABI input ports the host
+fills each tick, and the graph is traced standalone by `trace_node` and lowered
+directly (no estimator). `g_x` is `(n_x, n_u)`, unlike the `(n_x,)` every other
+controller input uses — the caller supplies that shape explicitly rather than
+relying on `build_composed_graph`'s role map.
+
+Two behavioral conventions make it lowerable at all:
+
+- **Shape-driven branches.** The scalar-vs-least-squares split keys off
+  `g_x`'s trace-time shape, not on traced values (`np.linalg.lstsq` has no
+  graph op, so the multi-input branch raises when traced). Dot products use
+  column-vector form because the tracer rejects 1D @ 1D.
+- **Guards become data.** `c^T g` near-zero is a `RuntimeError` on the live
+  numpy path, but a graph cannot raise (a Zig panic across the C ABI aborts
+  the host process). The traced path emits the same condition as nodes:
+  `cond = lt(abs(cg), eps)` then `u = where(cond, 0.0, u_raw)` — a fail-safe
+  zero command — and publishes `healthy = 1 - cond` through
+  `ArrayBackend.emit_named_output`, an auxiliary output port. `eps`
+  (`controllability_eps`) is a per-plant deployment design parameter, not a
+  numerical constant: the law amplifies `1/c^T g`, so command saturation and
+  chattering arrive long before the `1e-12` arithmetic floor. Zero-command is
+  the kernel's floor, not a safety guarantee — the host owns the fault policy
+  for open-loop-unstable plants.
+
 The wiring is **not** a per-scenario edge dict — it's the fixed ABC dataflow,
 the same for every scenario. What's scenario-specific (clip limits, vector
 dims) comes from the scenario config.
@@ -209,9 +238,10 @@ def _matmul(node, values, inputs):
 An unsupported op raises `NotImplementedError` naming the op to add and
 listing available ops. The current set (from `ops.py`):
 
-`const`, `input`, `output`, `matmul`, `add`, `sub`, `mul`, `neg`, `transpose`,
-`inv`, `reshape`, `clip`, `where`, `copy`, `any`, `tanh`, `relu`, `div`,
-`exp`, `argmax`, `one_hot`, `slice`.
+`const`, `input`, `output`, `matmul`, `add`, `sub`, `mul`, `div`, `ne`, `lt`,
+`neg`, `transpose`, `inv`, `reshape`, `clip`, `where`, `copy`, `any`, `stack`,
+`tanh`, `relu`, `exp`, `abs`, `sign`, `pow`, `sin`, `cos`, `argmax`, `one_hot`,
+`slice`, `solve_qp`.
 
 ## Lowering to Zig (shipped)
 
@@ -347,11 +377,12 @@ actually emitted by the shipped `base_tracking` graph (names follow the Zig
 enum in `graph_data.zig`; `cst`/`inp`/`out`/`where_op` are the Zig spellings of
 `const`/`input`/`output`/`where`):
 
-`const`, `input`, `output`, `matmul`, `add`, `sub`, `mul`, `div`, `neg`,
-`transpose`, `inv`, `reshape`, `clip`, `where`, `any`, `copy`, `tanh`, `relu`,
-`exp`, `argmax`, `one_hot`, `slice`, `sin`, `cos`, `stack`, `solve_qp`.
+`const`, `input`, `output`, `matmul`, `add`, `sub`, `mul`, `div`, `ne`, `lt`,
+`neg`, `transpose`, `inv`, `reshape`, `clip`, `where`, `any`, `copy`, `tanh`,
+`relu`, `exp`, `abs`, `sign`, `pow`, `argmax`, `one_hot`, `slice`, `sin`, `cos`,
+`stack`, `solve_qp`.
 
-Every interpreter op has a VM switch case. `solve_qp` is special: the 
+Every interpreter op has a VM switch case. `solve_qp` is special: the
 interpreter handler solves with the Python `osqp` (eps=1e-6), while the VM
 drives the baked codegen static solver (same problem, same tolerance), so both
 sides agree within OSQP's tolerance. Adding a *new* interpreter op is a handler

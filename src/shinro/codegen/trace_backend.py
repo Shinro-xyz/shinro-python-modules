@@ -157,10 +157,7 @@ class TraceBackend:
         if not arrays:
             raise NotImplementedError("TraceBackend.hstack of empty list")
         if any(len(a.shape) != 1 for a in arrays):
-            raise NotImplementedError(
-                "TraceBackend.hstack only supports 1-D arrays "
-                f"(got shapes {[a.shape for a in arrays]})"
-            )
+            raise NotImplementedError(f"TraceBackend.hstack only supports 1-D arrays (got shapes {[a.shape for a in arrays]})")
         stacked = self.stack(arrays)
         n = sum(a.shape[0] for a in arrays)
         return self._emit("reshape", [stacked], (n,), target_shape=(n,))
