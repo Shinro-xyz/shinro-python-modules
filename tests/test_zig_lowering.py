@@ -136,8 +136,18 @@ def _build_lowered_ops_graph():
         graph=g,
         inputs=["x"],
         outputs=[
-            "tanh", "relu", "exp", "copy", "slice", "argmax", "one_hot",
-            "sin", "cos", "stack", "ne_zero", "ne_one",
+            "tanh",
+            "relu",
+            "exp",
+            "copy",
+            "slice",
+            "argmax",
+            "one_hot",
+            "sin",
+            "cos",
+            "stack",
+            "ne_zero",
+            "ne_one",
         ],
         state_inputs=[],
         state_outputs=[],
@@ -153,9 +163,7 @@ def _build_mpc_graph():
     (src/shinro/runtime/codegen/emosqp/), whose problem must match the
     ``mpc_lti_base.toml`` bake (n_vars=30).
     """
-    ctrl = ControllerFactory(
-        str(REPO_ROOT / "src/shinro/configs/controllers/mpc_lti_base.toml")
-    ).create(backend=NumpyBackend())
+    ctrl = ControllerFactory(str(REPO_ROOT / "src/shinro/configs/controllers/mpc_lti_base.toml")).create(backend=NumpyBackend())
     ng = trace_node(
         ctrl,
         input_shapes={"current_state": (3,), "target_state": (3,)},
@@ -290,9 +298,7 @@ def _build_smc_graph(
     Returns:
         The traced, lowered-ready :class:`ComposedGraph`.
     """
-    smc = _smc_controller(
-        smoother=smoother, phi=phi, alpha=alpha, controllability_eps=controllability_eps
-    )
+    smc = _smc_controller(smoother=smoother, phi=phi, alpha=alpha, controllability_eps=controllability_eps)
     ng = trace_node(smc, input_shapes={"x": (2,), "f_x": (2,), "g_x": (2, 1)})
     return ComposedGraph(
         graph=ng.graph,
@@ -590,11 +596,7 @@ class TestMatmulShapeDispatch:
         offsets = {}
         off = 0
         for name in cg.outputs:
-            size = next(
-                int(np.prod(n.shape))
-                for n in cg.graph.nodes
-                if n.op == "output" and n.attrs["name"] == name
-            )
+            size = next(int(np.prod(n.shape)) for n in cg.graph.nodes if n.op == "output" and n.attrs["name"] == name)
             offsets[name] = (off, off + size)
             off += size
 
@@ -714,11 +716,7 @@ PLANT_SCAN_CASES = [
 #: Synthetic dimensionality sweep at the Quadrotor-scale: n_x x n_u combos
 #: beyond any named plant, LQR+KF. Exercises large matmuls and the n_x x n_x
 #: Kalman inverse (12x12, 24x24) the named plants never reach.
-DIM_SWEEP_CASES = [
-    (f"synth{nx}x{nu}", "synthetic", None, nx, nu, 0.01, "LQR", "KalmanFilter")
-    for nx in (6, 12, 24)
-    for nu in (1, 3, 4)
-]
+DIM_SWEEP_CASES = [(f"synth{nx}x{nu}", "synthetic", None, nx, nu, 0.01, "LQR", "KalmanFilter") for nx in (6, 12, 24) for nu in (1, 3, 4)]
 
 ALL_SCAN_CASES = PLANT_SCAN_CASES + DIM_SWEEP_CASES
 
@@ -842,9 +840,7 @@ def _scan_input_ports(cg, n_x, n_u, rng):
         if name in known:
             ports[name] = known[name]
         else:
-            shape = next(
-                n.shape for n in cg.graph.nodes if n.op == "input" and n.attrs["name"] == name
-            )
+            shape = next(n.shape for n in cg.graph.nodes if n.op == "input" and n.attrs["name"] == name)
             ports[name] = np.zeros(tuple(shape))
     return ports
 
@@ -865,53 +861,70 @@ def plant_so(tmp_path_factory, request):
 def _glue_probe_case(name):
     """(builder, in_specs, feed) for one glue-op shape probe."""
     if name == "transpose-nonsquare":
+
         def build(g):
             return {"t": g.emit("transpose", [g.input("x", (2, 3))], (3, 2))}
+
         return build, [("x", (2, 3))], {"x": np.arange(6, dtype=float).reshape(2, 3)}
     if name == "clip-scalar-bounds":
+
         def build(g):
             x = g.input("x", (4,))
             return {"c": g.emit("clip", [x], (4,), lo=np.float64(-0.5), hi=np.float64(0.5))}
+
         return build, [("x", (4,))], {"x": np.array([-2.0, -0.1, 0.1, 2.0])}
     if name == "where-scalar-branch":
+
         def build(g):
             x = g.input("x", (3,))
             one = g.emit("const", [], (), value=np.float64(1.0))
             zero = g.emit("const", [], (), value=np.float64(0.0))
             cond = g.emit("ne", [x, zero], (3,))
             return {"w": g.emit("where", [cond, one, x], (3,))}
+
         return build, [("x", (3,))], {"x": np.array([0.0, 1.0, 2.0])}
     if name == "where-row-broadcast":
+
         def build(g):
             x = g.input("x", (3, 2))
             bias = g.emit("const", [], (1, 2), value=np.array([[1.0, 2.0]]))
             zero = g.emit("const", [], (1, 2), value=np.zeros((1, 2)))
             cond = g.emit("ne", [x, zero], (3, 2))
             return {"w": g.emit("where", [cond, bias, x], (3, 2))}
+
         return build, [("x", (3, 2))], {"x": np.arange(6, dtype=float).reshape(3, 2)}
     if name == "ew2-row-broadcast":
+
         def build(g):
             x = g.input("x", (3, 2))
             bias = g.emit("const", [], (1, 2), value=np.array([[10.0, 20.0]]))
             return {"s": g.emit("add", [x, bias], (3, 2))}
+
         return build, [("x", (3, 2))], {"x": np.ones((3, 2))}
     if name == "ew2-col-broadcast":
+
         def build(g):
             x = g.input("x", (3, 2))
             scale = g.emit("const", [], (3, 1), value=np.array([[2.0], [3.0], [4.0]]))
             return {"s": g.emit("mul", [x, scale], (3, 2))}
+
         return build, [("x", (3, 2))], {"x": np.full((3, 2), 1.5)}
     if name == "slice-2d-rows":
+
         def build(g):
             x = g.input("x", (4, 2))
             return {"s": g.emit("slice", [x], (2, 2), start=1, stop=3)}
+
         return build, [("x", (4, 2))], {"x": np.arange(8, dtype=float).reshape(4, 2)}
     if name == "slice-1d-control":
+
         def build(g):
             x = g.input("x", (6,))
             return {"s": g.emit("slice", [x], (3,), start=2, stop=5)}
+
         return build, [("x", (6,))], {"x": np.arange(6, dtype=float)}
     if name == "transcendentals":
+
         def build(g):
             x = g.input("x", (8,))
             return {
@@ -920,6 +933,7 @@ def _glue_probe_case(name):
                 "sin": g.emit("sin", [x], (8,)),
                 "cos": g.emit("cos", [x], (8,)),
             }
+
         rng = np.random.default_rng(7)
         return build, [("x", (8,))], {"x": rng.normal(0, 2, 8)}
     raise ValueError(name)
@@ -927,11 +941,11 @@ def _glue_probe_case(name):
 
 GLUE_CASES = [
     # the five found-bug cells ...
-    "transpose-nonsquare",      # VM had square-only stride symmetry -> silent garbage
-    "clip-scalar-bounds",       # scalar bounds -> flat-blob comptime OOB
-    "where-scalar-branch",      # scalar branch -> runtime OOB panic
-    "ew2-row-broadcast",        # (1,2)+(3,2) -> runtime OOB panic
-    "slice-2d-rows",            # flat-offset indexing on a row slice -> silent garbage
+    "transpose-nonsquare",  # VM had square-only stride symmetry -> silent garbage
+    "clip-scalar-bounds",  # scalar bounds -> flat-blob comptime OOB
+    "where-scalar-branch",  # scalar branch -> runtime OOB panic
+    "ew2-row-broadcast",  # (1,2)+(3,2) -> runtime OOB panic
+    "slice-2d-rows",  # flat-offset indexing on a row slice -> silent garbage
     # ... and broadcast/shape cells adjacent to them
     "where-row-broadcast",
     "ew2-col-broadcast",
@@ -1027,9 +1041,7 @@ def test_compose_rejects_nonsquare_pid(tmp_path):
     )
     ctrl = tmp_path / "pid_cartpole.toml"
     ctrl.write_text(
-        'type = "PID"\nname = "pid"\ndt = 0.01\n'
-        "kp = [2.0]\nki = [0.5]\nkd = [0.5]\n"
-        "output_limits = { min = [-10.0], max = [10.0] }\n"
+        'type = "PID"\nname = "pid"\ndt = 0.01\nkp = [2.0]\nki = [0.5]\nkd = [0.5]\noutput_limits = { min = [-10.0], max = [10.0] }\n'
     )
     with _pytest.raises(ValueError, match="control dimension"):
         build_composed_graph(str(est), str(ctrl), n_x=4, n_u=1)
@@ -1082,9 +1094,7 @@ class TestLoweredOpsOracle:
                     np.testing.assert_allclose(got, expected, rtol=1e-14, atol=1e-14)
                 else:
                     assert name in exact_ops, f"unexpected op {name}"
-                    assert np.array_equal(got, expected), (
-                        f"op {name} diverged: got {got}, expected {expected}"
-                    )
+                    assert np.array_equal(got, expected), f"op {name} diverged: got {got}, expected {expected}"
 
 
 class TestSmcOracle:
@@ -1410,14 +1420,8 @@ def _run_closed_loop(lib, cg, case, ticks=100):
     est = case.estimator()
     ctrl = case.controller()
 
-    so_est = {
-        port: case.est_init.get(port, np.zeros(shape)).astype(np.float64).copy()
-        for port, _, shape in case.est_state_ports
-    }
-    live_est = {
-        attr: case.est_init.get(port, np.zeros(shape)).astype(np.float64).copy()
-        for port, attr, shape in case.est_state_ports
-    }
+    so_est = {port: case.est_init.get(port, np.zeros(shape)).astype(np.float64).copy() for port, _, shape in case.est_state_ports}
+    live_est = {attr: case.est_init.get(port, np.zeros(shape)).astype(np.float64).copy() for port, attr, shape in case.est_state_ports}
     so_ctrl = {port: np.zeros(shape) for port, _, shape in case.ctrl_state_ports}
     live_ctrl = {attr: np.zeros(shape) for _, attr, shape in case.ctrl_state_ports}
     u_prev_so = np.zeros(n_u)
@@ -1496,9 +1500,7 @@ class TestClosedLoopOracles:
         max_err, saw_saturation = _run_closed_loop(lib, cg, case)
         if case.sat_threshold is not None:
             assert saw_saturation, f"{case.name}: oracle never saturated — anti-windup path untested"
-        assert max_err < case.tol, (
-            f"{case.name}: .so diverged from live components over 100 ticks: max abs err = {max_err:.3e}"
-        )
+        assert max_err < case.tol, f"{case.name}: .so diverged from live components over 100 ticks: max abs err = {max_err:.3e}"
 
 
 def test_comptime_n_vars_mismatch_rejects_build(tmp_path):
@@ -1673,9 +1675,7 @@ class TestBuildManifest:
         for mn, zn in zip(manifest_nodes, zig_nodes):
             assert mn["vm_op"] == zn["vm_op"], f"node {mn['i']} op mismatch"
             assert mn["inputs"] == zn["inputs"], f"node {mn['i']} wiring mismatch"
-            assert mn["rows"] == zn["rows"] and mn["cols"] == zn["cols"], (
-                f"node {mn['i']} shape mismatch"
-            )
+            assert mn["rows"] == zn["rows"] and mn["cols"] == zn["cols"], f"node {mn['i']} shape mismatch"
             assert mn["aux"] == zn["aux"], f"node {mn['i']} aux mismatch"
 
     def test_lowering_is_deterministic(self, tmp_path):
