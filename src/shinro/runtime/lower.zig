@@ -96,9 +96,22 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
             .mul => ew2(g.nodes[0..], node, i, &buf, .mul),
             .div => ew2(g.nodes[0..], node, i, &buf, .div),
             .ne => ew2(g.nodes[0..], node, i, &buf, .ne),
+            .lt => ew2(g.nodes[0..], node, i, &buf, .lt),
+            .pow => ew2(g.nodes[0..], node, i, &buf, .pow),
             .neg => {
                 const s = node_input(g.nodes[0..], node, &buf);
                 inline for (0..node.rows * node.cols) |j| out[j] = -s[j];
+            },
+            .abs => {
+                const s = node_input(g.nodes[0..], node, &buf);
+                inline for (0..node.rows * node.cols) |j| out[j] = @abs(s[j]);
+            },
+            .sign => {
+                // Matches np.sign: -1 / 0 / +1 (0 maps to 0, not +1).
+                const s = node_input(g.nodes[0..], node, &buf);
+                inline for (0..node.rows * node.cols) |j| {
+                    out[j] = if (s[j] > 0.0) 1.0 else if (s[j] < 0.0) -1.0 else 0.0;
+                }
             },
             .transpose => {
                 const s = node_input(g.nodes[0..], node, &buf);
@@ -253,7 +266,7 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
 
 // --- helpers ---------------------------------------------------------------
 
-const BinOp = enum { add, sub, mul, div, ne };
+const BinOp = enum { add, sub, mul, div, ne, lt, pow };
 
 /// Flat index of operand element (i, j) under numpy broadcasting.
 ///
@@ -284,7 +297,7 @@ inline fn bcast_flat(op: g.Node, op_vec: bool, out_r: usize, out_c: usize, i: us
 ///     node: The current add/sub/mul/div/ne node.
 ///     self_idx: The node's index in `nodes` (its buffer offset).
 ///     buf: The shared step buffer (written at the node's offset).
-///     op: Which binary op to apply (add, sub, mul, div, ne).
+///     op: Which binary op to apply (add, sub, mul, div, ne, lt, pow).
 inline fn ew2(nodes: []const g.Node, node: g.Node, self_idx: usize, buf: *[g.buf_len]f64, op: BinOp) void {
     const a = node_input_at(nodes, node.inputs[0], buf);
     const b = node_input_at(nodes, node.inputs[1], buf);
@@ -303,6 +316,13 @@ inline fn ew2(nodes: []const g.Node, node: g.Node, self_idx: usize, buf: *[g.buf
                 // Inequality as a 1.0/0.0 flag — the graph's boolean repr,
                 // consumed by where_op downstream (e.g. PID anti-windup).
                 .ne => if (av != bv) 1.0 else 0.0,
+                // Ordered comparison as a 1.0/0.0 flag — `ne`'s sibling, the
+                // predicate behind threshold guards (e.g. SMC's near-zero
+                // |c^T g| controllability check).
+                .lt => if (av < bv) 1.0 else 0.0,
+                // numpy's power semantics (np.power); SMC raises the abs'd
+                // sliding variable to a fractional alpha, so no negative base.
+                .pow => std.math.pow(f64, av, bv),
             };
         }
     }

@@ -101,6 +101,17 @@ def _ne(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]
     return (values[node.inputs[0]] != values[node.inputs[1]]).astype(np.float64)
 
 
+@register_op("lt")
+def _lt(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
+    """Elementwise ``a < b`` as 1.0/0.0 floats — the ordered sibling of ``ne``.
+
+    ``ne`` is the graph's only other boolean; it cannot express an ordering, so
+    threshold/guard conditions (e.g. SMC's near-zero ``c^T g`` guard) need this
+    op. Consumed by ``where``/``any`` exactly like ``ne``.
+    """
+    return (values[node.inputs[0]] < values[node.inputs[1]]).astype(np.float64)
+
+
 @register_op("neg")
 def _neg(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     return -values[node.inputs[0]]
@@ -214,6 +225,22 @@ def _div(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray
 @register_op("exp")
 def _exp(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     return np.exp(values[node.inputs[0]])
+
+
+@register_op("abs")
+def _abs(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
+    return np.abs(values[node.inputs[0]])
+
+
+@register_op("sign")
+def _sign(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
+    """Sign function matching ``np.sign``: -1 / 0 / +1 (0 maps to 0)."""
+    return np.sign(values[node.inputs[0]])
+
+
+@register_op("pow")
+def _pow(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
+    return np.power(values[node.inputs[0]], values[node.inputs[1]])
 
 
 @register_op("argmax")
