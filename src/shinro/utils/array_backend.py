@@ -33,6 +33,22 @@ class ArrayBackend(ABC):
     identically in numpy and torch for 2D arrays.
     """
 
+    def emit_named_output(self, name: str, value: Any) -> None:
+        """Publish an auxiliary named signal from a ``compute``/``estimate`` call.
+
+        A concrete no-op for eager backends (numpy/torch): the signal is
+        already available to the caller, so nothing to publish. The tracing
+        backend overrides this to record a named graph ``output`` port, which
+        is how a component exposes a diagnostic alongside its primary return
+        value without changing its return contract (e.g. SMC's ``healthy``
+        controllability flag).
+
+        Args:
+            name: The output port name.
+            value: The signal (any array-like the backend produced).
+        """
+        return None
+
     @abstractmethod
     def array(self, data) -> Any: ...
 

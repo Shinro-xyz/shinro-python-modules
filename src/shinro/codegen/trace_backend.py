@@ -174,6 +174,15 @@ class TraceBackend:
         out_shape = tuple(shape)
         return self._emit("reshape", [x], out_shape, target_shape=out_shape)
 
+    def ravel(self, x: Tracer) -> Tracer:
+        # Flatten to 1-D. Pure data movement — emitted as a reshape to the
+        # trace-time-known element count, so the VM reuses its reshape arm
+        # rather than growing a dedicated op (same trick as hstack).
+        n = 1
+        for d in x.shape:
+            n *= d
+        return self._emit("reshape", [x], (n,), target_shape=(n,))
+
     # --- deterministic-policy ops (NN controllers in deterministic mode) ---
 
     def tanh(self, x: Tracer) -> Tracer:
@@ -196,6 +205,12 @@ class TraceBackend:
     def exp(self, x: Tracer) -> Tracer:
         return self._emit("exp", [x], x.shape)
 
+    def abs(self, x: Tracer) -> Tracer:
+        return self._emit("abs", [x], x.shape)
+
+    def sign(self, x: Tracer) -> Tracer:
+        return self._emit("sign", [x], x.shape)
+
     def argmax(self, x: Tracer) -> Tracer:
         # numpy argmax over the last axis collapses it to a scalar index.
         return self._emit("argmax", [x], ())
@@ -217,6 +232,13 @@ class TraceBackend:
 
     def from_numpy(self, x: Any) -> Tracer:
         return _lift(self.g, x)
+
+    def emit_named_output(self, name: str, value: Any) -> None:
+        # Record an auxiliary graph output port. This is how a component
+        # publishes a diagnostic (e.g. SMC's `healthy` controllability flag)
+        # alongside its primary return value without changing its return
+        # contract — the eager backends ignore it (see ArrayBackend).
+        self.g.output(name, _lift(self.g, value).node)
 
     def allclose(self, a: Tracer, b: Tracer) -> bool:
         # allclose on tracers is a runtime check — not meaningful at trace

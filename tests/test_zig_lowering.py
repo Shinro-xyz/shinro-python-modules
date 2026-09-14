@@ -33,6 +33,7 @@ from shinro.codegen.oracle import input_shape, output_split, pack_arrays, state_
 from shinro.codegen.trace_node import trace_node
 from shinro.codegen.tracing import Graph
 from shinro.controllers.pid import PIDController
+from shinro.controllers.smc import SlidingModeController
 from shinro.factories.controller_factory import ControllerFactory
 from shinro.factories.estimator_factory import EstimatorFactory
 from shinro.utils.array_backend import NumpyBackend
@@ -234,6 +235,89 @@ def _build_mpc_deltau_composed_graph():
     return build_mpc_composed_graph("configs/controllers/mpc_base.toml")
 
 
+def _smc_controller(
+    smoother: str = "sat",
+    phi: float = 0.1,
+    alpha: float = 0.0,
+    controllability_eps: float = 1e-12,
+) -> SlidingModeController:
+    """The live (numpy) SMC the lowered graph is compared against.
+
+    Same gains as the shipped ``configs/controllers/smc.toml`` (c=[1, 2],
+    k1=1, k2=0, sat, phi=0.1) so the fixture graph and the live component
+    cannot drift apart silently.
+    """
+    return SlidingModeController(
+        c=[1.0, 2.0],
+        k1=1.0,
+        k2=0.0,
+        phi=phi,
+        smoother=smoother,
+        alpha=alpha,
+        controllability_eps=controllability_eps,
+        backend=NumpyBackend(),
+    )
+
+
+def _build_smc_graph(
+    smoother: str = "sat",
+    phi: float = 0.1,
+    alpha: float = 0.0,
+    controllability_eps: float = 1e-12,
+) -> ComposedGraph:
+    """Standalone SMC graph: ``(x, f_x, g_x)`` in, ``(out, healthy)`` out.
+
+    SMC is the first lowered controller whose runtime inputs are live plant
+    evaluations (``f_x = f(x)``, ``g_x = g(x)``), so there is no estimator to
+    compose with — and ``compose()`` deliberately has no role for ``f_x``/
+    ``g_x`` (it refuses them rather than mis-wiring; see ``compose.py``). The
+    graph is therefore traced standalone and lowered directly, with the
+    dynamics terms as free C-ABI ports the host fills each tick. The plant
+    stays on the host, exactly as it does for every other lowered controller.
+
+    Two outputs: ``out`` is the control (fail-safe-guarded — zero when the
+    controllability flag trips) and ``healthy`` is the flag SMC publishes via
+    :meth:`ArrayBackend.emit_named_output`. No recurrent state: SMC is
+    memoryless, so ``state_outputs`` is empty.
+
+    Args:
+        smoother: ``sat`` / ``tanh`` / ``sigmoid`` boundary layer.
+        phi: Boundary layer thickness (0 selects the pure ``sign`` switch).
+        alpha: Fractional power on the switching term (exercises ``pow``).
+        controllability_eps: Near-zero ``|c^T g|`` threshold, baked into the
+            graph as a const — a plant-scaled deployment design parameter.
+
+    Returns:
+        The traced, lowered-ready :class:`ComposedGraph`.
+    """
+    smc = _smc_controller(
+        smoother=smoother, phi=phi, alpha=alpha, controllability_eps=controllability_eps
+    )
+    ng = trace_node(smc, input_shapes={"x": (2,), "f_x": (2,), "g_x": (2, 1)})
+    return ComposedGraph(
+        graph=ng.graph,
+        inputs=["x", "f_x", "g_x"],
+        outputs=["out", "healthy"],
+        state_inputs=[],
+        state_outputs=[],
+    )
+
+
+def _smc_rand_inputs(rng: np.random.Generator, min_cg: float = 0.2) -> dict[str, np.ndarray]:
+    """Random SMC inputs with ``|c^T g|`` kept above the guard.
+
+    ``c^T g = 0`` is measure-zero for continuous random data, so the samples
+    are rejection-filtered to stay clear of the fail-safe branch — this keeps
+    the numpy reference on its raising path, where it agrees with the graph.
+    """
+    x = rng.normal(0.0, 0.5, (2,))
+    f_x = rng.normal(0.0, 0.5, (2,))
+    while True:
+        g_x = rng.normal(0.0, 1.0, (2, 1))
+        if abs(g_x[0, 0] + 2.0 * g_x[1, 0]) >= min_cg:
+            return {"x": x, "f_x": f_x, "g_x": g_x}
+
+
 @pytest.fixture(scope="session")
 def base_so(tmp_path_factory):
     """Build the .so from the base_tracking composed graph once per session."""
@@ -297,6 +381,37 @@ def mpc_deltau_composed_so(tmp_path_factory, deltau_bake):
         graph_path=graph_path,
         solver_dir=deltau_bake,
     )
+
+
+@pytest.fixture(scope="session")
+def smc_so(tmp_path_factory):
+    """Build the .so for the shipped smc.toml config (sat, phi=0.1, alpha=0).
+
+    Lowers to a tmp graph_path so the shared src/shinro/runtime/graph_data.zig
+    is not clobbered by this fixture (same discipline as the DeltaU case).
+    """
+    d = tmp_path_factory.mktemp("zig-build-smc")
+    return _build_so(_build_smc_graph(), d, graph_path=d / "graph_data.zig")
+
+
+# SMC config variants, each a graph-structure specialization: phi=0 swaps the
+# clip boundary layer for the `sign` op, sigmoid adds the `abs` + `div` path,
+# and alpha=0.5 exercises `pow` with a fractional exponent.
+SMC_VARIANTS = [
+    pytest.param({"phi": 0.0}, id="sign-phi0"),
+    pytest.param({"smoother": "sigmoid"}, id="sigmoid"),
+    pytest.param({"alpha": 0.5}, id="sat-alpha-pow"),
+]
+
+
+@pytest.fixture(scope="session", params=SMC_VARIANTS)
+def smc_variant_so(request, tmp_path_factory):
+    """Build a .so per SMC config variant (each is its own lowered graph)."""
+    cg = _build_smc_graph(**request.param)
+    slug = "-".join(f"{k}-{v}" for k, v in sorted(request.param.items()))
+    d = tmp_path_factory.mktemp(f"zig-build-smc-{slug}")
+    lib, composed = _build_so(cg, d, graph_path=d / "graph_data.zig")
+    return lib, composed, request.param
 
 
 def _pack_inputs(cg, y, x_ref, u_prev, x_hat_init, P_init):
@@ -970,6 +1085,134 @@ class TestLoweredOpsOracle:
                     assert np.array_equal(got, expected), (
                         f"op {name} diverged: got {got}, expected {expected}"
                     )
+
+
+class TestSmcOracle:
+    """The lowered SMC control law matches the interpreter and live numpy.
+
+    SMC is the first lowered controller whose runtime inputs are live plant
+    evaluations, so the graph is standalone (no estimator) with ``f_x``/
+    ``g_x`` as free C-ABI ports. This suite covers the ops added for it
+    (``abs`` / ``sign`` / ``pow`` / ``lt``) plus the auxiliary ``healthy``
+    port and the where-guarded fail-safe: a graph has no exceptions, so the
+    near-zero ``c^T g`` guard compiles to a zero command + a flag instead of
+    a raise.
+    """
+
+    def test_so_matches_interpreter_and_numpy(self, smc_so):
+        """.so, graph interpreter, and live numpy agree on 25 seeded samples."""
+        lib, cg = smc_so
+        n_out, n_state = output_split(cg)
+        assert n_state == 0
+        assert n_out == 2  # out + healthy
+
+        rng = np.random.default_rng(11)
+        smc = _smc_controller()
+        max_err = 0.0
+        for _ in range(25):
+            arrays = _smc_rand_inputs(rng)
+            out, _ = step_so(lib, pack_arrays(cg, arrays), n_out, n_state)
+            traced = interpret(cg.graph, arrays)
+            want = np.asarray(smc.compute(arrays["x"], arrays["f_x"], arrays["g_x"])).ravel()
+
+            # healthy = 1 on this path (|c^T g| ≥ 0.2 ≫ 1e-12)
+            assert out[1] == 1.0
+            assert traced["healthy"][0] == 1.0
+            np.testing.assert_allclose(out[0], traced["out"][0], rtol=1e-14, atol=1e-14)
+            np.testing.assert_allclose(out[0], want[0], rtol=1e-12, atol=1e-12)
+            max_err = max(max_err, abs(out[0] - want[0]))
+        assert max_err < 1e-12, f"SMC .so drifted from live numpy: {max_err:.3e}"
+
+    @pytest.mark.parametrize(
+        "g_x",
+        [
+            np.array([[1.0], [-0.5]]),  # c^T g == 0 exactly
+            np.array([[0.0], [0.0]]),  # degenerate actuator channel
+        ],
+        ids=["exact-zero", "zero-g"],
+    )
+    def test_lost_controllability_is_failsafe_and_flagged(self, smc_so, g_x):
+        """A graph cannot raise: |c^T g| below eps → u == 0 and healthy == 0.
+
+        The compiled analogue of numpy's RuntimeError. Zero-command is the
+        kernel's floor, not a safety guarantee — the flag is what lets the
+        host run its own fault policy in the same tick.
+        """
+        lib, cg = smc_so
+        n_out, n_state = output_split(cg)
+        arrays = {"x": np.array([1.0, 0.5]), "f_x": np.array([0.3, -0.2]), "g_x": g_x}
+
+        out, _ = step_so(lib, pack_arrays(cg, arrays), n_out, n_state)
+        assert out[0] == 0.0, "fail-safe must emit exactly zero"
+        assert out[1] == 0.0, "controllability flag must be low"
+
+        # The interpreter (the graph's own reference) agrees, and the live
+        # component still raises — the two paths differ only here, by design.
+        with np.errstate(divide="ignore", invalid="ignore"):
+            traced = interpret(cg.graph, arrays)
+            assert traced["out"][0] == 0.0
+            assert traced["healthy"][0] == 0.0
+        with pytest.raises(RuntimeError, match="near-zero"):
+            _smc_controller().compute(arrays["x"], arrays["f_x"], arrays["g_x"])
+
+    def test_graph_uses_the_new_ops_and_aux_port(self, smc_so):
+        """Drift guard: the guard/flag structure is actually in the graph."""
+        _, cg = smc_so
+        ops = {node.op for node in cg.graph.nodes}
+        assert {"abs", "pow", "lt", "where"} <= ops, f"missing guard ops: {sorted(ops)}"
+        assert set(cg.outputs) == {"out", "healthy"}
+        assert cg.state_outputs == []  # SMC is memoryless
+
+    def test_graph_contains_sign_for_pure_switching(self, smc_variant_so):
+        """phi == 0 selects the sign path; the variant graph must contain it."""
+        _, cg, cfg = smc_variant_so
+        if cfg.get("phi") != 0.0:
+            pytest.skip("sign only appears when phi == 0")
+        ops = {node.op for node in cg.graph.nodes}
+        assert "sign" in ops
+
+    def test_variant_graphs_match_interpreter(self, smc_variant_so):
+        """Each config variant is its own graph and matches the interpreter.
+
+        phi=0 swaps clip for sign; sigmoid (s/(|s|+phi)) adds abs; alpha=0.5
+        exercises pow with a fractional exponent — all against the graph's
+        own interpreter reference, with the live numpy component as the
+        second opinion.
+        """
+        lib, cg, cfg = smc_variant_so
+        n_out, n_state = output_split(cg)
+        rng = np.random.default_rng(29)
+        smc = _smc_controller(**cfg)
+
+        for _ in range(15):
+            arrays = _smc_rand_inputs(rng)
+            out, _ = step_so(lib, pack_arrays(cg, arrays), n_out, n_state)
+            traced = interpret(cg.graph, arrays)
+            want = np.asarray(smc.compute(arrays["x"], arrays["f_x"], arrays["g_x"])).ravel()
+            assert out[1] == 1.0
+            np.testing.assert_allclose(out[0], traced["out"][0], rtol=1e-13, atol=1e-13)
+            np.testing.assert_allclose(out[0], want[0], rtol=1e-12, atol=1e-12)
+
+    def test_controllability_eps_is_baked_from_config(self, tmp_path):
+        """eps is a deployment knob: a plant-scaled value trips the flag earlier.
+
+        With eps = 0.5, a perfectly usable-but-small |c^T g| = 0.2 is treated
+        as lost controllability — the arithmetic-only 1e-12 default would let
+        it through and amplify 1/0.2 instead. The graph is built with its own
+        graph_path so the shared src/shinro/runtime/graph_data.zig is untouched.
+        """
+        cg = _build_smc_graph(controllability_eps=0.5)
+        lib, _ = _build_so(cg, tmp_path, graph_path=tmp_path / "graph_data.zig")
+        n_out, n_state = output_split(cg)
+        arrays = {"x": np.array([1.0, 0.5]), "f_x": np.array([0.3, -0.2]), "g_x": np.array([[0.2], [0.0]])}
+        assert abs(0.2) > 1e-12  # the default guard would not fire here
+
+        out, _ = step_so(lib, pack_arrays(cg, arrays), n_out, n_state)
+        assert out[0] == 0.0
+        assert out[1] == 0.0
+        with np.errstate(divide="ignore", invalid="ignore"):
+            traced = interpret(cg.graph, arrays)
+        assert traced["healthy"][0] == 0.0
 
 
 class TestSolveQpOracle:
