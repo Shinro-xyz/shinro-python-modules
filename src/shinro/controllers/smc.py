@@ -9,6 +9,22 @@ Computes the control law:
 where :math:`s = c^T x` is the sliding surface. Supports multiple boundary-layer
 smoothers (sat, tanh, sigmoid) to suppress chattering.
 
+Scope — a single sliding surface, for every plant shape:
+    ``c`` is one row, so ``s = c^T x`` is a scalar and the law controls one
+    error combination. This covers the whole ``(n_x, n_u)`` rectangle:
+    ``n_u == 1`` divides directly (:meth:`SlidingModeController._scalar_control`),
+    ``n_u > 1`` takes the minimum-norm closed form of the underdetermined
+    system ``(c^T g) u = num`` (:meth:`SlidingModeController._vector_control`),
+    and both behave the same when evaluated and when lowered to a compiled
+    kernel. **Multi-surface SMC is deliberately out of scope** — a surface
+    *matrix* ``C`` (``m > 1`` surfaces solved jointly) is not implemented.
+    Field practice is single-surface, or decentralized (one instance per axis,
+    which this class already supports by instantiation), and for coupled MIMO
+    plants the min-norm solve would not respect actuator limits anyway (that is
+    an allocation problem, not a control-law one). The gate for revisiting it
+    is the off-diagonal/diagonal ratio of ``C·g(x)`` at the operating point;
+    see the 2026-09-14 lab note for the full decision record.
+
 Usage:
     # In configs/controllers/smc.toml:
     #   type = "SMC"
@@ -79,6 +95,11 @@ class SlidingModeController(Controller):
     Implements the equivalent control approach with a switching term and
     optional boundary-layer smoothing. The sliding surface coefficients
     ``c`` must form a Hurwitz polynomial.
+
+    One surface per instance: ``c`` is a single surface vector, so the class is
+    instantiated once per controlled axis (a bank of instances is the
+    multi-axis pattern). Multi-surface SMC — a surface matrix solved jointly —
+    is intentionally not implemented; see the module docstring's "Scope" note.
 
     Args:
         c: Sliding surface coefficients (n,). The polynomial
