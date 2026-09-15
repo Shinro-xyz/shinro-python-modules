@@ -1,0 +1,32 @@
+# MPPI closed-loop compile scenario: KF + MPPI on the holonomic base.
+#
+# Unlike mppi_base_tracking.toml (a MuJoCo sim scenario with a sim-backed
+# [plant] name), this one is compile-ready:
+#   * [plant] type/config lets the compile pipeline build the plant and derive
+#     the model, which is what wires MPPI's dynamics/cost (attach_plant).
+#   * MPPI's sampled perturbations arrive as a free C-ABI `epsilon` port of
+#     shape (N, K*D_u), sample-major — the kernel does no sampling. The host
+#     draws the noise each tick and packs it; see the MPPI module docstring.
+[scenario]
+name = "mppi_compile"
+description = "KF + MPPI on the holonomic base, with host-supplied perturbations"
+dt = 0.02
+input_limits = { min = [-0.5, -0.5, -1.0], max = [0.5, 0.5, 1.0] }
+
+[plant]
+type = "HolonomicMobileRobot"
+config = "configs/plants/holonomic_base.toml"
+
+[controller]
+type = "MPPI"
+config = "configs/controllers/mppi_base.toml"
+
+[estimator]
+type = "KalmanFilter"
+config = "configs/estimators/kalman_base.toml"
+
+# Build spec: dims are baked into the graph at trace time. MPPI's N/K/D_u come
+# from the controller config (and the plant's control dim), not from here.
+[compile]
+n_x = 3
+n_u = 3

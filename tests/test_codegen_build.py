@@ -12,12 +12,15 @@ Luenberger, LQR → PID) compose without per-component declaration.
 from __future__ import annotations
 
 import tomllib
+from dataclasses import dataclass
 
 import numpy as np
 import pytest
 
 from shinro.codegen import build_composed_graph
-from shinro.codegen.compose import ComposedGraph
+from shinro.codegen.compose import ComposedGraph, _lookup_input_shape
+from shinro.components import StateEstimator
+from shinro.factories.registry import register_estimator
 
 # Input limits from base_tracking.toml's [scenario.input_limits].
 _BASE_LIMITS = (np.array([-0.5, -0.5, -1.0]), np.array([0.5, 0.5, 1.0]))
@@ -293,3 +296,160 @@ def test_derived_plant_scenario_matches_explicit(tmp_path):
     )
 
     _assert_graphs_identical(cg_derived, cg_explicit)
+
+
+def test_mppi_composes_with_a_host_filled_epsilon_port():
+    """MPPI's sampled perturbations are a free host input, not an estimator feed.
+
+    The compile path attaches the plant (MPPI's dynamics/cost come from its
+    model) and then composes; ``epsilon`` is declared with MPPI's own shape —
+    ``(N, K*D_u)``, sample-major — and appended last, so the
+    estimator/controller ports ahead of it are unchanged.
+    """
+    from shinro.plants.holonomicmobilerobot import HolonomicMobileRobot
+    from shinro.utils.array_backend import NumpyBackend
+
+    plant = HolonomicMobileRobot(
+        num_wheels=3, radius_robots=0.1, gamma=0.0, radius_wheels=0.03, dt=0.02, backend=NumpyBackend()
+    )
+    cg = build_composed_graph(
+        "configs/estimators/kalman_base.toml",
+        "configs/controllers/mppi_base.toml",
+        3,
+        3,
+        input_limits=_BASE_LIMITS,
+        plant=plant,
+    )
+
+    # The shipped port layout is unchanged; epsilon arrives last.
+    assert cg.inputs[:5] == ["y", "x_ref", "u_prev", "state_x_hat", "state_P"]
+    assert cg.inputs[-1] == "epsilon"
+    assert _lookup_input_shape(cg.graph, "epsilon", default=()) == (200, 15 * 3)
+    assert cg.outputs == ["u"]
+
+
+# ─── a hypothetical third estimator: does the pipeline generalize? ────────
+
+
+@dataclass(frozen=True)
+class _LeakyAverageConfig:
+    """Strict config for the hypothetical estimator below."""
+
+    n_x: int
+    alpha: float = 0.5
+    name: str = "leaky_average"
+
+
+@register_estimator("LeakyAverage")
+class _LeakyAverageEstimator(StateEstimator):
+    """A plausible *new* estimator: an exponential moving average of the measurement.
+
+    Deliberately not shipped — it exists to prove the compile pipeline
+    generalizes past the two registered estimators. It has one recurrent attr
+    (``x_hat``) that no tracer code declares: ``build_composed_graph``'s
+    two-pass state discovery finds it by attr-diff and promotes it to a
+    ``state_x_hat`` port. ``estimate`` is operator/``bk`` only, so it traces.
+    """
+
+    Config = _LeakyAverageConfig
+
+    def __init__(self, n_x: int, alpha: float = 0.5, backend=None):
+        from shinro.utils.array_backend import NumpyBackend
+
+        self.bk = backend or NumpyBackend()
+        self.n_x = n_x
+        self.alpha = float(alpha)
+        self.x_hat = self.bk.zeros(n_x)
+
+    def estimate(self, measurement, control_input):
+        y = self.bk.ravel(measurement)
+        self.x_hat = (1.0 - self.alpha) * self.x_hat + self.alpha * y
+        return self.bk.reshape(self.x_hat, (self.n_x, 1))
+
+    def reset(self):
+        self.x_hat = self.bk.zeros(self.n_x)
+
+    @classmethod
+    def from_config(cls, config, backend=None):
+        cfg = cls.parse_config(config)
+        return cls(n_x=cfg.n_x, alpha=cfg.alpha, backend=backend)
+
+
+def test_composes_with_a_hypothetical_third_estimator():
+    """A brand-new estimator composes with MPPI and matches the live loop.
+
+    Nothing in the pipeline is estimator-aware: the class is registered ad hoc,
+    its inputs follow the ``measurement`` / ``control_input`` naming contract,
+    and its undiscovered state is promoted automatically. The composed graph
+    must then run tick-for-tick like the live components, with MPPI's
+    host-supplied ``epsilon`` alongside the new estimator's state port.
+    """
+    from shinro.codegen import interpret
+    from shinro.factories.controller_factory import ControllerFactory
+    from shinro.plants.holonomicmobilerobot import HolonomicMobileRobot
+    from shinro.utils.array_backend import NumpyBackend
+
+    bk = NumpyBackend()
+    plant = HolonomicMobileRobot(
+        num_wheels=3, radius_robots=0.1, gamma=0.0, radius_wheels=0.03, dt=0.02, backend=bk
+    )
+    est_cfg = {"type": "LeakyAverage", "n_x": 3, "alpha": 0.4}
+    cg = build_composed_graph(
+        est_cfg,
+        "configs/controllers/mppi_base.toml",
+        3,
+        3,
+        input_limits=_BASE_LIMITS,
+        plant=plant,
+    )
+
+    # The new estimator's state became a recurrent port; epsilon is still free
+    # and still last, and the controller never learned about either change.
+    assert cg.inputs == ["y", "x_ref", "u_prev", "state_x_hat", "state_u", "epsilon"]
+    assert "state_x_hat" in cg.state_outputs
+    assert "state_u" in cg.state_outputs
+
+    # Tick-for-tick against the live components (same order as the graph).
+    est = _LeakyAverageEstimator.from_config(est_cfg, backend=NumpyBackend())
+    ctrl = ControllerFactory("configs/controllers/mppi_base.toml").create(backend=NumpyBackend())
+    ctrl.attach_plant(plant)
+
+    rng = np.random.default_rng(5)
+    n_x, n_u, n_samples, horizon = 3, 3, ctrl.N, ctrl.K
+    x_hat = np.zeros(n_x)
+    plan = np.zeros((horizon, n_u))
+    u_prev = np.zeros(n_u)
+
+    for trial in range(3):
+        y = rng.normal(0.0, 0.2, n_x)
+        x_ref = rng.normal(0.0, 0.5, n_x)
+        eps = rng.normal(0.0, 0.3, (n_samples, horizon * n_u))
+
+        traced = interpret(
+            cg.graph,
+            {
+                "y": y,
+                "x_ref": x_ref,
+                "u_prev": u_prev,
+                "state_x_hat": x_hat,
+                "state_u": plan,
+                "epsilon": eps,
+            },
+        )
+
+        # Live reference: estimator, then controller, then the composed clip.
+        x_hat_next = np.asarray(est.estimate(y.reshape(-1, 1), u_prev.reshape(-1, 1))).ravel()
+        u_live = np.clip(
+            np.asarray(ctrl.compute(x_hat_next, x_ref, eps)), _BASE_LIMITS[0], _BASE_LIMITS[1]
+        )
+
+        np.testing.assert_allclose(traced["u"], u_live, rtol=1e-10, atol=1e-10)
+        np.testing.assert_allclose(
+            np.asarray(traced["state_x_hat"]).ravel(), x_hat_next, rtol=1e-12, atol=1e-12
+        )
+        np.testing.assert_allclose(np.asarray(traced["state_u"]), ctrl.u, rtol=1e-12, atol=1e-12)
+
+        # Carry the live state forward; the graph's state outputs match it.
+        x_hat = x_hat_next
+        plan = ctrl.u.copy()
+        u_prev = u_live

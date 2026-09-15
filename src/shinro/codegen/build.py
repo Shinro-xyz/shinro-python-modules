@@ -69,6 +69,7 @@ def build_composed_graph(
     n_x: int,
     n_u: int,
     input_limits: tuple | None = None,
+    plant: object | None = None,
 ) -> ComposedGraph:
     """Trace an estimator + controller and compose the closed-loop step graph.
 
@@ -88,6 +89,11 @@ def build_composed_graph(
         n_u: Plant input dimension.
         input_limits: Optional ``(lo, hi)`` clip bounds for the controller
             output, from ``[scenario].input_limits``.
+        plant: Optional plant instance for controllers whose model comes from
+            it rather than from their config (MPPI's dynamics/cost). Passed
+            through ``attach_plant`` when the controller supports it — the
+            same wiring the simulation path uses, so sim and compile agree.
+            Ignored by controllers that do not need it (LQR, PID, MPC).
 
     Returns:
         A :class:`ComposedGraph` for one closed-loop step.
@@ -95,16 +101,24 @@ def build_composed_graph(
     est = _factory(EstimatorFactory, estimator_config)
     ctrl = _factory(ControllerFactory, controller_config)
 
+    if plant is not None and hasattr(ctrl, "attach_plant"):
+        ctrl.attach_plant(plant)
+
     est_input_shapes = {"measurement": (n_x, 1), "control_input": (n_u, 1)}
     ctrl_input_shapes = {
         name: (n_u,) if name == "u_prev" else (n_x,)
         for name in inspect.signature(ctrl.compute).parameters
         if name != "self"
     }
+    # Free host inputs (e.g. MPPI's epsilon) declare their own shapes — the
+    # role-based defaults above cannot know them.
+    host_shapes = ctrl.host_input_shapes() if hasattr(ctrl, "host_input_shapes") else {}
+    ctrl_input_shapes.update(host_shapes)
 
     return compose(
         _trace_with_state(est, est_input_shapes),
         _trace_with_state(ctrl, ctrl_input_shapes),
         plant_dims={"n_x": n_x, "n_u": n_u},
         input_limits=input_limits,
+        host_inputs=tuple(host_shapes),
     )

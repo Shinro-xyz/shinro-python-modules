@@ -199,6 +199,7 @@ def gen_scenario(scenario_path: str, out_dir: str) -> tuple:
     # (name only) are sim-only and ignored here. Explicit [compile] n_x/n_u and
     # config A/B win over derived.
     plant_cfg = spec["plant"]
+    plant = None
     if plant_cfg is not None and "type" in plant_cfg and "config" in plant_cfg:
         with open(resolve_config_path(plant_cfg["config"]), "rb") as f:
             plant = _PLANT_REGISTRY[plant_cfg["type"]].from_config(
@@ -237,6 +238,7 @@ def gen_scenario(scenario_path: str, out_dir: str) -> tuple:
         n_x,
         n_u,
         input_limits=spec["input_limits"],
+        plant=plant,
     )
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
