@@ -1,0 +1,6 @@
+# FILE: requirements-docs.txt
+# Docs toolchain. Kept separate from requirements-dev.txt so the CI test matrix
+# doesn't pull a web toolchain.
+mkdocs-material>=9.5
+mkdocstrings[python]>=0.26
+mkdocs-literate-nav>=0.6
