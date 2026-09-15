@@ -52,6 +52,24 @@ joint space**.
   backend test "didn't run", that's why. Requires Python ≥3.12; CI matrix is
   3.12–3.14.
 - Demos: `python -m demos.demo_*`.
+- **Docs** (API reference is generated, not hand-written):
+  - `make docs` — install the docs toolchain (`requirements-docs.txt`).
+  - `make docs-serve` — regenerate reference + serve at http://127.0.0.1:8000.
+  - `make docs-build` — regenerate reference + build static `site/`.
+  - `scripts/gen_api.py` walks each subpackage's `__all__` and emits one page
+    per subpackage plus the nav — **adding an export is all it takes** for it to
+    appear in the docs. Subpackages without `__all__` (`components.py`,
+    `utils/`) fall back to an AST scan of their source files.
+  - Generated output (`docs/reference/`, `docs/SUMMARY.md`, `site/`) is
+    gitignored. Prose pages are hand-written and ordered in
+    `docs/_nav_prose.md`.
+  - `scripts/sphinx_compat.py` is a griffe extension that makes the Sphinx-flavored
+    docstring markup (`:class:`, `:math:`, `.. math::`) render instead of leaking
+    as literal text. Removing it silently breaks all math **without failing the
+    build** — the key must stay under `options:` in `mkdocs.yml`.
+  - `.github/workflows/docs.yml` deploys to GitHub Pages on push to `main`.
+    It does **not** use `--strict`: griffe flags the many unannotated public
+    parameters as warnings, so `--strict` is red out of the box.
 - `make compile SCENARIO=<scenario.toml>` — e2e scenario → verified `.so`:
   `scripts/gen_scenario.py` (zig-free: trace+compose+lower to an isolated
   path) then `scripts/build_scenario.py` (zig build + oracle + stamp + verify).

@@ -1,5 +1,6 @@
 .PHONY: test test-quick test-functional test-all test-integration lint install build \
 	release-patch release-minor release-major changelog \
+	docs docs-serve docs-build \
 	test-controllers test-estimators test-plants test-trajectories test-armrobot \
 	test-components test-array-backend test-batched-adapter test-controllability test-factories \
 	test-linearization test-adversarial test-mcp-server test-mcp-functional \
@@ -128,6 +129,24 @@ compile:
 lint:
 	ruff check .
 	pyright src/shinro/utils/ src/shinro/components.py src/shinro/controllers/ src/shinro/estimators/ src/shinro/trajectories/ src/shinro/plants/
+
+# --- Docs -------------------------------------------------------------------
+# The API reference pages AND their nav are generated from each subpackage's
+# __all__ (see scripts/gen_api.py), so there is no symbol list to maintain.
+
+# Install the docs toolchain.
+docs:
+	pip install -r requirements-docs.txt
+
+# Regenerate the reference and serve with live reload at http://127.0.0.1:8000
+docs-serve: 
+	python3 scripts/gen_api.py
+	mkdocs serve
+
+# Regenerate the reference and build the static site into site/
+docs-build:
+	python3 scripts/gen_api.py
+	mkdocs build
 
 # Run an individual test group by short name, e.g. `make test-controllers`
 test-controllers:

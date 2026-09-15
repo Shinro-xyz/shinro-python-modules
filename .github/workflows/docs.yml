@@ -1,0 +1,64 @@
+# FILE: .github/workflows/docs.yml
+name: docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "docs/**"
+      - "scripts/gen_api.py"
+      - "scripts/sphinx_compat.py"
+      - "mkdocs.yml"
+      - "requirements-docs.txt"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Let one deploy finish rather than cancelling mid-publish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install deps
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-docs.txt
+
+      - name: Regenerate reference pages + nav from source
+        run: python scripts/gen_api.py
+
+      - name: Build site
+        # NOT --strict: griffe flags the unannotated public parameters as
+        # warnings, which would fail the build out of the box. Add --strict once
+        # annotation coverage is up.
+        run: mkdocs build
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
