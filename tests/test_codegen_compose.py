@@ -614,6 +614,72 @@ class TestComposeControllerRoles:
             compose(estimator, controller, plant_dims=_BASE_DIMS, input_limits=None)
 
 
+class TestComposeHostInputs:
+    """Host-filled free inputs (e.g. MPPI's sampled perturbations).
+
+    A controller may declare inputs the *host* fills each tick rather than the
+    estimator or reference. They become composed-graph input ports whose shape
+    comes from the controller's own declaration, and — unlike state ports —
+    they are neither wired to the estimator nor fed back next tick.
+    """
+
+    @staticmethod
+    def _graphs(host_shape=(4, 6)):
+        from shinro.codegen.trace_node import NodeGraph
+
+        est_g = Graph()
+        est_in = est_g.input("measurement", (3, 1))
+        est_g.input("control_input", (3, 1))
+        est_g.input("state_x_hat", (3, 1))
+        est_g.output("out", est_in)
+        estimator = NodeGraph(
+            graph=est_g,
+            contract=None,  # type: ignore[arg-type]
+            input_nodes={"measurement": est_in},
+            output_nodes={"out": est_in},
+            state_attrs=[],
+        )
+        ctrl_g = Graph()
+        ctrl_in = ctrl_g.input("current_state", (3,))
+        ctrl_g.input("target_state", (3,))
+        ctrl_g.input("epsilon", host_shape)  # free host input (not consumed here)
+        ctrl_g.output("out", ctrl_in)
+        controller = NodeGraph(
+            graph=ctrl_g,
+            contract=None,  # type: ignore[arg-type]
+            input_nodes={"current_state": ctrl_in},
+            output_nodes={"out": ctrl_in},
+            state_attrs=[],
+        )
+        return estimator, controller
+
+    def test_host_input_becomes_a_free_port_appended_last(self):
+        estimator, controller = self._graphs()
+        cg = compose(estimator, controller, plant_dims=_BASE_DIMS, host_inputs=("epsilon",))
+
+        # Appended last, so every existing port layout is unchanged.
+        assert cg.inputs[-1] == "epsilon"
+        # Shape comes from the controller's own declaration (not (n_x,)).
+        assert _lookup_input_shape(cg.graph, "epsilon", default=()) == (4, 6)
+        # Free, not recurrent: never fed back, never wired to the estimator.
+        assert "epsilon" not in cg.state_inputs
+        assert "epsilon" not in cg.state_outputs
+
+    def test_undeclared_host_input_still_raises(self):
+        """The role guard stays loud — a name must be declared to be free."""
+        estimator, controller = self._graphs()
+        with pytest.raises(ValueError, match="does not map to a known role"):
+            compose(estimator, controller, plant_dims=_BASE_DIMS)
+
+    def test_host_port_is_a_real_graph_input(self):
+        """The interpreter needs the free port fed, like any other input."""
+        estimator, controller = self._graphs()
+        cg = compose(estimator, controller, plant_dims=_BASE_DIMS, host_inputs=("epsilon",))
+        feeds = {name: np.zeros(_lookup_input_shape(cg.graph, name, default=())) for name in cg.inputs}
+        out = interpret(cg.graph, feeds)
+        assert np.asarray(out["u"]).shape == (3,)
+
+
 # ─── Test 10: compose error paths ──────────────────────────────────────────
 
 

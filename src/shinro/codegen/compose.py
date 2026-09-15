@@ -71,6 +71,7 @@ def compose(
     controller: NodeGraph,
     plant_dims: dict[str, int],
     input_limits: tuple[np.ndarray, np.ndarray] | None = None,
+    host_inputs: tuple[str, ...] = (),
 ) -> ComposedGraph:
     """Compose an estimator and controller into one closed-loop step graph.
 
@@ -106,6 +107,11 @@ def compose(
         input_limits: Optional ``(lo, hi)`` clip bounds from
             ``[scenario.input_limits]``. If provided, a ``clip`` node is
             inserted on the controller output.
+        host_inputs: Names of controller inputs the *host* fills each tick
+            rather than the estimator or reference (e.g. MPPI's sampled
+            perturbations). Each becomes a composed-graph input port whose
+            shape comes from the traced controller's own declaration; they
+            are appended last, so existing port layouts are unchanged.
 
     Returns:
         A :class:`ComposedGraph` with the combined graph and port names.
@@ -196,6 +202,8 @@ def compose(
     #                estimator consumes (e.g. MPC_DeltaU's rate input).
     controller_takes_reference = False
     state_role_names: list[str] = []
+    free_input_names: list[str] = []
+    host_names = set(host_inputs)
     ctrl_input_map: dict[str, int] = {}
     for node in controller.graph.nodes:
         if node.op != "input":
@@ -203,6 +211,12 @@ def compose(
         name = node.attrs["name"]
         if str(name).startswith("state_"):
             # Recurrent controller state — wired separately below.
+            continue
+        if name in host_names:
+            # A free input the host fills each tick (e.g. MPPI's sampled
+            # perturbations). Not wired to the estimator or reference: the
+            # port is declared below from the controller's own shape.
+            free_input_names.append(name)
             continue
         role = _CONTROLLER_INPUT_ROLES.get(name)
         if role == "reference":
@@ -215,8 +229,9 @@ def compose(
         else:
             raise ValueError(
                 f"controller input '{name}' does not map to a known role "
-                f"(state / reference / u_prev); extend _CONTROLLER_INPUT_ROLES "
-                f"in shinro.codegen.compose"
+                f"(state / reference / u_prev / a declared host input); extend "
+                f"_CONTROLLER_INPUT_ROLES in shinro.codegen.compose or pass it "
+                f"in host_inputs"
             )
     if controller_takes_reference or not state_role_names:
         state_feed_id = x_hat_flat_id
@@ -250,6 +265,12 @@ def compose(
     for port in ctrl_state_ports:
         shape = _lookup_input_shape(controller.graph, port, default=(n_u,))
         ctrl_input_map[port] = combined.input(port, shape)
+
+    # Free host inputs, declared last so existing port layouts are unchanged.
+    # Their shapes come from the traced controller's own input placeholders
+    # (e.g. MPPI's epsilon is (N, K*D_u), not (n_x,)).
+    for name in free_input_names:
+        ctrl_input_map[name] = combined.input(name, _lookup_input_shape(controller.graph, name, default=()))
 
     ctrl_remap, ctrl_source_ids = _merge_and_rewire(combined, controller.graph, ctrl_input_map)
 
@@ -337,7 +358,7 @@ def compose(
 
     return ComposedGraph(
         graph=combined,
-        inputs=["y", "x_ref", "u_prev"] + state_ports + ctrl_state_ports,
+        inputs=["y", "x_ref", "u_prev"] + state_ports + ctrl_state_ports + free_input_names,
         outputs=["u"],
         state_inputs=emitted_state_ports + emitted_ctrl_state_ports + ["u_prev"],
         state_outputs=emitted_state_ports + emitted_ctrl_state_ports + ["state_u_prev"],

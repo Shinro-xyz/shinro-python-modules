@@ -198,6 +198,22 @@ class MPPIController(Controller):
         # port, and this is a per-call input, not state.
         self._x_ref_holder = [None]
 
+    def host_input_shapes(self) -> dict[str, tuple[int, ...]]:
+        """Free C-ABI input ports the host fills each tick.
+
+        Sampling is host-side (see the module docstring), so in a lowered graph
+        ``epsilon`` — the ``(N, K*D_u)`` sampled perturbations, sample-major —
+        is a free input port rather than something the kernel generates. The
+        compile pipeline (:func:`shinro.codegen.build.build_composed_graph`)
+        reads this to declare the port and pass it through
+        ``compose(host_inputs=...)``; the eager path ignores it, because
+        :meth:`compute` samples internally.
+
+        Returns:
+            Maps the port name to its shape.
+        """
+        return {"epsilon": (self.N, self.K * self.D_u)}
+
     def attach_plant(self, plant, Q: Any | None = None, R: Any | None = None):
         """Wire a plant into the controller via a batched dynamics adapter.
 
