@@ -25,10 +25,14 @@ rollout loop executes as batched tensor operations. When built via
 :class:`BatchedDynamicsAdapter`, which vectorizes the plant's single-state
 model over the sample batch.
 
-The Gaussian sampling and softmax weighting are numpy-based (no RNG
-abstraction in ``ArrayBackend``). They run on CPU and are converted to the
-backend via ``bk.from_numpy``, following the same bridge pattern MPC uses for
-OSQP.
+Sampling is the one step of a tick with no dataflow representation, so it
+stays on the host: perturbations are drawn with numpy (``ArrayBackend`` has no
+RNG abstraction) and bridged to the backend via ``bk.from_numpy``. Everything
+after sampling — the batched rollout, the softmax weighting, the
+nominal-sequence update — runs through ``self.bk``, which is what makes the
+controller lowerable: a traced ``compute`` receives the already-drawn
+perturbations through a free graph input port (``epsilon``) instead of
+sampling, and the compiled kernel computes the rest.
 
 Usage:
     controller = MPPIController(
@@ -53,6 +57,30 @@ import numpy as np
 from shinro.components import Controller
 from shinro.factories.registry import register_controller
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend
+
+
+def _as_float(value: Any, field: str) -> float:
+    """Coerce a config scalar to float, naming the field when it fails.
+
+    Mirrors :func:`shinro.controllers.smc._as_float`: config values arrive from
+    TOML (or hand-written dicts), so a typo is a user error worth naming — a
+    bare ``float("abc")`` reports only that a conversion failed, not which
+    field or config was wrong.
+
+    Args:
+        value: The raw config value.
+        field: The config field name, for the error message.
+
+    Returns:
+        The value as a ``float``.
+
+    Raises:
+        ValueError: If the value is not numeric.
+    """
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"MPPIConfig.{field} must be a number, got {value!r}") from exc
 
 
 @dataclass(frozen=True)
@@ -144,8 +172,8 @@ class MPPIController(Controller):
 
         self.N = num_samples
         self.K = horizon
-        self.dt = float(dt)
-        self.lam = float(temperature)
+        self.dt = _as_float(dt, "dt")
+        self.lam = _as_float(temperature, "temperature")
         self.seed = seed
         self._rng = np.random.default_rng(seed)
 
@@ -164,16 +192,22 @@ class MPPIController(Controller):
         self._adapter = None
         self._Q = None
         self._R = None
-        self._x_ref = None
+        # Tracking reference for the attach_plant cost. Held in a 1-element
+        # list rather than as an array-like attr: the tracer's attr-diff
+        # promotes every reassigned ndarray/Tracer attr to a recurrent state
+        # port, and this is a per-call input, not state.
+        self._x_ref_holder = [None]
 
     def attach_plant(self, plant, Q: Any | None = None, R: Any | None = None):
         """Wire a plant into the controller via a batched dynamics adapter.
 
         Builds a :class:`BatchedDynamicsAdapter` from the plant and sets
         ``dynamics_fn`` / ``cost_fn`` from it. The cost uses the quadratic
-        stage cost :math:`x^T Q x + u^T R u`, optionally tracking a reference
-        passed to :func:`compute`. ``Q`` and ``R`` may be diagonal ``(D,)`` or
-        full ``(D, D)`` matrices; they default to identity.
+        stage cost :math:`x^T Q x + u^T R u`, optionally tracking the reference
+        passed to :func:`compute` — that reference is threaded through
+        ``self._x_ref_holder``, a plain list, so the tracer does not mistake it
+        for recurrent state. ``Q`` and ``R`` may be diagonal ``(D,)`` or full
+        ``(D, D)`` matrices; they default to identity.
 
         Args:
             plant: A :class:`Plant` exposing ``get_model()`` (and optionally
@@ -200,20 +234,21 @@ class MPPIController(Controller):
         self.D_u = adapter.control_dim
 
         self.dynamics_fn = adapter.dynamics_fn
-        self.cost_fn = lambda x, u: adapter.cost_fn(x, u, self._Q, self._R, x_ref=self._x_ref)
+        self.cost_fn = lambda x, u: adapter.cost_fn(x, u, self._Q, self._R, x_ref=self._x_ref_holder[0])
 
-    def compute(self, current_state, target_state: Any | None = None):
+    def compute(self, current_state, target_state: Any | None = None, epsilon: Any | None = None):
         """Compute the MPPI control action for a given initial state.
 
-        Samples :math:`N` Gaussian perturbation sequences, rolls out the
-        dynamics over the horizon, computes the softmax-weighted update, and
-        returns the first action of the updated nominal sequence (clipped to
-        bounds if configured).
+        Draws :math:`N` Gaussian perturbation sequences (host-side — see the
+        module docstring), rolls out the dynamics over the horizon, computes
+        the softmax-weighted update, and returns the first action of the
+        updated nominal sequence (clipped to bounds if configured).
 
-        The rollout loop runs on ``self.bk``, so with a :class:`TorchBackend`
-        the batched dynamics/cost operations execute as torch tensor ops. The
-        Gaussian sampling and softmax weighting run in numpy and are bridged
-        to the backend.
+        Everything after sampling runs through ``self.bk`` on batched tensors,
+        so it evaluates identically on numpy, torch, and the tracing backend.
+        Every reduction is written as a matmul identity — a sum over an axis is
+        a contraction with a ones vector or with the softmax weights — except
+        the softmax shift ``beta = min(costs)``, which is the ``min`` graph op.
 
         Args:
             current_state: Initial state vector (D_x,). Accepts the backend's
@@ -221,6 +256,12 @@ class MPPIController(Controller):
             target_state: Optional reference state (D_x,) to track. When given,
                 the cost penalizes deviation ``(x - target_state)``; otherwise
                 the controller regulates to the origin.
+            epsilon: Optional pre-drawn perturbations, shape ``(N, K*D_u)``,
+                sample-major (row ``i``, column ``k*D_u + d``). This is the
+                trace hook: when lowering, the perturbations become a free
+                graph input port the host fills each tick, so the traced call
+                never samples. ``None`` (the eager path) draws them from
+                ``self._rng``.
 
         Returns:
             First control action (D_u,) in the backend's native type.
@@ -238,58 +279,109 @@ class MPPIController(Controller):
         dynamics_fn = self.dynamics_fn
         cost_fn = self.cost_fn
 
-        x0_np = self.bk.to_numpy(current_state)
-        self._x_ref = self.bk.from_numpy(self.bk.to_numpy(target_state)) if target_state is not None else None
+        # Sampling is host-side by design: the one step of the tick with no
+        # dataflow representation. The traced path receives epsilon as a graph
+        # input port, so this branch is a trace-time constant and the traced
+        # call never touches the RNG.
+        if epsilon is None:
+            eps_sample = self._rng.normal(loc=0.0, scale=self.noise_sigma, size=(self.N, self.K, self.D_u))
+            self._last_epsilon = eps_sample
+            eps_in = self.bk.from_numpy(eps_sample.reshape(self.N, self.K * self.D_u))
+        else:
+            # Host-supplied perturbations (the trace path, or a caller wanting
+            # reproducible noise). Bridged like the sampled path so a numpy
+            # array works on a torch backend; a no-op under tracing, where
+            # epsilon is already the graph input Tracer.
+            eps_in = self.bk.from_numpy(epsilon)
 
-        epsilon = self._rng.normal(loc=0.0, scale=self.noise_sigma, size=(self.N, self.K, self.D_u))
-        self._last_epsilon = epsilon
-
-        v = np.expand_dims(self.u, axis=0) + epsilon
-        if self.u_min is not None or self.u_max is not None:
-            v = np.clip(v, self.u_min, self.u_max)
-
-        # Backend-native rollout. The dynamics/cost callables operate on the
-        # backend's tensors; the sampled perturbations and nominal sequence
-        # live in numpy and are bridged once before the loop. Each from_numpy
-        # is a CPU->GPU transfer on a torch backend, so converting the
-        # loop-invariant arrays up front removes 2K transfers per compute().
-        x_current = self.bk.from_numpy(np.tile(x0_np, (self.N, 1)))
-        u_plan = self.bk.from_numpy(v)
-        eps_b = self.bk.from_numpy(epsilon)
-        u_nom_b = self.bk.from_numpy(self.u)
-        sigma2_b = self.bk.from_numpy(self.noise_sigma**2)
-        costs = self.bk.zeros(self.N)
+        N, K, Du = self.N, self.K, self.D_u
         lam = self.lam
 
-        for k in range(self.K):
-            u_k = u_plan[:, k, :]
-            costs = costs + cost_fn(x_current, u_k)
-            inv_var_weighted_u = u_nom_b[k] / sigma2_b
-            control_penalty = lam * self.bk.sum(inv_var_weighted_u * eps_b[:, k, :], axis=1)
+        # Batch the initial state to (N, D_x) with a same-rank broadcast; the
+        # tracer rejects numpy's rank-differing tile.
+        d_x = current_state.shape[0]
+        x_current = self.bk.zeros((N, d_x)) + self.bk.reshape(current_state, (1, d_x))
+
+        # Tracking reference for the attach_plant cost closure (see __init__),
+        # stored as a (1, D_x) row: the closure subtracts it from the batched
+        # states, and (N, D_x) - (1, D_x) stays same-rank for the tracer (numpy
+        # would broadcast a (D_x,) there; the tracer rejects the rank gap).
+        self._x_ref_holder[0] = self.bk.reshape(target_state, (1, d_x)) if target_state is not None else None
+
+        # eps_in is (N, K*D_u) sample-major, so its transpose is (K*D_u, N) and
+        # step k's perturbations are the row block [k*D_u:(k+1)*D_u] transposed
+        # back to (N, D_u).
+        eps_t = eps_in.T
+        ones_du = self.bk.array(np.ones(Du))
+        ones_n_col = self.bk.array(np.ones((N, 1)))
+        sigma2 = self.bk.reshape(self.bk.array(self.noise_sigma**2), (1, Du))
+        costs = self.bk.zeros(N)
+        # Bridge the nominal sequence to the backend once. It is numpy-hosted
+        # (see the assignment at the end), and `numpy + torch` raises — only
+        # `torch + numpy` works — so every use goes through this backend-native
+        # copy. Under tracing this is a no-op passthrough and u_nominal is the
+        # recurrent state input Tracer.
+        u_nominal = self.bk.from_numpy(self.u)
+
+        for k in range(K):
+            eps_k = self.bk.slice_(eps_t, k * Du, (k + 1) * Du).T
+            u_k = self.bk.slice_(u_nominal, k, k + 1)  # nominal row -> (1, D_u)
+            v_k = eps_k + u_k
+            if self.u_min is not None or self.u_max is not None:
+                v_k = self.bk.clip(v_k, self.u_min, self.u_max)
+            costs = costs + cost_fn(x_current, v_k)
+            # lam * sum_d (u_k,d / sigma_d^2) eps_i,k,d — a row sum, i.e. a
+            # contraction with a ones vector.
+            control_penalty = lam * ((u_k / sigma2 * eps_k) @ ones_du)
             costs = costs + control_penalty
-            x_current = dynamics_fn(x_current, u_k, self.dt)
+            x_current = dynamics_fn(x_current, v_k, self.dt)
 
-        costs = costs + cost_fn(x_current, self.bk.zeros((self.N, self.D_u)))
+        costs = costs + cost_fn(x_current, self.bk.zeros((N, Du)))
+
+        # Diagnostics: the traced backend publishes `costs` as an auxiliary
+        # graph output port (SMC's `healthy` precedent); eager backends keep the
+        # concrete array. Assigning a Tracer here would be mis-detected as
+        # recurrent state.
+        self.bk.emit_named_output("costs", costs)
         costs_np = self.bk.to_numpy(costs)
-        self._last_costs = costs_np.copy()
+        if isinstance(costs_np, np.ndarray):
+            self._last_costs = costs_np.copy()
 
-        beta = np.min(costs_np)
-        softmax_w = np.exp(-(costs_np - beta) / lam)
-        softmax_w /= np.sum(softmax_w)
+        # Softmax weights. beta is the shift that keeps exp from overflowing.
+        # The normalizer is a contraction with a ones vector, not a 1-D @ 1-D
+        # product: (1,N) @ (N,1) with the weights on *both* sides would sum the
+        # squares. The (1,1) result ravels to (1,), which broadcasts against (N,).
+        beta = self.bk.min(costs)
+        w = self.bk.exp(-(costs - beta) / lam)
+        w_sum = self.bk.ravel(self.bk.reshape(w, (1, N)) @ ones_n_col)
+        w = w / w_sum
 
-        weighted_eps = np.sum(softmax_w[:, np.newaxis, np.newaxis] * epsilon, axis=0)
+        # Weighted average of the perturbations: sum_i w_i eps_i is the matmul
+        # (1,N) @ (N, K*D_u). to_numpy keeps the nominal sequence numpy-hosted
+        # on the eager backends; under tracing it is a no-op passthrough, so
+        # self.u stays a Tracer and is emitted as the recurrent state output.
+        w_row = self.bk.reshape(w, (1, N))
+        weighted_eps = self.bk.reshape(w_row @ eps_in, (K, Du))
+        u_updated = u_nominal + weighted_eps
 
-        self.u += weighted_eps
+        # The returned action is the first element *before* the receding-horizon
+        # shift (self.u[:-1] = self.u[1:]; self.u[-1] = self.u[-2], i.e. rows
+        # 1..K-1 followed by row K-1 again). The tracer has no in-place slice
+        # assignment, so the shift is K row slices + a stack.
+        u_0 = self.bk.slice_(u_updated, 0, 1)
+        if K > 1:
+            rows = [self.bk.ravel(self.bk.slice_(u_updated, j, j + 1)) for j in range(1, K)]
+            rows.append(self.bk.ravel(self.bk.slice_(u_updated, K - 1, K)))
+            shifted = self.bk.stack(rows)
+        else:
+            shifted = u_updated
+        self.u = self.bk.to_numpy(shifted)
 
-        u_0 = self.u[0].copy()
-        if self.K > 1:
-            self.u[:-1] = self.u[1:]
-            self.u[-1] = self.u[-2]
-
+        u_0 = self.bk.ravel(u_0)
         if self.u_min is not None or self.u_max is not None:
-            u_0 = np.clip(u_0, self.u_min, self.u_max)
+            u_0 = self.bk.clip(u_0, self.u_min, self.u_max)
 
-        return self.bk.from_numpy(u_0)
+        return u_0
 
     def reset(self):
         """Reset the controller to its initial state.
