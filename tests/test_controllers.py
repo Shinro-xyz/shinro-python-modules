@@ -893,6 +893,30 @@ class TestMPPI:
         expected_shift = np.concatenate([updated[1:], updated[-1:]])
         assert np.allclose(ctrl.u, expected_shift, atol=1e-10)
 
+    def test_mppi_epsilon_param_matches_sampled(self, bk):
+        """Feeding epsilon reproduces the internally-sampled run exactly.
+
+        This is the trace contract: the lowered kernel receives the
+        perturbations as an input port instead of sampling, so
+        ``compute(..., epsilon=...)`` must produce the same action the sampled
+        path did. Two controllers with different seeds must agree when one is
+        fed the other's draw.
+        """
+        N, K = 6, 3
+        sampled = self._ctrl(bk, num_samples=N, horizon=K, noise_sigma=[0.5], seed=5)
+        u_sampled = sampled.compute(bk.array([1.0, 1.0]))
+        eps = sampled._last_epsilon
+        costs_sampled = sampled._last_costs
+        assert eps is not None
+        assert costs_sampled is not None
+        assert eps.shape == (N, K, 1)
+
+        fed = self._ctrl(bk, num_samples=N, horizon=K, noise_sigma=[0.5], seed=999)
+        u_fed = fed.compute(bk.array([1.0, 1.0]), None, np.ascontiguousarray(eps.reshape(N, K)))
+        assert fed._last_costs is not None
+        assert np.allclose(_to_np(u_sampled, bk), _to_np(u_fed, bk), atol=1e-12)
+        assert np.allclose(fed._last_costs, costs_sampled, atol=1e-12)
+
     def test_mppi_bounds_clamp_in_rollout(self, bk):
         """The cost function never observes a control outside the configured bounds."""
         bound = 0.3

@@ -174,6 +174,9 @@ class ArrayBackend(ABC):
     def sum(self, x, axis=None) -> Any: ...
 
     @abstractmethod
+    def min(self, x, axis=None) -> Any: ...
+
+    @abstractmethod
     def reshape(self, x, *shape) -> Any: ...
 
     @abstractmethod
@@ -378,6 +381,9 @@ class NumpyBackend(ArrayBackend):
     def sum(self, x, axis=None):
         return np.sum(x, axis=axis)
 
+    def min(self, x, axis=None):
+        return np.min(x, axis=axis)
+
     def reshape(self, x, *shape):
         if len(shape) == 1 and isinstance(shape[0], (tuple, list)):
             shape = tuple(shape[0])
@@ -548,6 +554,13 @@ class TorchBackend(ArrayBackend):
     def clip(self, x, lo, hi):
         if not isinstance(x, self.torch.Tensor):
             x = self.torch.tensor(x, dtype=self.torch.float64)
+        # torch.clamp rejects numpy bounds (it takes a Number or a Tensor), so
+        # convert them. Array bounds are the common case (per-channel control
+        # limits), and they broadcast against the batched operand.
+        if lo is not None and not isinstance(lo, self.torch.Tensor):
+            lo = self.torch.as_tensor(lo, dtype=self.torch.float64, device=self.device)
+        if hi is not None and not isinstance(hi, self.torch.Tensor):
+            hi = self.torch.as_tensor(hi, dtype=self.torch.float64, device=self.device)
         return self.torch.clamp(x, lo, hi)
 
     def where(self, cond, a, b):
@@ -616,6 +629,13 @@ class TorchBackend(ArrayBackend):
 
     def sum(self, x, axis=None):
         return self.torch.sum(x, dim=axis)
+
+    def min(self, x, axis=None):
+        # torch.min with a dim returns (values, indices); take the values so the
+        # signature matches numpy's min (which the interpreter/numpy backends use).
+        if axis is None:
+            return self.torch.min(x)
+        return self.torch.min(x, dim=axis).values
 
     def reshape(self, x, *shape):
         if len(shape) == 1 and isinstance(shape[0], (tuple, list)):
