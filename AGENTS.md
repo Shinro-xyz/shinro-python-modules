@@ -54,7 +54,7 @@ joint space**.
 - Demos: `python -m demos.demo_*`.
 - **Docs** (API reference is generated, not hand-written):
   - `make docs` — install the docs toolchain (`requirements-docs.txt`).
-  - `make docs-serve` — regenerate reference + serve at http://127.0.0.1:8000.
+  - `make docs-serve` — regenerate reference + serve at <http://127.0.0.1:8000>.
   - `make docs-build` — regenerate reference + build static `site/`.
   - `scripts/gen_api.py` walks each subpackage's `__all__` and emits one page
     per subpackage plus the nav — **adding an export is all it takes** for it to
@@ -75,6 +75,11 @@ joint space**.
   path) then `scripts/build_scenario.py` (zig build + oracle + stamp + verify).
   The scenario TOML's `[compile]` section (`n_x`, `n_u`, `optimize`, `target`,
   `solver_dir`) is the build spec; never clobbers `src/shinro/runtime/graph_data.zig`.
+- `make measure-kernels` — the kernel **size metric** (`shinro/codegen/measure.py`
+  plus a thin `scripts/` shim): the C-ABI host buffers, the VM's internal stack
+  buffer (`buf: [buf_len]f64`), and — with `BUILD=1` — the compiled artifact
+  bytes and compile cost. `DIMS=3x3x6x3,...` sweeps `D_x x D_u x N x K` rollout
+  shapes (multi-input systems included); static-only by default, so no compiler.
 
 ## Zig lowering (codegen → `.so`)
 
@@ -96,7 +101,7 @@ joint space**.
 ## Key Files
 
 | File | Purpose |
-|------|---------|
+| ------ | --------- |
 | `src/shinro/components.py` | The five ABCs |
 | `src/shinro/codegen/` | Trace → compose → interpret → lower pipeline; `lower_zig.py` serializes a graph to `src/shinro/runtime/graph_data.zig` |
 | `src/shinro/factories/registry.py` | Component registry + config-driven factory |

@@ -1,28 +1,37 @@
 {
+  "buf_bytes": 2544,
   "buf_len": 318,
+  "clip_blob_bytes": 48,
+  "clip_blob_len": 3,
+  "const_blob_bytes": 1008,
   "const_blob_len": 126,
   "float_type": "f64",
   "has_solve_qp": false,
+  "input_bytes": 168,
   "inputs": [
     {
+      "bytes": 24,
       "name": "y",
       "shape": [
         3
       ]
     },
     {
+      "bytes": 24,
       "name": "x_ref",
       "shape": [
         3
       ]
     },
     {
+      "bytes": 24,
       "name": "u_prev",
       "shape": [
         3
       ]
     },
     {
+      "bytes": 24,
       "name": "state_x_hat",
       "shape": [
         3,
@@ -30,6 +39,7 @@
       ]
     },
     {
+      "bytes": 72,
       "name": "state_P",
       "shape": [
         3,
@@ -646,8 +656,10 @@
     "reshape",
     "sub"
   ],
+  "output_bytes": 24,
   "outputs": [
     {
+      "bytes": 24,
       "name": "u",
       "shape": [
         3
@@ -655,8 +667,10 @@
     }
   ],
   "solve_qp": null,
+  "state_bytes": 120,
   "state_outputs": [
     {
+      "bytes": 24,
       "name": "state_x_hat",
       "shape": [
         3,
@@ -664,6 +678,7 @@
       ]
     },
     {
+      "bytes": 72,
       "name": "state_P",
       "shape": [
         3,
@@ -671,6 +686,7 @@
       ]
     },
     {
+      "bytes": 24,
       "name": "state_u_prev",
       "shape": [
         3

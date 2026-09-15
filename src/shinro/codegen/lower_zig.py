@@ -40,6 +40,10 @@ import numpy as np
 from shinro.codegen.compose import ComposedGraph
 from shinro.codegen.tracing import Graph, Node
 
+#: The compiled VM and every C-ABI buffer are f64, so the manifest's byte
+#: metrics are element counts times this.
+_FLOAT_BYTES = 8
+
 
 def lower_zig(
     cg: ComposedGraph,
@@ -101,21 +105,22 @@ def lower_zig(
             const_blob.extend(float(v) for v in node.attrs["value"].ravel())
         elif node.op == "clip":
             clip_offsets[i] = len(clip_lo)
-            n_elems = _size(node.shape)
             bounds: dict[str, list[float]] = {"lo": clip_lo, "hi": clip_hi}
             for attr, blob in bounds.items():
-                vals = np.asarray(node.attrs[attr], dtype=np.float64).ravel()
-                if vals.size == 1 and n_elems > 1:
-                    # Scalar bound: numpy broadcasts it; the VM's flat blob
-                    # indexing needs one element per output element.
-                    vals = np.full(n_elems, float(vals[0]))
-                if vals.size != n_elems:
+                raw = np.asarray(node.attrs[attr], dtype=np.float64)
+                try:
+                    # numpy broadcasting covers scalar, same-shape, (1, D) row,
+                    # (D,) trailing, and (N, 1) column bounds. The VM indexes
+                    # its flat blob by output element, so one entry per element
+                    # is required — e.g. MPPI clips an (N, D_u) sample batch
+                    # with per-channel (D_u,) control limits.
+                    vals = np.broadcast_to(raw, node.shape).ravel()
+                except ValueError as exc:
                     raise ValueError(
-                        f"clip node {i}: {attr!r} bound shape {node.attrs[attr].shape} "
-                        f"cannot broadcast against clip shape {node.shape} in the "
-                        f"lowered VM (supported: same-size or scalar bounds)"
-                    )
-                blob.extend(float(v) for v in vals)
+                        f"clip node {i}: {attr!r} bound shape {raw.shape} cannot "
+                        f"broadcast against clip shape {node.shape}"
+                    ) from exc
+                blob.extend(vals.tolist())
 
     # --- output port packing: separate zero-indexed offsets per buffer ---
     # `outputs` and `state_out` are separate C-ABI buffers, so each needs its
@@ -239,7 +244,7 @@ def _graph_manifest(
     def _port(name: str) -> dict:
         for node in g.nodes:
             if node.op == "output" and node.attrs["name"] == name:
-                return {"name": name, "shape": list(node.shape)}
+                return {"name": name, "shape": list(node.shape), "bytes": _size(node.shape) * _FLOAT_BYTES}
         raise KeyError(f"output port '{name}' not found in graph")
 
     solve_qp = None
@@ -265,16 +270,37 @@ def _graph_manifest(
             }
         )
 
+    # Size metrics. Element counts above; byte figures here, because the three
+    # sizes that matter to a deployment differ by orders of magnitude: the
+    # C-ABI buffers the host packs per tick, the VM's stack buffer
+    # (`buf: [buf_len]f64`), and the baked blobs. Recorded in the manifest so
+    # every graph self-reports them (the audit trail already carried buf_len).
+    input_bytes = sum(_input_size(g, n) for n in cg.inputs) * _FLOAT_BYTES
+    output_bytes = sum(_output_size(g, n) for n in cg.outputs) * _FLOAT_BYTES
+    state_bytes = sum(_output_size(g, n) for n in cg.state_outputs) * _FLOAT_BYTES
+    # clip_blob_len counts one bound's elements (lo == hi in length); the VM
+    # bakes both, so the byte figure doubles it.
+    clip_blob_len = sum(_size(n.shape) for n in g.nodes if n.op == "clip")
+
     return {
         "float_type": "f64",
         "buf_len": buf_len,
+        "buf_bytes": buf_len * _FLOAT_BYTES,
         "const_blob_len": const_blob_len,
+        "const_blob_bytes": const_blob_len * _FLOAT_BYTES,
+        "clip_blob_len": clip_blob_len,
+        "clip_blob_bytes": 2 * clip_blob_len * _FLOAT_BYTES,
+        "input_bytes": input_bytes,
+        "output_bytes": output_bytes,
+        "state_bytes": state_bytes,
         "has_solve_qp": solve_qp is not None,
         "nodes_total": len(g.nodes),
         "nodes": nodes,
         "ops": sorted(op_histogram),
         "op_histogram": op_histogram,
-        "inputs": [{"name": n, "shape": list(_input_shape(g, n))} for n in cg.inputs],
+        "inputs": [
+            {"name": n, "shape": list(_input_shape(g, n)), "bytes": _input_size(g, n) * _FLOAT_BYTES} for n in cg.inputs
+        ],
         "outputs": [_port(n) for n in cg.outputs],
         "state_outputs": [_port(n) for n in cg.state_outputs],
         "solve_qp": solve_qp,
