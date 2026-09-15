@@ -147,6 +147,13 @@ class BatchedDynamicsAdapter:
         :math:`\\sum_i W_i z_i^2`) or a full ``(D, D)`` matrix (batched
         matmul). Returns a per-sample vector of shape ``(N,)``.
 
+        The row sum is written as a contraction rather than
+        ``bk.sum(..., axis=1)``: a sum over an axis *is* a matmul identity, and
+        the operator form traces — ``@`` lifts the concrete ones operand into a
+        const node — whereas ``bk.sum`` dispatches through whichever backend
+        the *plant* holds and never sees a traced operand. Same reduction, no
+        new op in the VM.
+
         Args:
             z: Batch of vectors (N, D).
             W: Diagonal (D,) or full (D, D) weight matrix.
@@ -157,5 +164,12 @@ class BatchedDynamicsAdapter:
         if W is None:
             return self.bk.zeros(z.shape[0])
         if W.ndim == 1:
-            return self.bk.sum(z * z * W, axis=1)
-        return self.bk.sum(z * (z @ W.T), axis=1)
+            # Diagonal weights: (z*z) contracted with W is exactly
+            # Σ_i W_i z_i² — W plays the contraction vector's role, so no ones
+            # vector is needed (and no rank-differing broadcast, which the
+            # tracer's elementwise ops reject even though the VM supports it).
+            return (z * z) @ W
+        # Full W: Σ_j z_j (z Wᵀ)_j, a row-wise dot product — contracted with a
+        # ones vector (there is no matmul identity for that one without it).
+        ones = self.bk.array([1.0] * z.shape[-1])
+        return (z * (z @ W.T)) @ ones
