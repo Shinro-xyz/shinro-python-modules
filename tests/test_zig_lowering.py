@@ -32,6 +32,7 @@ from shinro.codegen.lower_zig import lower_zig
 from shinro.codegen.oracle import input_shape, output_split, pack_arrays, state_slices, step_so
 from shinro.codegen.trace_node import trace_node
 from shinro.codegen.tracing import Graph
+from shinro.controllers.mppi import MPPIController
 from shinro.controllers.pid import PIDController
 from shinro.controllers.smc import SlidingModeController
 from shinro.factories.controller_factory import ControllerFactory
@@ -330,6 +331,82 @@ def _smc_rand_inputs(rng: np.random.Generator, min_cg: float = 0.2, n_u: int = 1
             return {"x": x, "f_x": f_x, "g_x": g_x}
 
 
+# MPPI graph dims stay deliberately small: the comptime VM unrolls the whole
+# K-step rollout, so node count and the stack buffer grow with N*K*D_u.
+MPPI_N, MPPI_K, MPPI_DX, MPPI_DU = 6, 3, 3, 3
+
+
+def _mppi_controller(N: int = MPPI_N, K: int = MPPI_K, dt: float = 0.02) -> MPPIController:
+    """The live (numpy) MPPI the lowered graph is compared against.
+
+    Wired from an LTI plant through ``attach_plant`` — the production path
+    (``ScenarioFactory`` does the same) — so the traced graph and the live
+    reference cannot drift apart silently. The plant fixes D_x = D_u = 3.
+    """
+    from shinro.plants.holonomicmobilerobot import HolonomicMobileRobot
+
+    bk = NumpyBackend()
+    plant = HolonomicMobileRobot(
+        num_wheels=3, radius_robots=0.1, gamma=0.0, radius_wheels=0.03, dt=dt, backend=bk
+    )
+    ctrl = MPPIController(
+        num_samples=N,
+        temperature=1.0,
+        dt=dt,
+        horizon=K,
+        noise_sigma=[0.5, 0.5, 0.5],
+        u_min=[-0.5, -0.5, -0.5],
+        u_max=[0.5, 0.5, 0.5],
+        seed=1,
+        backend=bk,
+    )
+    ctrl.attach_plant(plant, Q=np.array([1.0, 1.0, 1.0]), R=np.array([0.1, 0.1, 0.1]))
+    return ctrl
+
+
+def _build_mppi_graph(N: int = MPPI_N, K: int = MPPI_K, dt: float = 0.02) -> ComposedGraph:
+    """Standalone MPPI graph: the perturbations arrive as an input port.
+
+    MPPI's Gaussian sampling stays on the host (see ``mppi.py``), so unlike
+    every other lowered controller there is no RNG in the graph: ``epsilon``
+    is a free C-ABI port of shape ``(N, K*D_u)`` (sample-major) the host fills
+    each tick. That is what makes parity checkable — the same draw goes to the
+    graph and to the live controller.
+
+    Recurrent state is the nominal control sequence ``u`` (``(K, D_u)``): the
+    controller rebinds it each tick, so ``trace_node`` detects it and the graph
+    emits ``state_u``. Two non-state outputs: ``out`` (the action) and
+    ``costs``, the per-sample rollout costs published through
+    :meth:`ArrayBackend.emit_named_output` — a host-visible diagnostic, the way
+    SMC publishes ``healthy``.
+
+    Args:
+        N: Number of sampled perturbations.
+        K: Prediction horizon.
+        dt: Rollout time step (baked into the plant's model).
+
+    Returns:
+        The traced, lowered-ready :class:`ComposedGraph`.
+    """
+    ctrl = _mppi_controller(N=N, K=K, dt=dt)
+    ng = trace_node(
+        ctrl,
+        input_shapes={
+            "current_state": (MPPI_DX,),
+            "target_state": (MPPI_DX,),
+            "epsilon": (N, K * MPPI_DU),
+        },
+        state_shapes={"u": (K, MPPI_DU)},
+    )
+    return ComposedGraph(
+        graph=ng.graph,
+        inputs=["current_state", "target_state", "epsilon", "state_u"],
+        outputs=["out", "costs"],
+        state_inputs=["state_u"],
+        state_outputs=["state_u"],
+    )
+
+
 @pytest.fixture(scope="session")
 def base_so(tmp_path_factory):
     """Build the .so from the base_tracking composed graph once per session."""
@@ -415,6 +492,20 @@ def smc_multi_so(tmp_path_factory):
     """
     d = tmp_path_factory.mktemp("zig-build-smc-multi")
     return _build_so(_build_smc_graph(n_u=2), d, graph_path=d / "graph_data.zig")
+
+
+@pytest.fixture(scope="session")
+def mppi_so(tmp_path_factory):
+    """Build the .so from the standalone MPPI graph (the sampling-port contract).
+
+    MPPI's perturbations arrive as a free C-ABI port, so this kernel does no
+    sampling: the host draws ``epsilon``, and three-way parity (.so vs
+    interpreter vs live numpy) is checkable exactly on that same draw. Lowers
+    to a tmp graph_path so the shared src/shinro/runtime/graph_data.zig is not
+    clobbered (same discipline as smc_so).
+    """
+    d = tmp_path_factory.mktemp("zig-build-mppi")
+    return _build_so(_build_mppi_graph(), d, graph_path=d / "graph_data.zig")
 
 
 # SMC config variants, each a graph-structure specialization: phi=0 swaps the
@@ -1299,6 +1390,166 @@ class TestSmcOracle:
         with np.errstate(divide="ignore", invalid="ignore"):
             traced = interpret(cg.graph, arrays)
         assert traced["healthy"][0] == 0.0
+
+
+class TestMppiOracle:
+    """The interpreted MPPI graph matches live numpy — including recurrence.
+
+    MPPI's Gaussian sampling stays on the host, so the perturbations arrive
+    through a free ``epsilon`` port and the traced call never touches the RNG.
+    That is what makes parity checkable at all: feed the same draw to the graph
+    and to the live controller and they must agree, tick after tick.
+
+    These cases are interpreter-only (no .so): they pin that the traced graph
+    computes the same control law the live component does, which is the oracle
+    the Zig VM is checked against next.
+    """
+
+    def _feeds(self, x0, x_ref, epsilon, state_u=None):
+        """The four C-ABI input ports; ``state_u`` defaults to a zero plan."""
+        return {
+            "current_state": x0,
+            "target_state": x_ref,
+            "epsilon": epsilon,
+            "state_u": np.zeros((MPPI_K, MPPI_DU)) if state_u is None else state_u,
+        }
+
+    def test_interpreter_matches_numpy(self):
+        """interpret() == live numpy across 10 seeded perturbation draws."""
+        cg = _build_mppi_graph()
+        ref = _mppi_controller()
+        rng = np.random.default_rng(23)
+        x_ref = np.array([1.0, 0.0, 0.0])
+        max_u_err = 0.0
+        max_state_err = 0.0
+        for _ in range(10):
+            # Each iteration is a fresh tick: the graph is fed a zero plan, so
+            # the live reference must start from one too.
+            ref.reset()
+            x0 = rng.normal(0.0, 0.5, MPPI_DX)
+            eps = rng.normal(0.0, 0.5, (MPPI_N, MPPI_K * MPPI_DU))
+            out = interpret(cg.graph, self._feeds(x0, x_ref, eps))
+            want_u = np.asarray(ref.compute(x0, x_ref, eps)).ravel()
+            want_state = np.asarray(ref.u).reshape(MPPI_K, MPPI_DU)
+
+            np.testing.assert_allclose(out["out"], want_u, rtol=1e-11, atol=1e-11)
+            np.testing.assert_allclose(out["state_u"], want_state, rtol=1e-11, atol=1e-11)
+            max_u_err = max(max_u_err, np.max(np.abs(out["out"] - want_u)))
+            max_state_err = max(max_state_err, np.max(np.abs(out["state_u"] - want_state)))
+        assert max_u_err < 1e-11, f"MPPI graph drifted from live numpy: {max_u_err:.3e}"
+        assert max_state_err < 1e-11
+
+    def test_costs_port_is_published(self):
+        """The per-sample rollout costs are a graph output port (diagnostic)."""
+        cg = _build_mppi_graph()
+        rng = np.random.default_rng(31)
+        out = interpret(
+            cg.graph,
+            self._feeds(
+                rng.normal(0.0, 0.5, MPPI_DX),
+                np.array([1.0, 0.0, 0.0]),
+                rng.normal(0.0, 0.5, (MPPI_N, MPPI_K * MPPI_DU)),
+            ),
+        )
+        assert out["costs"].shape == (MPPI_N,)
+        assert np.all(np.isfinite(out["costs"]))
+
+    def test_recurrence_matches_sequential_ticks(self):
+        """Feeding state_u back reproduces a second live tick (recurrent edge)."""
+        cg = _build_mppi_graph()
+        ref = _mppi_controller()
+        rng = np.random.default_rng(29)
+        x0 = rng.normal(0.0, 0.5, MPPI_DX)
+        x_ref = np.array([1.0, 0.0, 0.0])
+        eps1 = rng.normal(0.0, 0.5, (MPPI_N, MPPI_K * MPPI_DU))
+        eps2 = rng.normal(0.0, 0.5, (MPPI_N, MPPI_K * MPPI_DU))
+
+        tick1 = interpret(cg.graph, self._feeds(x0, x_ref, eps1))
+        want1 = np.asarray(ref.compute(x0, x_ref, eps1)).ravel()
+        np.testing.assert_allclose(tick1["out"], want1, rtol=1e-11, atol=1e-11)
+        np.testing.assert_allclose(
+            tick1["state_u"], np.asarray(ref.u).reshape(MPPI_K, MPPI_DU), rtol=1e-11, atol=1e-11
+        )
+
+        # The graph's own state output feeds the next tick — no numpy state.
+        tick2 = interpret(cg.graph, self._feeds(x0, x_ref, eps2, state_u=tick1["state_u"]))
+        want2 = np.asarray(ref.compute(x0, x_ref, eps2)).ravel()
+        np.testing.assert_allclose(tick2["out"], want2, rtol=1e-11, atol=1e-11)
+        np.testing.assert_allclose(
+            tick2["state_u"], np.asarray(ref.u).reshape(MPPI_K, MPPI_DU), rtol=1e-11, atol=1e-11
+        )
+
+    def test_graph_structure_and_ports(self):
+        """Drift guard: the ops MPPI relies on and the C-ABI port layout."""
+        cg = _build_mppi_graph()
+        ops = {node.op for node in cg.graph.nodes}
+        for op in ("min", "matmul", "clip", "slice", "stack", "transpose", "exp", "reshape"):
+            assert op in ops, f"MPPI graph lost the {op!r} op"
+
+        assert cg.outputs == ["out", "costs"]
+        assert cg.state_outputs == ["state_u"]
+        port_shapes = {n.attrs["name"]: n.shape for n in cg.graph.nodes if n.op == "input"}
+        # The sampling contract: (N, K*D_u), sample-major — what the host packs.
+        assert port_shapes["epsilon"] == (MPPI_N, MPPI_K * MPPI_DU)
+        assert port_shapes["state_u"] == (MPPI_K, MPPI_DU)
+        assert port_shapes["current_state"] == (MPPI_DX,)
+        assert port_shapes["target_state"] == (MPPI_DX,)
+
+    def test_so_matches_interpreter_and_numpy(self, mppi_so):
+        """.so, interpreter, and live numpy agree on the same seeded draws."""
+        lib, cg = mppi_so
+        n_out, n_state = output_split(cg)
+        assert n_state == MPPI_K * MPPI_DU  # the nominal plan recurs
+        assert n_out == MPPI_DU + MPPI_N  # out (D_u) + costs (N)
+
+        ref = _mppi_controller()
+        rng = np.random.default_rng(41)
+        x_ref = np.array([1.0, 0.0, 0.0])
+        max_u_err = 0.0
+        for _ in range(10):
+            ref.reset()
+            x0 = rng.normal(0.0, 0.5, MPPI_DX)
+            eps = rng.normal(0.0, 0.5, (MPPI_N, MPPI_K * MPPI_DU))
+            feeds = self._feeds(x0, x_ref, eps)
+            out, state = step_so(lib, pack_arrays(cg, feeds), n_out, n_state)
+            traced = interpret(cg.graph, feeds)
+            want_u = np.asarray(ref.compute(x0, x_ref, eps)).ravel()
+
+            # kernel vs its own interpreter (the tight tier), then vs numpy
+            np.testing.assert_allclose(out[:MPPI_DU], traced["out"], rtol=1e-13, atol=1e-13)
+            np.testing.assert_allclose(state, np.asarray(traced["state_u"]).ravel(), rtol=1e-13, atol=1e-13)
+            np.testing.assert_allclose(out[MPPI_DU:], np.asarray(traced["costs"]).ravel(), rtol=1e-13, atol=1e-13)
+            np.testing.assert_allclose(out[:MPPI_DU], want_u, rtol=1e-11, atol=1e-11)
+            max_u_err = max(max_u_err, np.max(np.abs(out[:MPPI_DU] - want_u)))
+        assert max_u_err < 1e-11, f"MPPI .so drifted from live numpy: {max_u_err:.3e}"
+
+    def test_cabi_recurrence_matches_numpy(self, mppi_so):
+        """The kernel's own state buffer reproduces a second live tick.
+
+        The host feeds ``state_out`` straight back as the next tick's
+        ``state_u`` — no numpy state in the loop. Two ticks must match two
+        sequential live ``compute()`` calls.
+        """
+        lib, cg = mppi_so
+        n_out, n_state = output_split(cg)
+        start, stop = state_slices(cg)["state_u"]
+        ref = _mppi_controller()
+        rng = np.random.default_rng(43)
+        x0 = rng.normal(0.0, 0.5, MPPI_DX)
+        x_ref = np.array([1.0, 0.0, 0.0])
+        eps1 = rng.normal(0.0, 0.5, (MPPI_N, MPPI_K * MPPI_DU))
+        eps2 = rng.normal(0.0, 0.5, (MPPI_N, MPPI_K * MPPI_DU))
+
+        out1, state1 = step_so(lib, pack_arrays(cg, self._feeds(x0, x_ref, eps1)), n_out, n_state)
+        want1 = np.asarray(ref.compute(x0, x_ref, eps1)).ravel()
+        np.testing.assert_allclose(out1[:MPPI_DU], want1, rtol=1e-11, atol=1e-11)
+
+        # Feed the kernel's state back through the C-ABI input buffer.
+        plan = state1[start:stop].reshape(MPPI_K, MPPI_DU)
+        out2, state2 = step_so(lib, pack_arrays(cg, self._feeds(x0, x_ref, eps2, state_u=plan)), n_out, n_state)
+        want2 = np.asarray(ref.compute(x0, x_ref, eps2)).ravel()
+        np.testing.assert_allclose(out2[:MPPI_DU], want2, rtol=1e-11, atol=1e-11)
+        np.testing.assert_allclose(state2[start:stop], np.asarray(ref.u).ravel(), rtol=1e-11, atol=1e-11)
 
 
 class TestSolveQpOracle:

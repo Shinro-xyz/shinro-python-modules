@@ -4,7 +4,7 @@
 	test-controllers test-estimators test-plants test-trajectories test-armrobot \
 	test-components test-array-backend test-batched-adapter test-controllability test-factories \
 	test-linearization test-adversarial test-mcp-server test-mcp-functional \
-	compile
+	compile measure-kernels
 
 # Install the package in editable mode
 install:
@@ -124,6 +124,18 @@ OUT ?= build/scenario
 compile:
 	python3 scripts/gen_scenario.py $(SCENARIO) --out $(OUT)
 	python3 scripts/build_scenario.py $(OUT) --scenario $(SCENARIO) $(FLAGS)
+
+# ───────────────────────────────────────────────────────────────────────────
+# Measure lowered-kernel sizes as a metrics document: the C-ABI host buffers,
+# the VM's internal stack buffer, the compiled artifact, and the compile cost.
+# DIMS is a comma-separated list of `D_x x D_u x N x K` rollout shapes;
+# BUILD=1 compiles (minutes at production sizes) and JSON=<path> writes the
+# machine-readable document. Static-only is fast (no compiler).
+# ───────────────────────────────────────────────────────────────────────────
+DIMS ?= 3x3x6x3,3x3x100x15,6x6x10x4,8x4x12x5
+OPTIMIZE ?= ReleaseFast
+measure-kernels:
+	python3 scripts/measure_kernels.py --dims $(DIMS) --optimize $(OPTIMIZE) $(if $(JSON),--json $(JSON),) $(if $(BUILD),--build,)
 
 # Run linter and type checker
 lint:
