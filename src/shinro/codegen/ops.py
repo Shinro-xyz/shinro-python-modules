@@ -248,6 +248,20 @@ def _argmax(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndar
     return np.asarray(np.argmax(values[node.inputs[0]]))
 
 
+@register_op("min")
+def _min(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
+    """Minimum reduction, numpy ``min`` semantics.
+
+    ``axis`` is a node attr: ``None`` collapses to a 0-d scalar, ``0``/``1``
+    reduce that axis of a 2-D input. Introduced for MPPI's softmax shift
+    (``beta = min(costs)``, the overflow guard); the axis support keeps the op
+    a complete reduction rather than a one-off. The Zig mirror is
+    ``linalg.min_all`` / ``min_axis0`` / ``min_axis1``, dispatched on the
+    node's ``aux`` (0 = None, 1 = axis 0, 2 = axis 1).
+    """
+    return np.min(values[node.inputs[0]], axis=node.attrs.get("axis"))
+
+
 @register_op("one_hot")
 def _one_hot(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     # one_hot(x, depth): x is a scalar index → one-hot row vector.

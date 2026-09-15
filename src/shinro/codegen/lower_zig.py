@@ -140,7 +140,7 @@ def lower_zig(
     lines.append("    transpose, inv, reshape, clip, where_op, any,")
     lines.append("    copy, tanh, relu, exp, argmax, one_hot, slice,")
     lines.append("    sin, cos, stack, solve_qp,")
-    lines.append("    abs, sign, pow, lt,")
+    lines.append("    abs, sign, pow, lt, min,")
     lines.append("};")
     lines.append("")
     lines.append("pub const Node = struct {")
@@ -386,6 +386,12 @@ def _node_vm_info(
         # slice(x, start, stop): start is the input offset (stop is implicit —
         # the node's rows*cols is stop - start).
         return "slice", node.attrs["start"]
+    if node.op == "min":
+        # Minimum reduction: the axis rides in aux (0 = None / full, 1 = axis 0
+        # down columns, 2 = axis 1 across rows) so the VM's switch selects the
+        # right reduction loop without an extra node field.
+        axis = node.attrs.get("axis")
+        return "min", 0 if axis is None else axis + 1
     return node.op, 0
 
 
