@@ -1,5 +1,7 @@
 # Shinro Python Modules
 
+[![API Reference](https://img.shields.io/badge/API%20Reference-shinro--xyz.github.io-blue)](https://shinro-xyz.github.io/shinro-python-modules/)
+
 A clean, modular Python control framework built on five abstract base classes
 — **Controller**, **Plant**, **StateEstimator**, **TrajectoryGenerator**, and
 **PhysicsEngine** — with registry-based factories that compose them from TOML
@@ -18,6 +20,12 @@ Conceptual and operational documentation lives in
 
 - **[Control Architecture](https://docs.shinro.xyz/control-architecture/)** — why the five ABCs exist, how they compose, sim/hardware parity
 - **[Python Modules](https://docs.shinro.xyz/python-modules/)** — the operational guide: install, run, extend, component catalog
+
+**API Reference** — <https://shinro-xyz.github.io/shinro-python-modules/>
+Every exported symbol — the five ABCs, controllers, estimators, plants,
+trajectories, factories, utilities — with signatures, parameter tables and
+source links. Generated from the package's own `__all__` on every push, so it
+cannot go stale.
 
 The same guides live in-repo under [`docs/`](./docs/) (no internet required):
 

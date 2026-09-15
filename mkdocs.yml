@@ -8,6 +8,7 @@
 # from each subpackage's __all__. Only prose pages are declared by hand below.
 
 site_name: shinro
+site_url: https://shinro-xyz.github.io/shinro-python-modules/
 site_description: Whole-body control framework — controllers, plants, estimators, trajectories, and a MuJoCo-backed simulation factory.
 docs_dir: docs
 site_dir: site
