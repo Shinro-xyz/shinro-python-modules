@@ -98,6 +98,12 @@ def compose(
     detected (attr-diff) must have one — otherwise the recursion would be
     silently frozen at its trace-time value and this raises instead.
 
+    Auxiliary outputs published with :meth:`ArrayBackend.emit_named_output`
+    (diagnostics such as MPPI's ``costs`` or SMC's ``healthy`` flag) are
+    forwarded from both subgraphs and appended **after** ``u``, so existing
+    port layouts are unchanged. Names must be unique across the composed graph
+    — a silent shadow would hide one component's signal.
+
     Args:
         estimator: The traced estimator node graph.
         controller: The traced controller node graph.
@@ -120,6 +126,11 @@ def compose(
     n_u = plant_dims["n_u"]
 
     combined = Graph()
+
+    # Auxiliary output ports (diagnostics like MPPI's `costs`) forwarded from
+    # the subgraphs, and who published each — so a collision is loud.
+    forwarded_outputs: list[str] = []
+    output_owner: dict[str, str] = {"u": "compose (the control output)"}
 
     # --- declare combined-graph inputs first (the merge will reference them) ---
     y_id = combined.input("y", (n_x,))
@@ -170,6 +181,7 @@ def compose(
         **state_port_ids,
     }
     est_remap, est_source_ids = _merge_and_rewire(combined, estimator.graph, est_input_map)
+    forwarded_outputs += _forward_diagnostics(combined, estimator, est_remap, est_source_ids, output_owner, "estimator")
 
     # The estimator's output (x_hat) — flatten if it's (n,1) to match the
     # controller's (n,) expectation. The output_nodes value is a subgraph
@@ -273,6 +285,7 @@ def compose(
         ctrl_input_map[name] = combined.input(name, _lookup_input_shape(controller.graph, name, default=()))
 
     ctrl_remap, ctrl_source_ids = _merge_and_rewire(combined, controller.graph, ctrl_input_map)
+    forwarded_outputs += _forward_diagnostics(combined, controller, ctrl_remap, ctrl_source_ids, output_owner, "controller")
 
     # The controller's output (u) — clip if input_limits provided, then emit.
     ctrl_out_src_node = controller.graph.nodes[controller.output_nodes["out"]]
@@ -359,7 +372,7 @@ def compose(
     return ComposedGraph(
         graph=combined,
         inputs=["y", "x_ref", "u_prev"] + state_ports + ctrl_state_ports + free_input_names,
-        outputs=["u"],
+        outputs=["u"] + forwarded_outputs,
         state_inputs=emitted_state_ports + emitted_ctrl_state_ports + ["u_prev"],
         state_outputs=emitted_state_ports + emitted_ctrl_state_ports + ["state_u_prev"],
     )
@@ -383,6 +396,57 @@ _CONTROLLER_INPUT_ROLES: dict[str, str] = {
     "target": "reference",
     "u_prev": "u_prev",
 }
+
+
+def _forward_diagnostics(
+    combined: Graph,
+    subgraph: NodeGraph,
+    remap: dict[int, int],
+    source_ids: dict[str, int],
+    owner_of: dict[str, str],
+    owner: str,
+) -> list[str]:
+    """Forward a subgraph's auxiliary named outputs into the combined graph.
+
+    ``out`` (the primary return value) and ``state_*`` (recurrent edges) are
+    wired explicitly by :func:`compose`. Every *other* named output was
+    published through :meth:`ArrayBackend.emit_named_output` — a diagnostic
+    such as MPPI's per-sample ``costs`` or SMC's ``healthy`` flag. Those used
+    to be dropped (a composed binary exposed only the control vector), leaving
+    a deployed kernel with no observability. They are appended after ``u``, so
+    existing port layouts and golden manifests stay unchanged.
+
+    Args:
+        combined: The combined graph being built.
+        subgraph: The traced component whose outputs to forward.
+        remap: Old subgraph node id → combined node id (from the merge).
+        source_ids: Placeholder input name → combined node id (from the merge).
+        owner_of: Port name → who published it; updated with the new ports.
+        owner: This component's label, used in collision errors.
+
+    Returns:
+        The forwarded port names, in the subgraph's declaration order.
+
+    Raises:
+        ValueError: If two components publish the same port name (a silent
+            shadow would hide one of them).
+    """
+    forwarded: list[str] = []
+    for name, src_id in subgraph.output_nodes.items():
+        if name == "out" or str(name).startswith("state_"):
+            continue
+        if name in owner_of:
+            raise ValueError(
+                f"output port '{name}' is published by both the {owner_of[name]} "
+                f"and the {owner}; emit_named_output names must be unique across "
+                f"a composed graph"
+            )
+        src_node = subgraph.graph.nodes[src_id]
+        node_id = source_ids[src_node.attrs["name"]] if src_node.op == "input" else remap[src_id]
+        combined.output(name, node_id)
+        owner_of[name] = owner
+        forwarded.append(name)
+    return forwarded
 
 
 def _merge_and_rewire(

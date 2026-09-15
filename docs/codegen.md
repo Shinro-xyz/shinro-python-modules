@@ -126,8 +126,8 @@ The only time `codegen/` needs an edit for a new component is if it uses a new
 
 ## The composition pass
 
-`compose(estimator, controller, plant_dims, input_limits)` wires the fixed ABC
-dataflow:
+`compose(estimator, controller, plant_dims, input_limits, host_inputs)` wires
+the fixed ABC dataflow:
 
 ```
 y (measurement) ──▶ Estimator ──x_hat──▶ Controller ──u──▶ [clip] ──▶ output
@@ -143,7 +143,11 @@ state_P (recurrent) ─────▶ Estimator   (any state_* port the trace d
   `state_P`, `state_u_prev` — fed back as inputs next tick). A state attr the
   trace detected as mutated without a matching pre-injected placeholder raises:
   that recursion would be silently frozen at its trace-time value (e.g. the
-  KF's covariance collapsing to a one-step gain).
+  KF's covariance collapsing to a one-step gain). **Auxiliary outputs**
+  published with `ArrayBackend.emit_named_output` (diagnostics — MPPI's
+  per-sample `costs`, SMC's `healthy` flag) are forwarded from both subgraphs
+  and appended after `u`, so a deployed binary keeps its observability. A name
+  published by both components is a loud error, not a silent shadow.
 - **Controller role mapping:** the controller's inputs are mapped by *role*
   from its `compute()` signature (`_CONTROLLER_INPUT_ROLES` in `compose.py`),
   not by hardcoded names. Roles: `state` (names like `x0`, `current_state`,
@@ -158,6 +162,11 @@ state_P (recurrent) ─────▶ Estimator   (any state_* port the trace d
   - A controller declaring **`u_prev`** (MPC_DeltaU) shares the estimator's
     previous-control recurrent port — the same value feeds both, and
     `state_u_prev` closes the loop.
+  - A controller may also declare **free host inputs** — ports the *host* fills
+    each tick rather than the estimator (`compose(host_inputs=...)`, declared
+    by the component's `host_input_shapes()`). MPPI's `epsilon` is the example:
+    `(N, K*D_u)` of sampled perturbations, appended last so existing port
+    layouts are unchanged (sampling stays host-side).
   - Unmapped input names (e.g. SMC's dynamics terms `f_x`/`g_x`, which need a
     different wiring model) raise at compose time rather than mis-wiring.
 - **Controller recurrent state:** the same `state_*` mechanism applies to the
@@ -176,8 +185,9 @@ state_P (recurrent) ─────▶ Estimator   (any state_* port the trace d
   `(n,1)`.
 - **`_merge_and_rewire`**: subgraph `input` nodes are placeholders, not copied —
   consumers are rewired directly to combined-graph source nodes. Subgraph
-  `output` nodes are markers and are skipped; `compose` declares the combined
-  outputs itself.
+  `output` nodes are markers: `out` and every `state_*` are wired explicitly by
+  `compose`, and any other named output (an `emit_named_output` diagnostic) is
+  forwarded by `_forward_diagnostics`, appended after `u`.
 
 ### A controller with no dataflow source: SMC (standalone graph)
 
