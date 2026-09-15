@@ -680,6 +680,88 @@ class TestComposeHostInputs:
         assert np.asarray(out["u"]).shape == (3,)
 
 
+class TestComposeDiagnostics:
+    """Auxiliary outputs (``emit_named_output`` diagnostics) survive composition.
+
+    A composed binary used to expose only the control vector: the merge skipped
+    subgraph output markers, so MPPI's ``costs`` / SMC's ``healthy`` were
+    dropped. They are now forwarded, appended after ``u`` so existing port
+    layouts stay unchanged, and a duplicate name is a loud error (a silent
+    shadow would hide one component's signal).
+    """
+
+    @staticmethod
+    def _graphs(est_diag: str | None = "estimator_ok", ctrl_diag: str | None = "healthy"):
+        from shinro.codegen.trace_node import NodeGraph
+
+        est_g = Graph()
+        est_in = est_g.input("measurement", (3, 1))
+        est_g.input("control_input", (3, 1))
+        est_g.input("state_x_hat", (3, 1))
+        est_g.output("out", est_in)
+        est_outs = {"out": est_in}
+        if est_diag:
+            est_g.output(est_diag, est_in)
+            est_outs[est_diag] = est_in
+        estimator = NodeGraph(
+            graph=est_g,
+            contract=None,  # type: ignore[arg-type]
+            input_nodes={"measurement": est_in},
+            output_nodes=est_outs,
+            state_attrs=[],
+        )
+
+        ctrl_g = Graph()
+        ctrl_in = ctrl_g.input("current_state", (3,))
+        ctrl_g.input("target_state", (3,))
+        flag = ctrl_g.emit("const", [], (), value=np.float64(1.0))
+        ctrl_g.output("out", ctrl_in)
+        ctrl_outs = {"out": ctrl_in}
+        if ctrl_diag:
+            ctrl_g.output(ctrl_diag, flag)
+            ctrl_outs[ctrl_diag] = flag
+        controller = NodeGraph(
+            graph=ctrl_g,
+            contract=None,  # type: ignore[arg-type]
+            input_nodes={"current_state": ctrl_in},
+            output_nodes=ctrl_outs,
+            state_attrs=[],
+        )
+        return estimator, controller
+
+    def test_diagnostics_forwarded_after_u(self):
+        estimator, controller = self._graphs()
+        cg = compose(estimator, controller, plant_dims=_BASE_DIMS)
+
+        # Appended after the control output; estimator's before the controller's.
+        assert cg.outputs == ["u", "estimator_ok", "healthy"]
+        # Not recurrent, and not confused with the control vector.
+        assert "healthy" not in cg.state_outputs
+
+    def test_diagnostic_is_a_real_output_port(self):
+        estimator, controller = self._graphs()
+        cg = compose(estimator, controller, plant_dims=_BASE_DIMS)
+        feeds = {name: np.zeros(_lookup_input_shape(cg.graph, name, default=())) for name in cg.inputs}
+        out = interpret(cg.graph, feeds)
+        assert float(np.asarray(out["healthy"]).reshape(-1)[0]) == 1.0
+        assert "estimator_ok" in out
+
+    def test_no_diagnostics_leaves_the_layout_unchanged(self):
+        estimator, controller = self._graphs(est_diag=None, ctrl_diag=None)
+        cg = compose(estimator, controller, plant_dims=_BASE_DIMS)
+        assert cg.outputs == ["u"]
+
+    def test_duplicate_diagnostic_names_raise(self):
+        estimator, controller = self._graphs(est_diag="status", ctrl_diag="status")
+        with pytest.raises(ValueError, match="published by both"):
+            compose(estimator, controller, plant_dims=_BASE_DIMS)
+
+    def test_diagnostic_colliding_with_the_control_output_raises(self):
+        estimator, controller = self._graphs(ctrl_diag="u")
+        with pytest.raises(ValueError, match="published by both"):
+            compose(estimator, controller, plant_dims=_BASE_DIMS)
+
+
 # ─── Test 10: compose error paths ──────────────────────────────────────────
 
 

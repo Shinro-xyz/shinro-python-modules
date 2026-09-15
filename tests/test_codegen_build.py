@@ -17,7 +17,7 @@ from dataclasses import dataclass
 import numpy as np
 import pytest
 
-from shinro.codegen import build_composed_graph
+from shinro.codegen import build_composed_graph, interpret
 from shinro.codegen.compose import ComposedGraph, _lookup_input_shape
 from shinro.components import StateEstimator
 from shinro.factories.registry import register_estimator
@@ -325,7 +325,13 @@ def test_mppi_composes_with_a_host_filled_epsilon_port():
     assert cg.inputs[:5] == ["y", "x_ref", "u_prev", "state_x_hat", "state_P"]
     assert cg.inputs[-1] == "epsilon"
     assert _lookup_input_shape(cg.graph, "epsilon", default=()) == (200, 15 * 3)
-    assert cg.outputs == ["u"]
+    # MPPI's diagnostic survives composition, appended after the control output.
+    assert cg.outputs == ["u", "costs"]
+
+    feeds = {name: np.zeros(_lookup_input_shape(cg.graph, name, default=())) for name in cg.inputs}
+    out = interpret(cg.graph, feeds)
+    assert np.asarray(out["u"]).shape == (3,)
+    assert np.asarray(out["costs"]).shape == (200,)
 
 
 # ─── a hypothetical third estimator: does the pipeline generalize? ────────
