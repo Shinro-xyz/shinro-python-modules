@@ -272,6 +272,7 @@ def _build_smc_graph(
     phi: float = 0.1,
     alpha: float = 0.0,
     controllability_eps: float = 1e-12,
+    n_u: int = 1,
 ) -> ComposedGraph:
     """Standalone SMC graph: ``(x, f_x, g_x)`` in, ``(out, healthy)`` out.
 
@@ -292,14 +293,17 @@ def _build_smc_graph(
         smoother: ``sat`` / ``tanh`` / ``sigmoid`` boundary layer.
         phi: Boundary layer thickness (0 selects the pure ``sign`` switch).
         alpha: Fractional power on the switching term (exercises ``pow``).
-        controllability_eps: Near-zero ``|c^T g|`` threshold, baked into the
+        controllability_eps: Near-zero ``‖c^T g‖`` threshold, baked into the
             graph as a const — a plant-scaled deployment design parameter.
+        n_u: Number of control inputs. ``n_u == 1`` traces the division
+            branch; ``n_u > 1`` traces the minimum-norm pseudo-inverse branch
+            (``transpose`` + ``matmul``), with ``g_x`` shaped ``(2, n_u)``.
 
     Returns:
         The traced, lowered-ready :class:`ComposedGraph`.
     """
     smc = _smc_controller(smoother=smoother, phi=phi, alpha=alpha, controllability_eps=controllability_eps)
-    ng = trace_node(smc, input_shapes={"x": (2,), "f_x": (2,), "g_x": (2, 1)})
+    ng = trace_node(smc, input_shapes={"x": (2,), "f_x": (2,), "g_x": (2, n_u)})
     return ComposedGraph(
         graph=ng.graph,
         inputs=["x", "f_x", "g_x"],
@@ -309,18 +313,20 @@ def _build_smc_graph(
     )
 
 
-def _smc_rand_inputs(rng: np.random.Generator, min_cg: float = 0.2) -> dict[str, np.ndarray]:
-    """Random SMC inputs with ``|c^T g|`` kept above the guard.
+def _smc_rand_inputs(rng: np.random.Generator, min_cg: float = 0.2, n_u: int = 1) -> dict[str, np.ndarray]:
+    """Random SMC inputs with ``‖c^T g‖`` kept above the guard.
 
     ``c^T g = 0`` is measure-zero for continuous random data, so the samples
     are rejection-filtered to stay clear of the fail-safe branch — this keeps
     the numpy reference on its raising path, where it agrees with the graph.
+    For ``n_u == 1`` the norm check reduces to the old ``|c^T g|`` one.
     """
     x = rng.normal(0.0, 0.5, (2,))
     f_x = rng.normal(0.0, 0.5, (2,))
+    c = np.array([1.0, 2.0])
     while True:
-        g_x = rng.normal(0.0, 1.0, (2, 1))
-        if abs(g_x[0, 0] + 2.0 * g_x[1, 0]) >= min_cg:
+        g_x = rng.normal(0.0, 1.0, (2, n_u))
+        if np.linalg.norm(c @ g_x) >= min_cg:
             return {"x": x, "f_x": f_x, "g_x": g_x}
 
 
@@ -398,6 +404,17 @@ def smc_so(tmp_path_factory):
     """
     d = tmp_path_factory.mktemp("zig-build-smc")
     return _build_so(_build_smc_graph(), d, graph_path=d / "graph_data.zig")
+
+
+@pytest.fixture(scope="session")
+def smc_multi_so(tmp_path_factory):
+    """Build the .so for the n_u=2 SMC graph (minimum-norm pseudo-inverse branch).
+
+    Two control inputs exercise the transpose/matmul closed form that the
+    scalar branch never emits. Tmp graph_path, same discipline as smc_so.
+    """
+    d = tmp_path_factory.mktemp("zig-build-smc-multi")
+    return _build_so(_build_smc_graph(n_u=2), d, graph_path=d / "graph_data.zig")
 
 
 # SMC config variants, each a graph-structure specialization: phi=0 swaps the
@@ -1164,6 +1181,65 @@ class TestSmcOracle:
             assert traced["healthy"][0] == 0.0
         with pytest.raises(RuntimeError, match="near-zero"):
             _smc_controller().compute(arrays["x"], arrays["f_x"], arrays["g_x"])
+
+    def test_so_matches_interpreter_and_numpy_multi_input(self, smc_multi_so):
+        """n_u=2: .so, interpreter, and live numpy agree on the min-norm branch."""
+        lib, cg = smc_multi_so
+        n_out, n_state = output_split(cg)
+        assert n_state == 0
+        assert n_out == 3  # out (2 inputs) + healthy
+
+        rng = np.random.default_rng(17)
+        smc = _smc_controller()
+        c = np.array([1.0, 2.0])
+        max_err = 0.0
+        for _ in range(25):
+            arrays = _smc_rand_inputs(rng, n_u=2)
+            out, _ = step_so(lib, pack_arrays(cg, arrays), n_out, n_state)
+            traced = interpret(cg.graph, arrays)
+            want = np.asarray(smc.compute(arrays["x"], arrays["f_x"], arrays["g_x"])).ravel()
+
+            # healthy = 1 on this path (||c^T g|| >= 0.2 >> 1e-12)
+            assert out[2] == 1.0
+            assert traced["healthy"][0] == 1.0
+            np.testing.assert_allclose(out[:2], traced["out"], rtol=1e-13, atol=1e-13)
+            np.testing.assert_allclose(out[:2], want, rtol=1e-12, atol=1e-12)
+
+            # The command delivers the reaching law along the surface: the
+            # pseudo-inverse is not just close to numpy, it solves the system.
+            s = float(c @ arrays["x"])
+            num = -smc.k1 * abs(s) ** smc.alpha * np.clip(s / smc.phi, -1.0, 1.0) - float(c @ arrays["f_x"])
+            assert np.isclose((c @ arrays["g_x"]) @ want, num, atol=1e-10)
+            max_err = max(max_err, float(np.max(np.abs(out[:2] - want))))
+        assert max_err < 1e-12, f"SMC n_u=2 .so drifted from live numpy: {max_err:.3e}"
+
+    def test_multi_input_lost_controllability_is_failsafe_and_flagged(self, smc_multi_so):
+        """n_u>1: ||c^T g|| below eps → u == 0 (both inputs) and healthy == 0."""
+        lib, cg = smc_multi_so
+        n_out, n_state = output_split(cg)
+        # c = [1, 2]; each column is orthogonal to c, so c^T g == [0, 0].
+        g_x = np.array([[2.0, -2.0], [-1.0, 1.0]])
+        assert np.allclose(np.array([1.0, 2.0]) @ g_x, 0.0)
+        arrays = {"x": np.array([1.0, 0.5]), "f_x": np.array([0.3, -0.2]), "g_x": g_x}
+
+        out, _ = step_so(lib, pack_arrays(cg, arrays), n_out, n_state)
+        np.testing.assert_array_equal(out[:2], np.zeros(2))
+        assert out[2] == 0.0, "controllability flag must be low"
+
+        with np.errstate(divide="ignore", invalid="ignore"):
+            traced = interpret(cg.graph, arrays)
+            np.testing.assert_array_equal(traced["out"], np.zeros(2))
+            assert traced["healthy"][0] == 0.0
+        with pytest.raises(RuntimeError, match="near-zero"):
+            _smc_controller().compute(arrays["x"], arrays["f_x"], arrays["g_x"])
+
+    def test_multi_input_graph_uses_the_pseudo_inverse_ops(self, smc_multi_so):
+        """The n_u>1 branch is matmul + transpose, not a baked solve constant."""
+        _, cg = smc_multi_so
+        ops = {node.op for node in cg.graph.nodes}
+        assert {"transpose", "matmul", "abs", "lt", "where"} <= ops, f"missing ops: {sorted(ops)}"
+        assert set(cg.outputs) == {"out", "healthy"}
+        assert cg.state_outputs == []  # SMC is memoryless
 
     def test_graph_uses_the_new_ops_and_aux_port(self, smc_so):
         """Drift guard: the guard/flag structure is actually in the graph."""
