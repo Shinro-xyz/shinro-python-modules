@@ -205,6 +205,24 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
                 const idx = la.argmax(n_in, s);
                 out[0] = @floatFromInt(idx);
             },
+            .min => {
+                // Minimum reduction; aux selects numpy's axis (0 = None / full,
+                // 1 = axis 0 down columns, 2 = axis 1 across rows). The output
+                // shape was fixed at trace time, so rows*cols is the exact
+                // element count the chosen reduction produces.
+                const s = node_input(g.nodes[0..], node, &buf);
+                const src = g.nodes[node.inputs[0]];
+                if (node.aux == 0) {
+                    const r = la.min_all(src.rows * src.cols, s);
+                    out[0] = r[0];
+                } else if (node.aux == 1) {
+                    const r = la.min_axis0(src.rows, src.cols, s);
+                    inline for (0..node.rows * node.cols) |j| out[j] = r[j];
+                } else {
+                    const r = la.min_axis1(src.rows, src.cols, s);
+                    inline for (0..node.rows * node.cols) |j| out[j] = r[j];
+                }
+            },
             .one_hot => {
                 const s = node_input(g.nodes[0..], node, &buf);
                 const idx: usize = @intFromFloat(s[0]);

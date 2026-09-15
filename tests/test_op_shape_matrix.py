@@ -230,6 +230,16 @@ def _pointwise_graph(g: Graph):
     oh = g.input("oh_idx", (1,))
     outs["one_hot_4"] = g.emit("one_hot", [oh], (4,), depth=4)
 
+    # min reduction cells: the full reduction (axis=None — MPPI's softmax
+    # shift), both 2-D axis reductions, and a NaN-propagation cell (0/0 via
+    # div) pinning numpy's NaN-wins semantics against the Zig comparison.
+    zero5 = g.emit("const", [], (5,), value=np.zeros(5))
+    outs["min_1d"] = g.emit("min", [am5], (), axis=None)
+    outs["min_2d_all"] = g.emit("min", [am23], (), axis=None)
+    outs["min_2d_axis0"] = g.emit("min", [am23], (3,), axis=0)
+    outs["min_2d_axis1"] = g.emit("min", [am23], (2,), axis=1)
+    outs["min_nan_prop"] = g.emit("min", [g.emit("div", [am5, zero5], (5,))], (), axis=None)
+
     specs = {
         "p1": ((1,), "free"),
         "p8": ((8,), "free"),

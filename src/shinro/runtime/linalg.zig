@@ -245,6 +245,49 @@ pub fn argmax (comptime m: usize, a:[]const f64) usize {
     return best;
 }
 
+//minimum reductions--> numpy's np.min with axis=None / 0 / 1
+
+/// Minimum over the whole flat array. numpy propagates NaN, so a NaN operand
+/// wins the comparison and poisons the result — mirror that (a plain
+/// `if (v < best)` would silently ignore NaNs, diverging from the oracle on
+/// NaN feeds).
+pub fn min_all (comptime m: usize, a: []const f64) [1]f64 {
+    var best: f64 = a[0];
+    for (1..m) |i| {
+        const v = a[i];
+        if (std.math.isNan(v) or v < best) best = v;
+    }
+    return .{best};
+}
+
+/// Minimum down each column: (rows, cols) -> (cols,), numpy `min(axis=0)`.
+pub fn min_axis0 (comptime rows: usize, comptime cols: usize, a: []const f64) [cols]f64 {
+    var out: [cols]f64 = undefined;
+    for (0..cols) |j| {
+        var best = a[j];
+        for (1..rows) |i| {
+            const v = a[i * cols + j];
+            if (std.math.isNan(v) or v < best) best = v;
+        }
+        out[j] = best;
+    }
+    return out;
+}
+
+/// Minimum across each row: (rows, cols) -> (rows,), numpy `min(axis=1)`.
+pub fn min_axis1 (comptime rows: usize, comptime cols: usize, a: []const f64) [rows]f64 {
+    var out: [rows]f64 = undefined;
+    for (0..rows) |i| {
+        var best = a[i * cols];
+        for (1..cols) |j| {
+            const v = a[i * cols + j];
+            if (std.math.isNan(v) or v < best) best = v;
+        }
+        out[i] = best;
+    }
+    return out;
+}
+
 //one hot
 pub fn onehot (comptime depth: usize, idx:usize) [depth]f64{
      var out: [depth]f64= undefined;

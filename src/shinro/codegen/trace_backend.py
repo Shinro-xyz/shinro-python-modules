@@ -208,6 +208,22 @@ class TraceBackend:
     def sign(self, x: Tracer) -> Tracer:
         return self._emit("sign", [x], x.shape)
 
+    def min(self, x: Tracer, axis: int | None = None) -> Tracer:
+        # Minimum reduction. axis=None collapses to a 0-d scalar (shape ()),
+        # axis=0/1 reduce that axis of a 2-D input — numpy's semantics, so the
+        # interpreter handler is a one-liner. The Zig VM carries the axis in
+        # the node's aux (0 = None, 1 = axis 0, 2 = axis 1) and dispatches to
+        # linalg.min_all / min_axis0 / min_axis1.
+        if axis is None:
+            out_shape: tuple[int, ...] = ()
+        elif axis == 0:
+            out_shape = x.shape[1:]
+        elif axis == 1:
+            out_shape = (x.shape[0],) + x.shape[2:]
+        else:
+            raise NotImplementedError(f"TraceBackend.min supports axis in (None, 0, 1), got {axis}")
+        return self._emit("min", [x], out_shape, axis=axis)
+
     def argmax(self, x: Tracer) -> Tracer:
         # numpy argmax over the last axis collapses it to a scalar index.
         return self._emit("argmax", [x], ())
