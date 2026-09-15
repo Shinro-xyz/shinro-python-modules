@@ -31,7 +31,7 @@ python3 -m pytest tests/ -k "arm"                # keyword-filter tests
 The [`Makefile`](../Makefile) provides short named targets. `make test-<name>` runs exactly one test file.
 
 | Target | Runs |
-|--------|------|
+| -------- | ------ |
 | `make test` | Full suite, **skips** `test_very_large_horizon_mpc_times_out` and the opt-in markers (`integration`, `mcp`) |
 | `make test-all` | Full suite, including the slow horizon test (still excludes the opt-in markers) |
 | `make test-quick` | Unit tests only (controllers, estimators, trajectories, plants, factories, components, array backend, batched adapter, controllability, mcp server) |
@@ -54,6 +54,7 @@ The [`Makefile`](../Makefile) provides short named targets. `make test-<name>` r
 | `make test-zig` | Generate `src/shinro/runtime/graph_data.zig`, build the Zig VM, run `tests/test_zig_lowering.py` (requires `zig` on PATH) |
 | `make zig-gen` | Serialize the `base_tracking` composed graph to `src/shinro/runtime/graph_data.zig` only |
 | `make zig-build` | Compile the Zig VM to `build/lib/libbase.so` and stamp the deployment record (`build/lib/libbase.deployment.json`) via `scripts/stamp_deployment.py` (implies `zig-gen`) |
+| `make measure-kernels` | Kernel size metrics for a sweep of MPPI rollout shapes: the C-ABI host buffers, the VM stack buffer, and (with `BUILD=1`) the artifact bytes + compile cost. Static by default (no compiler); `DIMS=3x3x6x3,...` where each entry is `D_x x D_u x N x K`; `JSON=<path>` writes the document |
 | `make lint` | `ruff check .` + `pyright` on source dirs |
 
 The per-file targets run their file unconditionally — `make test-controllers` includes the slow horizon test, unlike `make test` which excludes it.
@@ -104,7 +105,7 @@ everywhere (CI or local) unless the runner clears `addopts` explicitly.
 Shared fixtures are defined in `tests/conftest.py`:
 
 | Fixture | Purpose |
-|---------|---------|
+| --------- | --------- |
 | `numpy_backend` | A `NumpyBackend` instance |
 | `torch_backend` | A `TorchBackend` on CPU; skips if `torch` is not installed |
 | `bk` | Parameterized over `numpy` and `torch`, so any test using `bk` runs twice (once per backend) |

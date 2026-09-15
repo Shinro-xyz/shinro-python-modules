@@ -153,6 +153,12 @@ def _elementwise_graph(g: Graph):
     outs["clip_array"] = g.emit("clip", [c4], (4,), lo=np.full(4, -0.5), hi=np.full(4, 0.5))
     outs["clip_scalar"] = g.emit("clip", [c4], (4,), lo=np.float64(-0.5), hi=np.float64(0.5))
     outs["clip_2d_scalar"] = g.emit("clip", [c23], (2, 3), lo=np.float64(-0.4), hi=np.float64(0.4))
+    # Per-channel bounds against a batched operand: numpy broadcasts (D,) over
+    # (N, D) — the shape MPPI clips its (N, D_u) sample batch with. The VM's
+    # clip blob needs one entry per element, expanded by lower_zig.
+    outs["clip_vec_broadcast"] = g.emit(
+        "clip", [c23], (2, 3), lo=np.array([-0.4, -0.2, -0.6]), hi=np.array([0.4, 0.2, 0.6])
+    )
 
     return outs, specs
 
