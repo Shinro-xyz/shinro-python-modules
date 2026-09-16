@@ -407,6 +407,65 @@ def _build_mppi_graph(N: int = MPPI_N, K: int = MPPI_K, dt: float = 0.02) -> Com
     )
 
 
+# The nonlinear rollout graph: MPPI on an InvertedPendulum (D_x = 2, D_u = 1).
+MPPI_NL_DX, MPPI_NL_DU = 2, 1
+
+
+def _mppi_pendulum_controller(N: int = MPPI_N, K: int = MPPI_K, dt: float = 0.02) -> MPPIController:
+    """Live MPPI on a nonlinear plant — the reference the traced graph is checked against.
+
+    Wired through ``attach_plant`` (the production path, as ``ScenarioFactory``
+    does), so the rollout integrates the plant's own batch-capable
+    ``dynamics``. The plant fixes D_x = 2 (theta, theta_dot) and D_u = 1 (tau).
+    """
+    from shinro.plants.inverted_pendulum import InvertedPendulum
+
+    bk = NumpyBackend()
+    plant = InvertedPendulum(mass=0.1, length=0.5, damping=0.0, gravity=9.81, dt=dt, backend=bk)
+    ctrl = MPPIController(
+        num_samples=N,
+        temperature=1.0,
+        dt=dt,
+        horizon=K,
+        noise_sigma=[0.5],
+        u_min=[-0.5],
+        u_max=[0.5],
+        seed=1,
+        backend=bk,
+    )
+    ctrl.attach_plant(plant, Q=np.array([1.0, 1.0]), R=np.array([0.1]))
+    return ctrl
+
+
+def _build_mppi_pendulum_graph(N: int = MPPI_N, K: int = MPPI_K, dt: float = 0.02) -> ComposedGraph:
+    """Standalone nonlinear MPPI graph — same ports, a plant-dynamics rollout.
+
+    The only difference from :func:`_build_mppi_graph` is the plant: the
+    rollout evaluates ``InvertedPendulum.dynamics`` over the whole sample batch
+    (``sin``/``mul`` nodes of shape ``(N, 1)``, not ``N`` copies of a scalar
+    body). The C-ABI contract is unchanged — ``epsilon`` in, ``out`` + ``costs``
+    out, ``state_u`` recurrent — which is the point: the lowering path does not
+    care whether the dynamics are a matmul or a formula.
+    """
+    ctrl = _mppi_pendulum_controller(N=N, K=K, dt=dt)
+    ng = trace_node(
+        ctrl,
+        input_shapes={
+            "current_state": (MPPI_NL_DX,),
+            "target_state": (MPPI_NL_DX,),
+            "epsilon": (N, K * MPPI_NL_DU),
+        },
+        state_shapes={"u": (K, MPPI_NL_DU)},
+    )
+    return ComposedGraph(
+        graph=ng.graph,
+        inputs=["current_state", "target_state", "epsilon", "state_u"],
+        outputs=["out", "costs"],
+        state_inputs=["state_u"],
+        state_outputs=["state_u"],
+    )
+
+
 @pytest.fixture(scope="session")
 def base_so(tmp_path_factory):
     """Build the .so from the base_tracking composed graph once per session."""
@@ -506,6 +565,20 @@ def mppi_so(tmp_path_factory):
     """
     d = tmp_path_factory.mktemp("zig-build-mppi")
     return _build_so(_build_mppi_graph(), d, graph_path=d / "graph_data.zig")
+
+
+@pytest.fixture(scope="session")
+def mppi_pendulum_so(tmp_path_factory):
+    """Build the .so from the nonlinear MPPI graph (plant-``dynamics`` rollout).
+
+    The same C-ABI contract as ``mppi_so`` — a free ``epsilon`` port, so parity
+    is checkable on one shared draw — but the rollout evaluates the plant's
+    batch-capable ``dynamics`` (``sin``/``mul`` nodes over the sample batch)
+    instead of a batched matmul. Lowers to a tmp graph_path so the shipped
+    runtime graph is never clobbered.
+    """
+    d = tmp_path_factory.mktemp("zig-build-mppi-pendulum")
+    return _build_so(_build_mppi_pendulum_graph(), d, graph_path=d / "graph_data.zig")
 
 
 # SMC config variants, each a graph-structure specialization: phi=0 swaps the
@@ -1549,6 +1622,165 @@ class TestMppiOracle:
         out2, state2 = step_so(lib, pack_arrays(cg, self._feeds(x0, x_ref, eps2, state_u=plan)), n_out, n_state)
         want2 = np.asarray(ref.compute(x0, x_ref, eps2)).ravel()
         np.testing.assert_allclose(out2[:MPPI_DU], want2, rtol=1e-11, atol=1e-11)
+        np.testing.assert_allclose(state2[start:stop], np.asarray(ref.u).ravel(), rtol=1e-11, atol=1e-11)
+
+
+class TestMppiNonlinearOracle:
+    """The nonlinear MPPI graph: same C-ABI ports, a plant-``dynamics`` rollout.
+
+    MPPI on a nonlinear plant rolls out with the plant's own batch-capable
+    ``dynamics``, so the graph contains one ``sin``/``mul`` node of shape
+    ``(N, 1)`` per formula term instead of ``N`` copies of a scalar body — the
+    property that keeps the node count independent of the sample count. These
+    cases are interpreter-only; the ``.so`` three-way parity follows.
+    """
+
+    def _feeds(self, x0, x_ref, epsilon, state_u=None):
+        """The four C-ABI input ports; ``state_u`` defaults to a zero plan."""
+        return {
+            "current_state": x0,
+            "target_state": x_ref,
+            "epsilon": epsilon,
+            "state_u": np.zeros((MPPI_K, MPPI_NL_DU)) if state_u is None else state_u,
+        }
+
+    def _draw(self, rng):
+        """A tick's state, reference, and perturbation draw."""
+        x0 = rng.normal(0.0, 0.3, MPPI_NL_DX)
+        x_ref = np.array([0.5, 0.0])
+        eps = rng.normal(0.0, 0.5, (MPPI_N, MPPI_K * MPPI_NL_DU))
+        return x0, x_ref, eps
+
+    def test_interpreter_matches_numpy(self):
+        """interpret() == live numpy across 10 seeded draws (nonlinear rollout)."""
+        cg = _build_mppi_pendulum_graph()
+        ref = _mppi_pendulum_controller()
+        rng = np.random.default_rng(23)
+        max_u_err = 0.0
+        max_state_err = 0.0
+        for _ in range(10):
+            ref.reset()
+            x0, x_ref, eps = self._draw(rng)
+            out = interpret(cg.graph, self._feeds(x0, x_ref, eps))
+            want_u = np.asarray(ref.compute(x0, x_ref, eps)).ravel()
+            want_state = np.asarray(ref.u).reshape(MPPI_K, MPPI_NL_DU)
+            np.testing.assert_allclose(out["out"], want_u, rtol=1e-11, atol=1e-11)
+            np.testing.assert_allclose(out["state_u"], want_state, rtol=1e-11, atol=1e-11)
+            max_u_err = max(max_u_err, float(np.max(np.abs(out["out"] - want_u))))
+            max_state_err = max(max_state_err, float(np.max(np.abs(out["state_u"] - want_state))))
+        assert max_u_err < 1e-11, f"nonlinear MPPI graph drifted from live numpy: {max_u_err:.3e}"
+        assert max_state_err < 1e-11
+
+    def test_costs_port_is_published(self):
+        """The per-sample rollout costs remain a graph output port."""
+        cg = _build_mppi_pendulum_graph()
+        rng = np.random.default_rng(31)
+        out = interpret(cg.graph, self._feeds(*self._draw(rng)))
+        assert out["costs"].shape == (MPPI_N,)
+        assert np.all(np.isfinite(out["costs"]))
+
+    def test_recurrence_matches_sequential_ticks(self):
+        """Feeding state_u back reproduces a second live tick."""
+        cg = _build_mppi_pendulum_graph()
+        ref = _mppi_pendulum_controller()
+        rng = np.random.default_rng(29)
+        x0, x_ref, eps1 = self._draw(rng)
+        _, _, eps2 = self._draw(rng)
+
+        tick1 = interpret(cg.graph, self._feeds(x0, x_ref, eps1))
+        want1 = np.asarray(ref.compute(x0, x_ref, eps1)).ravel()
+        np.testing.assert_allclose(tick1["out"], want1, rtol=1e-11, atol=1e-11)
+
+        tick2 = interpret(cg.graph, self._feeds(x0, x_ref, eps2, state_u=tick1["state_u"]))
+        want2 = np.asarray(ref.compute(x0, x_ref, eps2)).ravel()
+        np.testing.assert_allclose(tick2["out"], want2, rtol=1e-11, atol=1e-11)
+
+    def test_graph_uses_plant_dynamics_and_only_u_recurs(self):
+        """Drift guard: the nonlinear op, the port layout, and the single state."""
+        cg = _build_mppi_pendulum_graph()
+        ops = {node.op for node in cg.graph.nodes}
+        assert "sin" in ops, "the nonlinear rollout lost the plant's sin term"
+        for op in ("min", "matmul", "clip", "slice", "stack", "exp", "reshape"):
+            assert op in ops, f"nonlinear MPPI graph lost the {op!r} op"
+
+        assert cg.outputs == ["out", "costs"]
+        # ``state_outputs`` is exactly what trace-time state detection found:
+        # the nominal plan, and nothing else (e.g. the tracking reference must
+        # not be promoted to a recurrent port).
+        assert cg.state_outputs == ["state_u"]
+        port_shapes = {n.attrs["name"]: n.shape for n in cg.graph.nodes if n.op == "input"}
+        assert port_shapes["epsilon"] == (MPPI_N, MPPI_K * MPPI_NL_DU)
+        assert port_shapes["state_u"] == (MPPI_K, MPPI_NL_DU)
+        assert port_shapes["current_state"] == (MPPI_NL_DX,)
+        assert port_shapes["target_state"] == (MPPI_NL_DX,)
+
+    def test_node_count_is_independent_of_sample_count(self):
+        """The headline property: nodes track K*D_u, not the number of samples.
+
+        A per-sample (looped) rollout would grow as ``N*K`` — the reason the
+        batched ``dynamics`` contract exists. Tracing the same policy with 4x
+        the samples must produce the identical graph.
+        """
+        small = _build_mppi_pendulum_graph(N=6)
+        large = _build_mppi_pendulum_graph(N=24)
+
+        def eps_shape(cg):
+            return next(n.shape for n in cg.graph.nodes if n.op == "input" and n.attrs["name"] == "epsilon")
+
+        # The 4x batch really is in the graph — in the *shape* of the port, not
+        # in the number of nodes.
+        assert eps_shape(small) == (6, MPPI_K * MPPI_NL_DU)
+        assert eps_shape(large) == (24, MPPI_K * MPPI_NL_DU)
+        assert len(large.graph.nodes) == len(small.graph.nodes)
+
+    def test_so_matches_interpreter_and_numpy(self, mppi_pendulum_so):
+        """.so, interpreter, and live numpy agree on the same seeded draws."""
+        lib, cg = mppi_pendulum_so
+        n_out, n_state = output_split(cg)
+        assert n_state == MPPI_K * MPPI_NL_DU  # the nominal plan recurs
+        assert n_out == MPPI_NL_DU + MPPI_N  # out (D_u) + costs (N)
+
+        ref = _mppi_pendulum_controller()
+        rng = np.random.default_rng(41)
+        max_u_err = 0.0
+        for _ in range(10):
+            ref.reset()
+            x0, x_ref, eps = self._draw(rng)
+            feeds = self._feeds(x0, x_ref, eps)
+            out, state = step_so(lib, pack_arrays(cg, feeds), n_out, n_state)
+            traced = interpret(cg.graph, feeds)
+            want_u = np.asarray(ref.compute(x0, x_ref, eps)).ravel()
+
+            # kernel vs its own interpreter (the tight tier), then vs numpy
+            np.testing.assert_allclose(out[:MPPI_NL_DU], traced["out"], rtol=1e-13, atol=1e-13)
+            np.testing.assert_allclose(state, np.asarray(traced["state_u"]).ravel(), rtol=1e-13, atol=1e-13)
+            np.testing.assert_allclose(out[MPPI_NL_DU:], np.asarray(traced["costs"]).ravel(), rtol=1e-13, atol=1e-13)
+            np.testing.assert_allclose(out[:MPPI_NL_DU], want_u, rtol=1e-11, atol=1e-11)
+            max_u_err = max(max_u_err, float(np.max(np.abs(out[:MPPI_NL_DU] - want_u))))
+        assert max_u_err < 1e-11, f"nonlinear MPPI .so drifted from live numpy: {max_u_err:.3e}"
+
+    def test_cabi_recurrence_matches_numpy(self, mppi_pendulum_so):
+        """The kernel's own state buffer reproduces a second live tick.
+
+        The host feeds ``state_out`` straight back as the next tick's
+        ``state_u`` — no numpy state in the loop.
+        """
+        lib, cg = mppi_pendulum_so
+        n_out, n_state = output_split(cg)
+        start, stop = state_slices(cg)["state_u"]
+        ref = _mppi_pendulum_controller()
+        rng = np.random.default_rng(43)
+        x0, x_ref, eps1 = self._draw(rng)
+        _, _, eps2 = self._draw(rng)
+
+        out1, state1 = step_so(lib, pack_arrays(cg, self._feeds(x0, x_ref, eps1)), n_out, n_state)
+        want1 = np.asarray(ref.compute(x0, x_ref, eps1)).ravel()
+        np.testing.assert_allclose(out1[:MPPI_NL_DU], want1, rtol=1e-11, atol=1e-11)
+
+        plan = state1[start:stop].reshape(MPPI_K, MPPI_NL_DU)
+        out2, state2 = step_so(lib, pack_arrays(cg, self._feeds(x0, x_ref, eps2, state_u=plan)), n_out, n_state)
+        want2 = np.asarray(ref.compute(x0, x_ref, eps2)).ravel()
+        np.testing.assert_allclose(out2[:MPPI_NL_DU], want2, rtol=1e-11, atol=1e-11)
         np.testing.assert_allclose(state2[start:stop], np.asarray(ref.u).ravel(), rtol=1e-11, atol=1e-11)
 
 

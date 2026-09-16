@@ -1,0 +1,20 @@
+# MPPI for the InvertedPendulum plant — 2-state [theta, theta_dot], 1-D torque
+# control [tau]. D_u is inferred from noise_sigma's length, so the bounds and
+# costs must all be length 1.
+#
+# attach_plant wires the rollout to the plant's batch-capable `dynamics`, so
+# this config lowers with a *nonlinear* rollout: the graph carries sin/mul
+# nodes over the sample batch rather than one linear matmul. Everything else
+# (the epsilon port, softmax, the recurrent nominal plan) is unchanged.
+type = "MPPI"
+name = "inverted_pendulum_mppi"
+dt = 0.01
+horizon = 15
+num_samples = 200
+temperature = 0.5
+noise_sigma = [0.5]
+state_cost = [20.0, 1.0]
+control_cost = [0.1]
+u_min = [-0.5]
+u_max = [0.5]
+seed = 42
