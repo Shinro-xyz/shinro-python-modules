@@ -114,6 +114,8 @@ python -m demos.demo_base_tracking                        # base tracking, LQR +
 python -m demos.demo_base_tracking --controller mpc       # base tracking, MPC
 python -m demos.demo_pick_and_place                       # full pick-and-place sequence
 python -m demos.demo_mppi                                 # MPPI model wiring + lowering contract
+python -m demos.demo_mppi_nonlinear                       # MPPI on a nonlinear plant, lowered
+python -m demos.demo_mppi_nonlinear --build               # ...and run the compiled kernel
 python -m demos.demo_smc                                  # SMC on a nonlinear plant (f/g host-side)
 python -m demos.demo_smc --build                          # ...and run the compiled kernel
 ```
