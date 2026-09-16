@@ -249,7 +249,12 @@ class MPPIController(Controller):
         self.D_x = adapter.state_dim
         self.D_u = adapter.control_dim
 
-        self.dynamics_fn = adapter.dynamics_fn
+        # Route the controller's *current* backend into the batched path: a
+        # trace swaps self.bk to a TraceBackend, while the adapter holds the
+        # plant's (concrete) backend. Resolving self.bk at call time is what
+        # lets a plant's batched_dynamics emit sin/mul/slice nodes instead of
+        # evaluating eagerly against a concrete array.
+        self.dynamics_fn = lambda x, u, dt: adapter.dynamics_fn(x, u, dt, bk=self.bk)
         self.cost_fn = lambda x, u: adapter.cost_fn(x, u, self._Q, self._R, x_ref=self._x_ref_holder[0])
 
     def compute(self, current_state, target_state: Any | None = None, epsilon: Any | None = None):

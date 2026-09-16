@@ -354,19 +354,32 @@ class Plant(ConfigDriven, ABC):
         """
         return None
 
-    def dynamics(self, state: Any, control: Any) -> Any:
+    def dynamics(self, state: Any, control: Any, bk: Any | None = None) -> Any:
         """Continuous-time dynamics :math:`\\dot{x} = f(x, u)`.
 
         Override in nonlinear plants to expose the dynamics function for
-        linearization. Returns None by default (linear plants need not
-        override this).
+        linearization *and* for batched rollouts. Returns None by default
+        (linear plants need not override this).
+
+        The override must accept a single state ``(n_x,)`` **or** a batch
+        ``(N, n_x)`` and return the derivative with the same rank — a single
+        state is a batch of one, so one implementation serves both. It must
+        also route every backend call through ``bk`` (which defaults to
+        ``self.bk``), because tracing swaps only the traced component's
+        backend, never the plant's. That is what lets the *same* function back
+        the eager per-sample rollout, the finite-difference linearization, and
+        the lowered graph — there is no second, separately-maintained batched
+        formula to drift. See :mod:`shinro.utils.batching` for the rank
+        helpers.
 
         Args:
-            state: Current state vector (n_x,).
-            control: Control input vector (n_u,).
+            state: Current state vector (n_x,) or batch (N, n_x).
+            control: Control input (n_u,), batch (N, n_u), or scalar.
+            bk: Backend to evaluate with. Defaults to ``self.bk``.
 
         Returns:
-            Time derivative of the state (n_x,), or None if not implemented.
+            Time derivative with the rank of ``state``, or None if not
+            implemented.
         """
         return None
 

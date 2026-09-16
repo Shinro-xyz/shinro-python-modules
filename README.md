@@ -79,6 +79,7 @@ Non-conforming commits land under **Other** (or are dropped). `chore: release
 vX.Y.Z` commits are skipped automatically.
 
 Semantic versioning:
+
 - `patch` — backwards-compatible fix (`v0.1.0` → `v0.1.1`)
 - `minor` — backwards-compatible feature (`v0.1.1` → `v0.2.0`)
 - `major` — incompatible API change (`v0.2.0` → `v1.0.0`)
@@ -112,6 +113,9 @@ python -m demos.demo_arm_trajectory                       # arm trajectory + liv
 python -m demos.demo_base_tracking                        # base tracking, LQR + observer
 python -m demos.demo_base_tracking --controller mpc       # base tracking, MPC
 python -m demos.demo_pick_and_place                       # full pick-and-place sequence
+python -m demos.demo_mppi                                 # MPPI model wiring + lowering contract
+python -m demos.demo_smc                                  # SMC on a nonlinear plant (f/g host-side)
+python -m demos.demo_smc --build                          # ...and run the compiled kernel
 ```
 
 Auto-generate a robot config from a MuJoCo model:
