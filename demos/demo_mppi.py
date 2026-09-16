@@ -219,12 +219,13 @@ def print_trace_safety_rules():
             "no bk.sum — write sums as contractions ((z * z) @ W)",
             "no rank-differing broadcast — (N, D) * (D,) is rejected; use (1, D)",
             "stateful attrs must be rebound (self.u = ...), never mutated in place",
-            "dynamics must be LTI for lowering; nonlinear rollouts stay eager-only",
+            "plant dynamics must be batch-capable — a per-sample x[i] loop cannot be traced",
         ),
         start=1,
     ):
         print(f"  {i}. {rule}")
-    print("\n  attach_plant's LTI path already follows all of these.")
+    print("\n  attach_plant's dynamics already follows all of these: LTI plants use one")
+    print("  batched matmul, nonlinear plants evaluate their own dynamics over the batch.")
 
 
 def main():

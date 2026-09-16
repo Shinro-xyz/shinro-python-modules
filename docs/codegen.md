@@ -229,6 +229,41 @@ The wiring is **not** a per-scenario edge dict — it's the fixed ABC dataflow,
 the same for every scenario. What's scenario-specific (clip limits, vector
 dims) comes from the scenario config.
 
+### A nonlinear rollout: batch-capable `dynamics` (MPPI)
+
+MPPI's rollout is the one place a *plant model* enters the graph: `compute`
+calls `dynamics_fn(x_batch, u_batch, dt)` once per horizon step over `N`
+samples. For a linear plant that is a batched matmul; for a nonlinear plant it
+is the plant's own `dynamics` — and that is what keeps the lowering uniform.
+
+`Plant.dynamics(state, control, bk=None)` accepts a single `(n_x,)` state or a
+batch `(N, n_x)` and returns the derivative with the same rank, evaluating each
+coordinate-wise term elementwise on `(N, 1)` columns. One implementation serves
+all three callers — the eager per-sample rollout, the finite-difference
+linearization, and the traced graph — so there is no second, separately
+maintained batched formula to drift from the first.
+
+Why that matters for lowering: the sample axis lives in the **node shapes**, not
+in the graph's structure. A per-sample loop traced into the graph would emit `N`
+copies of the body per step (tens of thousands of nodes at production sizes);
+the batched form emits one `sin`/`mul`/`stack` node of shape `(N, 1)` per term,
+so the node count is independent of `N` — only `K` and `D_u` matter. The batch
+is a contiguous leading axis, which is also what lets the backend vectorize.
+
+Two mechanical requirements the contract places on a plant's `dynamics`:
+
+- **Route every backend call through the `bk` it is handed** (defaulting to
+  `self.bk`). `trace_node` swaps only the *traced component's* backend; the
+  plant's own stays concrete, so `self.bk.sin(tracer)` would evaluate eagerly.
+  `mppi.attach_plant` resolves the controller's current backend at call time.
+- **No scalar indexing.** The tracer has no `__getitem__`, so coordinates come
+  from the `x.T` + `bk.slice_(j, j + 1)` + `.T` column idiom;
+  `utils/batching.py` wraps it as `column` and supplies the rank helpers
+  (`as_batch` / `as_vector` / `control_batch`).
+
+What does not lower is dynamics with data-dependent per-row branching — that is
+control flow, and per the design doctrine it belongs on the host.
+
 ## The interpreter
 
 `interpret(graph, inputs)` walks the graph in execution order (the nodes are
@@ -257,8 +292,8 @@ listing available ops. The current set (from `ops.py`):
 
 `const`, `input`, `output`, `matmul`, `add`, `sub`, `mul`, `div`, `ne`, `lt`,
 `neg`, `transpose`, `inv`, `reshape`, `clip`, `where`, `copy`, `any`, `stack`,
-`tanh`, `relu`, `exp`, `abs`, `sign`, `pow`, `sin`, `cos`, `argmax`, `one_hot`,
-`slice`, `solve_qp`.
+`tanh`, `relu`, `exp`, `abs`, `sign`, `pow`, `sin`, `cos`, `min`, `argmax`,
+`one_hot`, `slice`, `solve_qp`.
 
 ## Lowering to Zig (shipped)
 
@@ -396,8 +431,8 @@ enum in `graph_data.zig`; `cst`/`inp`/`out`/`where_op` are the Zig spellings of
 
 `const`, `input`, `output`, `matmul`, `add`, `sub`, `mul`, `div`, `ne`, `lt`,
 `neg`, `transpose`, `inv`, `reshape`, `clip`, `where`, `any`, `copy`, `tanh`,
-`relu`, `exp`, `abs`, `sign`, `pow`, `argmax`, `one_hot`, `slice`, `sin`, `cos`,
-`stack`, `solve_qp`.
+`relu`, `exp`, `abs`, `sign`, `pow`, `min`, `argmax`, `one_hot`, `slice`, `sin`,
+`cos`, `stack`, `solve_qp`.
 
 Every interpreter op has a VM switch case. `solve_qp` is special: the
 interpreter handler solves with the Python `osqp` (eps=1e-6), while the VM
