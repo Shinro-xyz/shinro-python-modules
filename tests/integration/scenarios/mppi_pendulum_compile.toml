@@ -1,0 +1,35 @@
+# MPPI closed-loop compile scenario: KF + MPPI on the inverted pendulum.
+#
+# The nonlinear counterpart of mppi_compile.toml. The plant is a real
+# InvertedPendulum (not a sim-backed name), so the compile pipeline builds it,
+# derives the KF's linearized (A, B) via get_model(), and wires MPPI's rollout
+# through attach_plant — which is the plant's own batch-capable `dynamics`.
+# That makes this the end-to-end proof that a nonlinear rollout lowers: the
+# graph contains sin/mul nodes over the sample batch, and the same three-way
+# oracle (numpy / interpreter / .so) checks it as for the LTI case.
+#
+# The perturbations still arrive as a free C-ABI `epsilon` port of shape
+# (N, K*D_u): sampling stays on the host.
+[scenario]
+name = "mppi_pendulum_compile"
+description = "KF + MPPI on the inverted pendulum, with a nonlinear rollout"
+dt = 0.01
+input_limits = { min = [-0.5], max = [0.5] }
+
+[plant]
+type = "InvertedPendulum"
+config = "configs/plants/inverted_pendulum.toml"
+
+[controller]
+type = "MPPI"
+config = "configs/controllers/mppi_inverted_pendulum.toml"
+
+[estimator]
+type = "KalmanFilter"
+config = "configs/estimators/kalman_inverted_pendulum.toml"
+
+# Build spec: dims are baked into the graph at trace time. MPPI's N/K/D_u come
+# from the controller config (and the plant's control dim), not from here.
+[compile]
+n_x = 2
+n_u = 1
