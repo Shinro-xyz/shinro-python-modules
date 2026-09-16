@@ -1,0 +1,12 @@
+OSQP
+Copyright 2021 Bartolomeo Stellato, Goran Banjac, Paul Goulart, Stephen Boyd
+
+This product includes software developed as part of the OSQP project
+(https://osqp.org/), licensed under the Apache License, Version 2.0.
+
+The full license text is reproduced in this directory as
+Apache-2.0.txt.
+
+Vendored at: src/shinro/runtime/codegen/emosqp/
+Version: 1.0.0
+See THIRD-PARTY.md at the repository root for full details.

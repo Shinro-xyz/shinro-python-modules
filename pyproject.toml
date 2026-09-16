@@ -8,7 +8,12 @@ description = "Whole-body control framework: controllers, plants, estimators, tr
 readme = "README.md"
 requires-python = ">=3.12"
 dynamic = ["version"]
-license = { text = "MIT" }
+# NOTE: no `license` field, deliberately. The outbound license for this project
+# is undecided pending legal review, and the LICENSE file is intentionally empty.
+# The field previously read `{ text = "MIT" }`, which was emitted as packaging
+# boilerplate rather than chosen — see the license audit. Do not add a permissive
+# license here until the organization has decided, and commit the license text
+# at the same time. Third-party attribution lives in THIRD-PARTY.md.
 authors = [{ name = "Shinro" }]
 dependencies = [
     "numpy>=2.0",
