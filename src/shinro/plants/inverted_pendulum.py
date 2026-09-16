@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from shinro.components import PhysicsEngine, Plant
 from shinro.factories.registry import register_plant, register_plant_detector
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend
+from shinro.utils.batching import as_batch, as_vector, column, control_batch
 from shinro.utils.config_spec import BoundsConfig, strict_from_dict, strip_runtime_keys
 from shinro.utils.linearization import discretize_euler, linearize_plant
 
@@ -148,20 +149,31 @@ class InvertedPendulum(Plant):
         A_c, B_c = linearize_plant(self, x0, u0, eps=eps)
         return discretize_euler(A_c, B_c, self.dt, backend=self.bk)
 
-    def dynamics(self, state, control):
+    def dynamics(self, state, control, bk=None):
         """Continuous-time dynamics :math:`\\dot{x} = f(x, u)`.
 
         Args:
-            state: State vector (2,) — [theta, theta_dot].
-            control: Control vector (1,) or scalar — [tau].
+            state: State vector (2,) — [theta, theta_dot] — or a batch (N, 2).
+            control: Control (1,), batch (N, 1), or scalar — [tau].
+            bk: Backend to evaluate with. Defaults to the plant's backend.
 
         Returns:
-            Time derivative of the state (2,) — [theta_dot, theta_ddot].
+            Time derivative with the rank of ``state`` —
+            [theta_dot, theta_ddot].
         """
-        theta, theta_dot = state[0], state[1]
-        tau = control[0] if hasattr(control, '__len__') else control
-        theta_ddot = (self.g / self.l) * self.bk.sin(theta) + tau / (self.m * self.l**2) - (self.b / (self.m * self.l**2)) * theta_dot
-        return self.bk.stack([theta_dot, theta_ddot])
+        bk = self.bk if bk is None else bk
+        x, single = as_batch(bk, state)
+        u = control_batch(bk, control, 1)
+        theta = column(bk, x, 0)
+        theta_dot = column(bk, x, 1)
+        tau = column(bk, u, 0)
+        theta_ddot = (
+            (self.g / self.l) * bk.sin(theta)
+            + tau / (self.m * self.l**2)
+            - (self.b / (self.m * self.l**2)) * theta_dot
+        )
+        f = bk.stack([bk.ravel(theta_dot), bk.ravel(theta_ddot)]).T
+        return as_vector(bk, f, single)
 
     def step(self, u):
         """Execute one control step.
@@ -182,11 +194,9 @@ class InvertedPendulum(Plant):
             self.state = self.get_state()
             return self.state
 
-        theta, theta_dot = self.state[0], self.state[1]
-        tau = u[0] if hasattr(u, '__len__') else u
-        theta_ddot = (self.g / self.l) * self.bk.sin(theta) + tau / (self.m * self.l**2) - (self.b / (self.m * self.l**2)) * theta_dot
-        theta_dot_new = theta_dot + theta_ddot * self.dt
-        theta_new = theta + theta_dot_new * self.dt
+        f = self.dynamics(self.state, u)
+        theta_dot_new = self.state[1] + f[1] * self.dt
+        theta_new = self.state[0] + theta_dot_new * self.dt
         self.state = self.bk.array([theta_new, theta_dot_new])
         if self.state_bounds is not None:
             self.state = self.bk.clip(self.state, self.state_bounds[0], self.state_bounds[1])

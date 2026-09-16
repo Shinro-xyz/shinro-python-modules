@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from shinro.components import PhysicsEngine, Plant
 from shinro.factories.registry import register_plant, register_plant_detector
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend
+from shinro.utils.batching import as_batch, as_vector, column, control_batch
 from shinro.utils.config_spec import strip_runtime_keys
 from shinro.utils.linearization import discretize_euler, linearize_plant
 
@@ -163,7 +164,7 @@ class CartPole(Plant):
         A_c, B_c = linearize_plant(self, x0, u0, eps=eps)
         return discretize_euler(A_c, B_c, self.dt, backend=self.bk)
 
-    def _compute_accels(self, x, theta, x_dot, theta_dot, F):
+    def _compute_accels(self, x, theta, x_dot, theta_dot, F, bk=None):
         """Compute the accelerations from the equations of motion.
 
         Solves the coupled 2x2 system for :math:`\\ddot{x}` and
@@ -175,32 +176,43 @@ class CartPole(Plant):
             x_dot: Cart velocity (m/s).
             theta_dot: Pole angular velocity (rad/s).
             F: Horizontal force on cart (N).
+            bk: Backend to evaluate with. Defaults to the plant's backend.
 
         Returns:
             Tuple of (x_ddot, theta_ddot).
         """
+        bk = self.bk if bk is None else bk
         M, m, pole_len, g, _ = self.M, self.m, self.l, self.g, self.b
-        sin_theta = self.bk.sin(theta)
-        cos_theta = self.bk.cos(theta)
+        sin_theta = bk.sin(theta)
+        cos_theta = bk.cos(theta)
         denom = pole_len - m * pole_len * cos_theta**2 / (M + m)
         theta_ddot = (g * sin_theta - cos_theta * (F + m * pole_len * theta_dot**2 * sin_theta) / (M + m)) / denom
         x_ddot = (F + m * pole_len * (theta_dot**2 * sin_theta - theta_ddot * cos_theta)) / (M + m)
         return x_ddot, theta_ddot
 
-    def dynamics(self, state, control):
+    def dynamics(self, state, control, bk=None):
         """Continuous-time dynamics :math:`\\dot{x} = f(x, u)`.
 
         Args:
-            state: State vector (4,) — [x, x_dot, theta, theta_dot].
-            control: Control vector (1,) or scalar — [F].
+            state: State vector (4,) — [x, x_dot, theta, theta_dot] — or a
+                batch (N, 4).
+            control: Control (1,), batch (N, 1), or scalar — [F].
+            bk: Backend to evaluate with. Defaults to the plant's backend.
 
         Returns:
-            Time derivative of the state (4,) — [x_dot, x_ddot, theta_dot, theta_ddot].
+            Time derivative with the rank of ``state`` —
+            [x_dot, x_ddot, theta_dot, theta_ddot].
         """
-        x, x_dot, theta, theta_dot = state[0], state[1], state[2], state[3]
-        F = control[0] if hasattr(control, '__len__') else control
-        x_ddot, theta_ddot = self._compute_accels(x, theta, x_dot, theta_dot, F)
-        return self.bk.stack([x_dot, x_ddot, theta_dot, theta_ddot])
+        bk = self.bk if bk is None else bk
+        x, single = as_batch(bk, state)
+        u = control_batch(bk, control, 1)
+        x_pos = column(bk, x, 0)
+        x_dot = column(bk, x, 1)
+        theta = column(bk, x, 2)
+        theta_dot = column(bk, x, 3)
+        x_ddot, theta_ddot = self._compute_accels(x_pos, theta, x_dot, theta_dot, column(bk, u, 0), bk=bk)
+        f = bk.stack([bk.ravel(x_dot), bk.ravel(x_ddot), bk.ravel(theta_dot), bk.ravel(theta_ddot)]).T
+        return as_vector(bk, f, single)
 
     def step(self, u):
         """Execute one control step.
@@ -221,13 +233,11 @@ class CartPole(Plant):
             self.state = self.get_state()
             return self.state
 
-        x, x_dot, theta, theta_dot = self.state[0], self.state[1], self.state[2], self.state[3]
-        F = u[0] if hasattr(u, '__len__') else u
-        x_ddot, theta_ddot = self._compute_accels(x, theta, x_dot, theta_dot, F)
-        theta_dot_new = theta_dot + theta_ddot * self.dt
-        x_dot_new = x_dot + x_ddot * self.dt
-        theta_new = theta + theta_dot_new * self.dt
-        x_new = x + x_dot_new * self.dt
+        f = self.dynamics(self.state, u)
+        theta_dot_new = self.state[3] + f[3] * self.dt
+        x_dot_new = self.state[1] + f[1] * self.dt
+        theta_new = self.state[2] + theta_dot_new * self.dt
+        x_new = self.state[0] + x_dot_new * self.dt
         self.state = self.bk.array([x_new, x_dot_new, theta_new, theta_dot_new])
         if self.track_limits is not None:
             self.state = self.bk.array([

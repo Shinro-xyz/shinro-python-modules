@@ -1,28 +1,40 @@
-"""Batched dynamics and cost adapter — adapts a Plant's single-state interface to batched ``(N, ...)`` arrays.
+"""Batched dynamics and cost adapter — batched ``(N, ...)`` callables for sampling controllers.
 
 Sampling-based controllers (MPPI, CEM, iLQR, particle filters) roll out
-:math:`N` parallel trajectories over a prediction horizon. The :class:`Plant`
-interface is single-state: ``dynamics(x, u)`` returns :math:`\\dot{x}` for one
-state, and ``get_model()`` returns ``(A, B)`` for one system. This adapter
-bridges the two by exposing batched ``dynamics_fn(x_batch, u_batch, dt)`` and
-``cost_fn(x_batch, u_batch, Q, R, x_ref=None)`` callables that operate on a
-leading batch dimension :math:`N`.
+:math:`N` parallel trajectories over a prediction horizon. This adapter
+exposes the two callables they need — ``dynamics_fn(x_batch, u_batch, dt)``
+and ``cost_fn(x_batch, u_batch, Q, R, x_ref=None)`` — operating on a
+leading batch dimension :math:`N`, from a plant's ``dynamics`` and
+``get_model()``.
 
 Two dynamics paths are supported, dispatched on what the plant exposes:
 
-* **LTI path** — plants whose ``get_model()`` returns ``(A, B)``. The state
-  update is a single batched matmul :math:`x_{k+1} = x_k A^T + u_k B^T`,
-  which runs as one native kernel on both numpy and torch.
+* **Nonlinear path** — plants that implement ``dynamics`` (the ABC default is
+  ``None``, which linear plants keep). The plant evaluates its own
+  batch-capable derivative — one ``sin``/``mul`` node of shape ``(N, 1)`` per
+  formula term, not ``N`` private copies — and this adapter integrates it with
+  explicit Euler, ``x_{k+1} = x_k + dt f(x_k, u_k)``. Because the whole batch
+  rides in the node shapes, the traced graph's node count is independent of
+  the number of samples. The path is trace-safe: the plant routes every
+  backend call through the ``bk`` it is handed, because ``trace_node`` swaps
+  only the traced component's ``self.bk`` and leaves the plant's backend
+  concrete.
 
-* **Nonlinear path** — plants that implement ``dynamics(x, u)``. The update is
-  a semi-implicit Euler step :math:`x_{k+1} = x_k + dt\\, f(x_k, u_k)`.
-  On torch the single-state dynamics is auto-vectorized over the batch with
-  ``torch.vmap``; on numpy a Python loop over the batch is used.
+* **LTI path** — plants whose ``dynamics`` returns ``None`` and whose
+  ``get_model()`` returns ``(A, B)``. The state update is a single batched
+  matmul ``x_{k+1} = x_k A^T + u_k B^T``, one native kernel on numpy and torch
+  alike.
 
-The adapter uses the plant's own ``ArrayBackend`` throughout, so numpy and
-torch both work with batched tensors and no hard-coded numpy in the hot loop.
-For torch backends, the LTI path is a true batched matmul and the nonlinear
-path runs through ``torch.vmap`` — both leverage torch's native batched ops.
+There is deliberately one nonlinear implementation, not two: a scalar formula
+plus a batched rewrite would be two transcriptions of the same physics, free
+to drift. ``Plant.dynamics`` accepts a single state ``(n_x,)`` **or** a batch
+``(N, n_x)`` — a single state is a batch of one — so the eager per-sample
+rollout, the finite-difference linearization, and the lowered graph all run
+the same function.
+
+The adapter evaluates with the backend the caller passes (the component's
+backend when tracing), defaulting to the plant's.
+
 
 Args:
     plant: A :class:`Plant` instance exposing ``get_model()`` and (for the
@@ -40,14 +52,13 @@ class BatchedDynamicsAdapter:
 
     The adapter detects the dynamics path once at construction:
 
-    * If ``plant.dynamics`` returns ``None`` (the ABC default — LTI plants
-      need not override it), the LTI matmul path is used.
-    * Otherwise the nonlinear path is used, integrating ``plant.dynamics``
-      with semi-implicit Euler. On torch this is vectorized with
-      ``torch.vmap``; on numpy it loops over the batch.
+    * ``plant.dynamics`` returning non-``None`` (the ABC default is ``None``)
+      — the nonlinear path, integrating the plant's batch-capable derivative
+      with explicit Euler. Trace-safe.
+    * Otherwise the LTI matmul path.
 
-    All arrays live in the plant's backend, so torch inputs stay torch
-    throughout and run as batched native ops.
+    Arrays live in the plant's backend, or in the backend passed to
+    :meth:`dynamics_fn` (tracing passes the component's ``TraceBackend``).
 
     Usage:
         adapter = BatchedDynamicsAdapter(plant)
@@ -66,12 +77,13 @@ class BatchedDynamicsAdapter:
         self.D_x = self._A.shape[0]
         self.D_u = self._B.shape[1]
 
-        self._has_dynamics = plant.dynamics(state=self.bk.zeros(self.D_x), control=self.bk.zeros(self.D_u)) is not None
-        self._vmap = None
-        torch = getattr(self.bk, "torch", None)
-        if self._has_dynamics and torch is not None:
-            # Vectorize the single-state nonlinear dynamics over the batch.
-            self._vmap = torch.vmap(plant.dynamics, in_dims=(0, 0))
+        # Path dispatch: a plant that overrides ``dynamics`` (the ABC default
+        # is None) rolls out nonlinearly; otherwise the linearized (A, B)
+        # matmul is exact and cheaper. The probe doubles as the capability
+        # check the ABC used to leave to ``dynamics() is not None``.
+        probe = plant.dynamics(state=self.bk.zeros(self.D_x), control=self.bk.zeros(self.D_u))
+        self._nonlinear = probe is not None
+        self._path = "nonlinear" if self._nonlinear else "lti"
 
     @property
     def state_dim(self) -> int:
@@ -83,37 +95,39 @@ class BatchedDynamicsAdapter:
         """Control dimension :math:`D_u`."""
         return self.D_u
 
-    def dynamics_fn(self, x_batch, u_batch, dt: float):
+    @property
+    def dynamics_path(self) -> str:
+        """Which dynamics path this adapter dispatches to.
+
+        ``"nonlinear"`` (the plant's own batch-capable derivative, integrated
+        with explicit Euler) or ``"lti"`` (one batched matmul).
+        """
+        return self._path
+
+    def dynamics_fn(self, x_batch, u_batch, dt: float, bk: Any | None = None):
         """Batched dynamics update.
 
+        Dispatches to the path chosen at construction. ``bk`` is the backend
+        the plant's nonlinear ``dynamics`` evaluates with, defaulting to the
+        plant's own: tracing passes the component's ``TraceBackend`` here,
+        because ``trace_node`` swaps only the traced component's ``self.bk`` —
+        a plant calling ``self.bk.sin`` on a tracer would otherwise reach a
+        concrete backend and fail. The LTI path ignores ``bk`` (operator
+        arithmetic already routes through the tracer).
+
         Args:
             x_batch: Batch of states (N, D_x).
             u_batch: Batch of controls (N, D_u).
             dt: Time step (s).
+            bk: Backend for the nonlinear path; defaults to the plant's backend.
 
         Returns:
             Batch of next states (N, D_x).
         """
-        if self._has_dynamics:
-            return self._integrate(x_batch, u_batch, dt)
+        if self._nonlinear:
+            f = self.plant.dynamics(x_batch, u_batch, bk=self.bk if bk is None else bk)
+            return x_batch + dt * f
         return x_batch @ self._A.T + u_batch @ self._B.T
-
-    def _integrate(self, x_batch, u_batch, dt: float):
-        """Semi-implicit Euler integration of the plant's nonlinear dynamics.
-
-        Args:
-            x_batch: Batch of states (N, D_x).
-            u_batch: Batch of controls (N, D_u).
-            dt: Time step (s).
-
-        Returns:
-            Batch of next states (N, D_x).
-        """
-        if self._vmap is not None:
-            return x_batch + dt * self._vmap(x_batch, u_batch)
-        return x_batch + dt * self.bk.stack(
-            [self.plant.dynamics(x_batch[i], u_batch[i]) for i in range(x_batch.shape[0])]
-        )
 
     def cost_fn(self, x_batch, u_batch, Q, R, x_ref: Any | None = None):
         """Batched quadratic stage cost.

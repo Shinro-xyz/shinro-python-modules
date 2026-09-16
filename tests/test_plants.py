@@ -636,3 +636,51 @@ class TestConfigGenerator:
                 out_path.write_text(toml_string(config))
         assert (output_dir / "pendulum.toml").exists()
         assert (output_dir / "cartpole.toml").exists()
+
+
+class TestBatchCapableDynamics:
+    """``Plant.dynamics`` accepts a single state or a batch, consistently.
+
+    Every nonlinear plant must be batch-capable — that is what lets the *same*
+    function serve the eager per-sample rollout, the finite-difference
+    linearization, and the lowered MPPI graph (see ``Plant.dynamics``). These
+    tests pin the rank contract and the batch/single agreement, so a new
+    nonlinear plant cannot silently ship with a scalar-only ``dynamics``.
+    """
+
+    def _plants(self, bk):
+        from shinro.plants.cartpole import CartPole
+        from shinro.plants.double_pendulum import DoublePendulum
+        from shinro.plants.inverted_pendulum import InvertedPendulum
+        return {
+            "inverted_pendulum": (InvertedPendulum(backend=bk), 2, 1),
+            "cartpole": (CartPole(backend=bk), 4, 1),
+            "double_pendulum": (DoublePendulum(backend=bk), 4, 2),
+        }
+
+    def test_single_state_returns_single_derivative(self, bk):
+        rng = np.random.default_rng(0)
+        for name, (plant, n_x, n_u) in self._plants(bk).items():
+            f = _to_np(plant.dynamics(bk.array(rng.normal(size=n_x)), bk.array(rng.normal(size=n_u))), bk)
+            assert f.shape == (n_x,), name
+
+    def test_batch_matches_single_calls(self, bk):
+        """A ``(N, n_x)`` call equals ``N`` single-state calls, row for row."""
+        rng = np.random.default_rng(1)
+        for name, (plant, n_x, n_u) in self._plants(bk).items():
+            x_batch = bk.array(rng.normal(size=(5, n_x)))
+            u_batch = bk.array(rng.normal(size=(5, n_u)))
+            f_batch = _to_np(plant.dynamics(x_batch, u_batch), bk)
+            assert f_batch.shape == (5, n_x), name
+            for i in range(5):
+                f_i = _to_np(plant.dynamics(x_batch[i], u_batch[i]), bk)
+                assert np.allclose(f_batch[i], f_i, atol=1e-12), name
+
+    def test_scalar_control_matches_vector(self, bk):
+        """A scalar control means the first input, the rest zero."""
+        rng = np.random.default_rng(2)
+        for name, (plant, n_x, n_u) in self._plants(bk).items():
+            x = bk.array(rng.normal(size=n_x))
+            scalar = _to_np(plant.dynamics(x, 0.7), bk)
+            vector = _to_np(plant.dynamics(x, bk.array([0.7] + [0.0] * (n_u - 1))), bk)
+            assert np.allclose(scalar, vector, atol=1e-12), name

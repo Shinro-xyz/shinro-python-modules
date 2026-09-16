@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from shinro.components import PhysicsEngine, Plant
 from shinro.factories.registry import register_plant, register_plant_detector
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend
+from shinro.utils.batching import as_batch, as_vector, column, control_batch
 from shinro.utils.config_spec import BoundsConfig, strict_from_dict, strip_runtime_keys
 from shinro.utils.linearization import discretize_euler, linearize_plant
 
@@ -115,81 +116,81 @@ class DoublePendulum(Plant):
             self.bk = NumpyBackend()
             self.state = self.bk.zeros(4)
 
-    def _make_mass_matrix(self, diff_theta):
-        """Build the 2x2 mass matrix :math:`M(\\theta)`.
-
-        Args:
-            diff_theta: Angle difference :math:`\\theta_1 - \\theta_2`.
-
-        Returns:
-            Mass matrix M (2, 2).
-        """
-        M = self.bk.zeros((2, 2))
-        M[0, 0] = (self.m1 + self.m2) * self.l1**2
-        M[0, 1] = self.m2 * self.l1 * self.l2 * self.bk.cos(diff_theta)
-        M[1, 0] = M[0, 1]
-        M[1, 1] = self.m2 * self.l2**2
-        return M
-
-    def _make_coriolis_matrix(self, diff_theta, angular_velocities):
-        """Build the 2x2 Coriolis matrix :math:`C(\\theta, \\dot{\\theta})`.
-
-        Args:
-            diff_theta: Angle difference :math:`\\theta_1 - \\theta_2`.
-            angular_velocities: Vector (2,) — [omega_1, omega_2].
-
-        Returns:
-            Coriolis matrix C (2, 2).
-        """
-        C = self.bk.zeros((2, 2))
-        w_1, w_2 = angular_velocities[0], angular_velocities[1]
-        C[0, 1] = self.m2 * self.l1 * self.l2 * self.bk.sin(diff_theta) * w_2
-        C[1, 0] = -self.m2 * self.l2 * self.l1 * self.bk.sin(diff_theta) * w_1
-        return C
-
-    def _make_gravity_vector(self, theta_angles):
-        """Build the gravity vector :math:`G(\\theta)`.
-
-        Args:
-            theta_angles: Vector (2,) — [theta_1, theta_2].
-
-        Returns:
-            Gravity vector G (2,).
-        """
-        theta_1, theta_2 = theta_angles[0], theta_angles[1]
-        G = self.bk.zeros(2)
-        G[0] = (self.m1 + self.m2) * self.g * self.l1 * self.bk.sin(theta_1)
-        G[1] = self.m2 * self.g * self.l2 * self.bk.sin(theta_2)
-        return G
-
-    def dynamics(self, state, control):
-        """Continuous-time dynamics :math:`\\dot{x} = f(x, u)`.
+    def dynamics(self, state, control, bk=None):
+        """Continuous-time dynamics :math:`\\dot{x} = f(x, u)`, batch-capable.
 
         State ordering is :math:`[\\theta_1, \\theta_2, \\omega_1, \\omega_2]`
-        and control is :math:`[\\tau_1, \\tau_2]`. The angular acceleration is
-        solved from the manipulator equation
-        :math:`\\ddot{\\theta} = M^{-1}(\\tau - C\\dot{\\theta} - G)`.
+        and control is :math:`[\\tau_1, \\tau_2]`. The angular acceleration
+        solves the manipulator equation
+        :math:`\\ddot{\\theta} = M^{-1}(\\tau - C\\dot{\\theta} - G)`, with
+
+        .. math::
+
+            M = \\begin{bmatrix} (m_1 + m_2) l_1^2 & m_2 l_1 l_2 \\cos\\Delta \\
+            m_2 l_1 l_2 \\cos\\Delta & m_2 l_2^2 \\end{bmatrix},
+            \\quad \\Delta = \\theta_1 - \\theta_2,
+
+        :math:`C\\dot{\\theta} = [m_2 l_1 l_2 \\sin\\Delta\\,\\omega_2^2,
+        -m_2 l_1 l_2 \\sin\\Delta\\,\\omega_1^2]`, and
+        :math:`G = [(m_1 + m_2) g l_1 \\sin\\theta_1,
+        m_2 g l_2 \\sin\\theta_2]`.
+
+        The 2x2 solve is written in closed form (Cramer's rule) rather than
+        ``bk.solve``: on the batched path ``M`` would be rank-3 (``(N, 2, 2)``),
+        which the graph backend — strictly 2-D — does not represent. The
+        entries are therefore ``(N, 1)`` columns, and the determinant
+        :math:`m_2 l_1^2 l_2^2 (m_1 + m_2 \\sin^2\\Delta)` is strictly
+        positive for positive masses, so the division is always safe.
 
         Args:
-            state: State vector (4,) — [theta_1, theta_2, omega_1, omega_2].
-            control: Control vector (2,) or scalar — [tau_1, tau_2].
+            state: State (4,) — [theta_1, theta_2, omega_1, omega_2] — or a
+                batch (N, 4).
+            control: Control (2,), batch (N, 2), or scalar — [tau_1, tau_2].
+            bk: Backend to evaluate with. Defaults to the plant's backend.
 
         Returns:
-            Time derivative of the state (4,) —
+            Time derivative with the rank of ``state`` —
             [omega_1, omega_2, theta_1_ddot, theta_2_ddot].
         """
-        theta_1, theta_2, omega_1, omega_2 = state[0], state[1], state[2], state[3]
-        diff_theta = theta_1 - theta_2
-        omega = self.bk.array([omega_1, omega_2])
-        M = self._make_mass_matrix(diff_theta)
-        C = self._make_coriolis_matrix(diff_theta, omega)
-        G = self._make_gravity_vector(self.bk.array([theta_1, theta_2]))
+        bk = self.bk if bk is None else bk
+        x, single = as_batch(bk, state)
+        u = control_batch(bk, control, 2)
+        theta_1 = column(bk, x, 0)
+        theta_2 = column(bk, x, 1)
+        omega_1 = column(bk, x, 2)
+        omega_2 = column(bk, x, 3)
+        tau_1 = column(bk, u, 0)
+        tau_2 = column(bk, u, 1)
 
-        tau = control if hasattr(control, '__len__') else self.bk.array([control, 0.0])
-        b = tau - C @ omega - G
-        thetaddot = self.bk.solve(M, b)
+        diff = theta_1 - theta_2
+        sin_diff = bk.sin(diff)
+        # Mass matrix entries; only m12 is state-dependent.
+        m11 = (self.m1 + self.m2) * self.l1**2
+        m12 = self.m2 * self.l1 * self.l2 * bk.cos(diff)
+        m22 = self.m2 * self.l2**2
+        # b = tau - C omega - G, one (N, 1) column per joint.
+        b1 = (
+            tau_1
+            - self.m2 * self.l1 * self.l2 * sin_diff * omega_2 * omega_2
+            - (self.m1 + self.m2) * self.g * self.l1 * bk.sin(theta_1)
+        )
+        b2 = (
+            tau_2
+            + self.m2 * self.l1 * self.l2 * sin_diff * omega_1 * omega_1
+            - self.m2 * self.g * self.l2 * bk.sin(theta_2)
+        )
+        # theta_ddot = M^-1 b, 2x2 closed form.
+        det = m11 * m22 - m12 * m12
+        theta_1_ddot = (b1 * m22 - m12 * b2) / det
+        theta_2_ddot = (m11 * b2 - b1 * m12) / det
 
-        return self.bk.stack([omega_1, omega_2, thetaddot[0], thetaddot[1]])
+        f = bk.stack([
+            bk.ravel(omega_1),
+            bk.ravel(omega_2),
+            bk.ravel(theta_1_ddot),
+            bk.ravel(theta_2_ddot),
+        ]).T
+        return as_vector(bk, f, single)
 
     def get_model(self, x0=None, u0=None, eps=1e-6):
         """Get the discrete-time state-space model around an operating point.
