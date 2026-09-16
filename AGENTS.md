@@ -117,9 +117,8 @@ Experiment logs live in `lab-notes/daily/` in the repo. Read the files directly.
 
 Each session's lab note MUST contain a semantic summary of the changes made —
 what was built, why, key design decisions, and test results. This is not a git
-log; it's a narrative record of intent and outcomes. (A CI bot
-(`.github/workflows/update-labnotes.yml`) also appends commit logs to today's
-file on push to main.)
+log; it's a narrative record of intent and outcomes. Write it when the task is
+done. Nothing appends to these files automatically.
 
 ## Workflow
 
