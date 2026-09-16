@@ -153,3 +153,16 @@ workflow used by agents working in this repo.
 
 See the [Roadmap](https://docs.shinro.xyz/roadmap/) for what's shipped vs.
 planned, including Shinro Studio integration status.
+
+## Licensing
+
+**Undecided — pending legal review.** No outbound license is granted at this
+time, and the `LICENSE` file is intentionally empty. Do not infer a license from
+its absence, and do not add a permissive license field or license text until the
+organization has decided the outbound license.
+
+This repository redistributes third-party code. **See
+[`THIRD-PARTY.md`](./THIRD-PARTY.md)** for the full attribution list, including
+the vendored OSQP embedded solver (`src/shinro/runtime/codegen/emosqp/`,
+Apache License 2.0) with its notice and license text under
+[`licenses/`](./licenses/).
