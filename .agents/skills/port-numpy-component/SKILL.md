@@ -42,6 +42,7 @@ verification or documentation steps.
 ## Constraints
 
 ### MUST DO
+
 - Import code as `shinro.*`, never by top-level module path
 - Inherit from the correct ABC in `src/shinro/components.py`
 - Use `self.bk` for all array ops; never call `np.` directly inside the component
@@ -50,6 +51,7 @@ verification or documentation steps.
 - Write the lab note — this step is mandatory, not optional
 
 ### MUST NOT DO
+
 - Query or re-index the stale `.codebase/` SQLite index
 - Bypass the registry or `from_config`
 - Skip docstrings or ship undocumented public methods

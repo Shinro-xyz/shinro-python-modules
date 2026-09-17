@@ -32,7 +32,7 @@ run actually means the tests ran.
 ## Command Cheat-Sheet
 
 | Situation | Command |
-|-----------|---------|
+| ----------- | --------- |
 | Quick loop while developing | `make test-quick` (unit files only) |
 | Single test | `python3 -m pytest tests/test_x.py -v -k "name"` |
 | Done-check (default suite) | `make test` |
@@ -98,6 +98,7 @@ run actually means the tests ran.
 ## Constraints
 
 ### MUST DO
+
 - Use the Make targets for marker-gated suites (`test-integration`,
   `test-functional`) — plain pytest silently skips them
 - Run `make lint` and `make test` before finishing a change
@@ -106,6 +107,7 @@ run actually means the tests ran.
 - Trust `pyproject.toml` / `Makefile` over `docs/testing.md` when they disagree
 
 ### MUST NOT DO
+
 - Treat silent skips (markers, zig absent, extras absent) as passes
 - Hand-edit generated `src/shinro/runtime/graph_data.zig` or the `src/shinro/runtime/codegen/emosqp/`
   solver bake
