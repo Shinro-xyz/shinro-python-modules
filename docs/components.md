@@ -29,6 +29,11 @@ implement `compute(current, target)` and `reset()`.
 > `MPC_LTI` and `MPC_DeltaU` are both built on `MPC_LTI` in `mpc_lti.py`:
 > `MPC_DeltaU` adds Δu (control-rate) regularization. The two names are
 > distinct registrations, not aliases.
+>
+> `onnx_rl` is the only controller that may omit `[estimator]` in a scenario,
+> and the only one with a compiled deployment path: an ONNX policy imports to a
+> standalone graph, which the adapter runs eagerly from `model_path` or through
+> a `make compile` kernel when `artifact_dir` is set (see the config header).
 
 ## Plants
 
