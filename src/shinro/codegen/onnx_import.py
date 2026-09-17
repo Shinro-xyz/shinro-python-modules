@@ -72,6 +72,9 @@ EPSILON_PORT = "epsilon"
 
 #: Action-space names the importer understands.
 _ACTION_SPACES = frozenset({"continuous", "discrete", "stochastic"})
+#: Observation-config keys the importer reads. Unknown keys are rejected so a
+#: typo (``obs_means``) cannot silently drop normalization or clipping.
+_OBS_KEYS = frozenset({"input_name", "state_keys", "normalize", "obs_mean", "obs_std", "clip", "add_batch_dim"})
 #: ONNX ops the importer can translate. Everything else is rejected loudly.
 _SUPPORTED_OPS = frozenset({"Gemm", "MatMul", "Add", "Relu", "Tanh", "Sigmoid"})
 #: ONNX ops translated straight to a same-named shinro op.
@@ -207,9 +210,13 @@ class _OnnxImporter:
 
         Raises:
             ValueError: On multiple graph inputs, an ``input_name`` override
-                that does not match, an un-inferable observation dimension, or
-                out-of-range ``state_keys``.
+                that does not match, an unknown observation key, an
+                un-inferable observation dimension, or out-of-range
+                ``state_keys``.
         """
+        unknown = set(self.obs_cfg) - _OBS_KEYS
+        if unknown:
+            raise ValueError(f"observation has unknown key(s): {sorted(unknown)} — valid keys: {sorted(_OBS_KEYS)}")
         real_inputs = [i for i in graph_proto.input if i.name not in self.initializers]
         if len(real_inputs) != 1:
             raise ValueError(

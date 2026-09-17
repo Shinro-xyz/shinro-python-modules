@@ -368,6 +368,20 @@ class TestObservationEncoder:
         with pytest.raises(ValueError, match="out of range"):
             import_onnx_policy(path, n_x=2, obs_cfg={"state_keys": [0, 5]})
 
+    def test_unknown_observation_key_rejected(self, tmp_path):
+        """A typo like `obs_means` must not silently drop normalization."""
+        from onnx import helper
+
+        path = _save(
+            [helper.make_node("MatMul", ["state", "w"], ["y"])],
+            [_vi("state", [None, 2])],
+            [_vi("y", [None, 2])],
+            [_init("w", np.eye(2))],
+            tmp_path,
+        )
+        with pytest.raises(ValueError, match="unknown key"):
+            import_onnx_policy(path, obs_cfg={"obs_means": [0.0, 0.0]})
+
 
 class TestRejections:
     def test_unsupported_op_names_itself(self, tmp_path):
