@@ -36,6 +36,14 @@ stays 1-D (or 2-D where an initializer forces it) exactly like the classical
 controllers. ``observation.add_batch_dim`` is consequently a no-op in the
 compiled path — it only mattered for feeding ``onnxruntime``.
 
+The action space is baked too (``action_cfg``): ``continuous`` applies
+scale/bias, ``discrete`` emits an argmax one-hot, and ``stochastic`` splits
+``[mean; log_std]``. A non-deterministic ``discrete`` / ``stochastic`` policy
+gains an ``epsilon`` input port — the host supplies the noise (Gumbel for
+discrete, standard normal for stochastic) and the kernel does only the
+arithmetic, exactly like MPPI's port. Deterministic policies have no
+``epsilon`` port at all.
+
 Usage::
 
     from shinro.codegen.interpreter import interpret
@@ -59,7 +67,11 @@ from shinro.codegen.tracing import Graph, Node
 STATE_PORT = "state"
 #: C-ABI output port carrying the policy's action.
 OUTPUT_PORT = "u"
+#: C-ABI input port carrying host noise for a non-deterministic action space.
+EPSILON_PORT = "epsilon"
 
+#: Action-space names the importer understands.
+_ACTION_SPACES = frozenset({"continuous", "discrete", "stochastic"})
 #: ONNX ops the importer can translate. Everything else is rejected loudly.
 _SUPPORTED_OPS = frozenset({"Gemm", "MatMul", "Add", "Relu", "Tanh", "Sigmoid"})
 #: ONNX ops translated straight to a same-named shinro op.
@@ -95,6 +107,7 @@ class _OnnxImporter:
         *,
         n_x: int | None = None,
         obs_cfg: dict | None = None,
+        action_cfg: dict | None = None,
         output_name: str | None = None,
     ) -> None:
         """Store the import request; parsing and emission happen in :meth:`build`.
@@ -106,12 +119,15 @@ class _OnnxImporter:
                 dimension when no ``state_keys`` are given).
             obs_cfg: Observation-encoder config, mirroring the old adapter's
                 ``[observation]`` TOML table.
+            action_cfg: Action-space config, mirroring the old adapter's
+                top-level TOML fields.
             output_name: ONNX tensor to import as the action. Defaults to the
                 model's first declared output.
         """
         self.model_path = model_path
         self.requested_n_x = n_x
         self.obs_cfg = dict(obs_cfg or {})
+        self.action_cfg = dict(action_cfg or {})
         self.output_name = output_name
 
         self.g = Graph()
@@ -120,20 +136,31 @@ class _OnnxImporter:
         self.inputs: dict[str, np.ndarray] = {}
         self.initializers: dict[str, np.ndarray] = {}
 
+        # Overwritten by _resolve_action_cfg(); the defaults keep the object
+        # introspectable before build() runs.
+        self.action_space = "continuous"
+        self.deterministic = True
+        self.action_scale = np.asarray(1.0, dtype=np.float64)
+        self.action_bias = np.asarray(0.0, dtype=np.float64)
+        self.action_clip: tuple[float, float] | None = None
+
     # ── orchestration ─────────────────────────────────────────────────────
 
     def build(self) -> ComposedGraph:
         """Parse the model, emit the graph, and return the composed result.
 
         Returns:
-            A :class:`ComposedGraph` with one input port (``state``), one output
-            port (``u``), and no recurrent state.
+            A :class:`ComposedGraph` with a ``state`` input port (plus
+            ``epsilon`` when the action space samples), a ``u`` output port,
+            and no recurrent state.
 
         Raises:
             ValueError: On a malformed model/config, a multi-input policy, an
-                unresolvable tensor, or a batched (leading dim ≠ 1) output.
+                unresolvable tensor, a batched (leading dim ≠ 1) output, or an
+                inconsistent action config.
             NotImplementedError: On an unsupported ONNX op or attribute.
         """
+        self._resolve_action_cfg()
         onnx, numpy_helper = _onnx_modules()
         graph_proto = onnx.load(self.model_path).graph
         self.initializers = {t.name: np.asarray(numpy_helper.to_array(t), dtype=np.float64) for t in graph_proto.initializer}
@@ -158,8 +185,11 @@ class _OnnxImporter:
             raise ValueError(f"ONNX output {resolved_output!r} was not produced by any reachable node")
 
         action_id = self.flatten_output(self.tensors[resolved_output])
-        self.emit("output", [action_id], name=OUTPUT_PORT)
-        return ComposedGraph(graph=self.g, inputs=[STATE_PORT], outputs=[OUTPUT_PORT])
+        ports = [STATE_PORT]
+        epsilon_id = self._emit_epsilon(action_id, ports) if self.samples_actions else None
+        u = self.apply_action(action_id, epsilon_id)
+        self.emit("output", [u], name=OUTPUT_PORT)
+        return ComposedGraph(graph=self.g, inputs=ports, outputs=[OUTPUT_PORT])
 
     def _resolve_ports(self, graph_proto: Any) -> tuple[str, list[int], int]:
         """Resolve the input tensor name, observation indices, and ``n_x``.
@@ -348,7 +378,10 @@ class _OnnxImporter:
 
         ``B'`` is realized as a ``transpose`` node rather than by baking a
         pre-transposed constant, so the non-square transpose path in the VM is
-        exercised by every torch-style export (``transB=1``).
+        exercised by every torch-style export (``transB=1``). The ``alpha`` /
+        ``beta`` multipliers are emitted unconditionally, including the default
+        ``1.0``: a ``mul`` by one is cheap and keeps the Gemm lowering uniform
+        rather than branching on attribute values.
 
         Raises:
             NotImplementedError: On unknown attributes, wrong arity, or ``transA=1``.
@@ -405,12 +438,130 @@ class _OnnxImporter:
             f"only batch-1 policies (a leading dimension of 1) are supported"
         )
 
+    # ── action space ──────────────────────────────────────────────────────
+
+    @property
+    def samples_actions(self) -> bool:
+        """Whether the graph consumes host noise instead of a deterministic action."""
+        return self.action_space != "continuous" and not self.deterministic
+
+    def _resolve_action_cfg(self) -> None:
+        """Validate the action config and resolve the constants it bakes.
+
+        Raises:
+            ValueError: On an unknown action space, a single-sided clip, or a
+                non-finite clip bound. The lowerer writes floats as Zig hex
+                literals and ``inf`` is not a Zig identifier, so an ``±inf``
+                bound would fail the build — rejecting it here keeps the error
+                at import time.
+        """
+        space = self.action_cfg.get("action_space", "continuous")
+        if space not in _ACTION_SPACES:
+            raise ValueError(f"action_space must be one of {sorted(_ACTION_SPACES)}, got {space!r}")
+        self.action_space = space
+        self.deterministic = bool(self.action_cfg.get("deterministic", True))
+        self.action_scale = np.asarray(self.action_cfg.get("action_scale", 1.0), dtype=np.float64)
+        self.action_bias = np.asarray(self.action_cfg.get("action_bias", 0.0), dtype=np.float64)
+
+        has_low = "action_clip_low" in self.action_cfg
+        has_high = "action_clip_high" in self.action_cfg
+        if has_low != has_high:
+            raise ValueError(
+                "action_clip_low and action_clip_high must be given together: a missing bound "
+                "would default to ±inf, which the lowerer cannot emit (inf is not a Zig literal)"
+            )
+        clip = None
+        if has_low:
+            clip = (float(self.action_cfg["action_clip_low"]), float(self.action_cfg["action_clip_high"]))
+            if not all(np.isfinite(clip)):
+                raise ValueError(f"action_clip_low/action_clip_high must be finite (got {clip})")
+        self.action_clip = clip
+
+    def apply_action(self, raw_id: int, epsilon_id: int | None = None) -> int:
+        """Translate the raw policy output into the graph's action port.
+
+        Mirrors the old runtime post-processing exactly: ``continuous`` applies
+        scale/bias; ``discrete`` emits an argmax one-hot (scale/bias do not
+        apply to a one-hot action, matching the adapter); ``stochastic`` splits
+        ``[mean; log_std]`` and either returns the mean or adds
+        ``exp(clip(log_std, -10, 2)) * epsilon``. The optional clip is applied
+        last in every space.
+
+        Args:
+            raw_id: Node id of the flattened raw policy output.
+            epsilon_id: Node id of the host-noise port when the space samples,
+                else ``None``.
+
+        Returns:
+            Node id of the final action.
+        """
+        if self.action_space == "continuous":
+            u = self._scale_bias(raw_id)
+        elif self.action_space == "discrete":
+            logits = raw_id if epsilon_id is None else self.emit("add", [raw_id, epsilon_id])
+            u = self.emit("one_hot", [self.emit("argmax", [logits])], depth=self.value_of(raw_id).size)
+        else:  # stochastic
+            u = self._stochastic(raw_id, epsilon_id)
+        if self.action_clip is not None:
+            lo, hi = self.action_clip
+            u = self.emit("clip", [u], lo=lo, hi=hi)
+        return u
+
+    def _emit_epsilon(self, raw_id: int, ports: list[str]) -> int:
+        """Emit the host-noise input port and return its node id.
+
+        The noise kind is part of the deployment contract: ``stochastic``
+        expects standard-normal draws of length ``n_u``; ``discrete`` expects
+        Gumbel noise of length ``n_actions`` (``g = -log(-log(u))`` from
+        ``u ~ U(0, 1)``), which turns ``argmax(logits + g)`` into exact
+        categorical sampling from ``softmax(logits)``.
+        """
+        n_noise = self.value_of(raw_id).size if self.action_space == "discrete" else self._stochastic_half(raw_id)
+        self.inputs[EPSILON_PORT] = np.zeros(n_noise, dtype=np.float64)
+        ports.append(EPSILON_PORT)
+        return self.emit("input", [], name=EPSILON_PORT)
+
+    def _scale_bias(self, x_id: int) -> int:
+        """Apply ``scale * x + bias``, emitting both nodes unconditionally.
+
+        Like Gemm's ``alpha`` / ``beta`` multipliers, the default ``1.0`` /
+        ``0.0`` still produce their ``mul`` / ``add``: a no-op node is cheap and
+        it keeps the action lowering uniform instead of branching on configured
+        values.
+        """
+        x = x_id
+        x = self.emit("mul", [x, self.const(self.action_scale)])
+        x = self.emit("add", [x, self.const(self.action_bias)])
+        return x
+
+    def _stochastic_half(self, raw_id: int) -> int:
+        """Return ``n_u`` for a ``[mean; log_std]`` output, validating its size.
+
+        Raises:
+            ValueError: If the output size is zero or odd.
+        """
+        size = self.value_of(raw_id).size
+        if size == 0 or size % 2:
+            raise ValueError(f"stochastic policy output must be [mean; log_std] with an even, non-zero size (got {size})")
+        return size // 2
+
+    def _stochastic(self, raw_id: int, epsilon_id: int | None) -> int:
+        """Split ``[mean; log_std]`` and, when sampling, add the scaled noise."""
+        half = self._stochastic_half(raw_id)
+        mean = self.emit("slice", [raw_id], start=0, stop=half)
+        if epsilon_id is None:
+            return self._scale_bias(mean)
+        log_std = self.emit("slice", [raw_id], start=half, stop=2 * half)
+        std = self.emit("exp", [self.emit("clip", [log_std], lo=-10.0, hi=2.0)])
+        return self._scale_bias(self.emit("add", [mean, self.emit("mul", [std, epsilon_id])]))
+
 
 def import_onnx_policy(
     model_path: str,
     *,
     n_x: int | None = None,
     obs_cfg: dict | None = None,
+    action_cfg: dict | None = None,
     output_name: str | None = None,
 ) -> ComposedGraph:
     """Translate an ONNX policy into a memoryless composed graph.
@@ -429,18 +580,24 @@ def import_onnx_policy(
             ``[observation]`` TOML table. Supported keys: ``input_name``,
             ``state_keys``, ``normalize``, ``obs_mean``, ``obs_std``, ``clip``,
             and (accepted but ignored in the compiled path) ``add_batch_dim``.
+        action_cfg: Action-space config, mirroring the old adapter's top-level
+            TOML fields: ``action_space``, ``deterministic``, ``action_scale``,
+            ``action_bias``, and ``action_clip_low`` / ``action_clip_high``
+            (which must be given together — the lowerer cannot emit ``±inf``).
         output_name: ONNX tensor to import as the action. Defaults to the
             model's first declared output.
 
     Returns:
-        A :class:`ComposedGraph` ready for ``interpret`` or ``lower_zig``.
+        A :class:`ComposedGraph` ready for ``interpret`` or ``lower_zig``. Its
+        input ports are ``state`` and, for a sampling action space,
+        ``epsilon``.
 
     Raises:
         ImportError: If the ``onnx`` package is not installed.
         ValueError: On a malformed model/config or an unsupported layout.
         NotImplementedError: On an unsupported ONNX op or attribute.
     """
-    return _OnnxImporter(model_path, n_x=n_x, obs_cfg=obs_cfg, output_name=output_name).build()
+    return _OnnxImporter(model_path, n_x=n_x, obs_cfg=obs_cfg, action_cfg=action_cfg, output_name=output_name).build()
 
 
 def _onnx_modules() -> tuple[Any, Any]:
