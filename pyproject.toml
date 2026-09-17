@@ -31,7 +31,7 @@ media = ["imageio>=2.30", "Pillow>=10.0", "matplotlib>=3.8"]
 dev = [
     "pytest>=8.0",
     "ruff>=0.5",
-    "pyright>=1.1.370",
+    "pyrefly>=1.3",
     "build>=1.2",
     "setuptools-scm[toml]>=8.0",
     "git-cliff>=2.0",

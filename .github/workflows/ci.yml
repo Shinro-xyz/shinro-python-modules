@@ -29,4 +29,4 @@ jobs:
       - run: python -c "from shinro.controllers import LQR; print('ok')"
       - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
       - run: pytest tests/ -v --tb=short
-      - run: pyright src/shinro/utils/ src/shinro/components.py src/shinro/controllers/ src/shinro/estimators/ src/shinro/trajectories/ src/shinro/plants/
+      - run: pyrefly check src/shinro/utils/ src/shinro/components.py src/shinro/controllers/ src/shinro/estimators/ src/shinro/trajectories/ src/shinro/plants/

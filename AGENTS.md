@@ -43,7 +43,7 @@ joint space**.
   `mcp` markers, so those tests silently don't run under plain pytest. Use the
   Make targets (`make test-integration`, `make test-mcp-functional`), which
   pass `--override-ini="addopts="`.
-- `make lint` = `ruff check .` + pyright **only on** `utils/`, `components.py`,
+- `make lint` = `ruff check .` + pyrefly **only on** `utils/`, `components.py`,
   `controllers/`, `estimators/`, `trajectories/`, `plants/`. `codegen/`,
   `mcp/`, `simulation/` are not typechecked — code added there won't be caught
   by lint.

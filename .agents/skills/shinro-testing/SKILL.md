@@ -68,7 +68,7 @@ run actually means the tests ran.
    `scripts/gen_mpc.py`, and the zig test fixtures all overwrite it. After any
    zig test run, re-run `make zig-gen` to restore the shipped KF+LQR graph.
    Never hand-edit it or the `src/shinro/runtime/codegen/emosqp/` bake.
-7. **Lint scope is partial.** `make lint` runs pyright only on `utils/`,
+7. **Lint scope is partial.** `make lint` runs pyrefly only on `utils/`,
    `components.py`, `controllers/`, `estimators/`, `trajectories/`, `plants/`.
    Code in `codegen/`, `mcp/`, `simulation/` is not typechecked — lint won't
    catch errors there.
@@ -89,7 +89,7 @@ run actually means the tests ran.
    `make test-zig`. MCP → `make test-functional`. E2E compile → `make compile`.
 2. **Run the targeted suite first** for fast feedback, then the full default
    suite (`make test`) before finishing.
-3. **Lint** — `make lint` (ruff + pyright). Fix all findings.
+3. **Lint** — `make lint` (ruff + pyrefly). Fix all findings.
 4. **If you touched zig/codegen**, run `make test-zig` then `make zig-gen` to
    restore the shipped graph.
 5. **Document** — write the semantic summary in `lab-notes/daily/<date>.md`

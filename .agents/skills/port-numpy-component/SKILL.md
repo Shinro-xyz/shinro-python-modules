@@ -34,7 +34,7 @@ verification or documentation steps.
 5. **Config** — Register the component in `robot_config.toml` under the matching section array (`[[controllers]]`, `[[plants]]`, `[[estimators]]`, `[[trajectories]]`), with a `type` field matching the registered name.
 6. **Export** — Add the class to the corresponding subpackage `__init__.py` so it is importable as `shinro.<subpackage>.<ClassName>`.
 7. **Test** — Write tests matching the existing pattern in `tests/test_*.py`: construction validation, compute output shapes, mathematical accuracy (verify the governing equation analytically), convergence, error handling, and `from_config`.
-8. **Lint** — Run `ruff check .` then `pyright` (see `make lint` for the pyright path list). Fix all findings.
+8. **Lint** — Run `ruff check .` then `pyrefly check` (see `make lint` for the pyrefly path list). Fix all findings.
 9. **Full suite** — Run `make test`. All tests must pass.
 10. **Docstrings** — Add module, class, method, and property docstrings matching the codebase convention: Sphinx-compatible `:math:` inline math, `Args:`, `Returns:`, and `Config fields:` blocks.
 11. **Document** — Write a semantic summary in `lab-notes/daily/<date>.md`: what was built, why, key design decisions, and test results.

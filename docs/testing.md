@@ -55,7 +55,7 @@ The [`Makefile`](../Makefile) provides short named targets. `make test-<name>` r
 | `make zig-gen` | Serialize the `base_tracking` composed graph to `src/shinro/runtime/graph_data.zig` only |
 | `make zig-build` | Compile the Zig VM to `build/lib/libbase.so` and stamp the deployment record (`build/lib/libbase.deployment.json`) via `scripts/stamp_deployment.py` (implies `zig-gen`) |
 | `make measure-kernels` | Kernel size metrics for a sweep of MPPI rollout shapes: the C-ABI host buffers, the VM stack buffer, and (with `BUILD=1`) the artifact bytes + compile cost. Static by default (no compiler); `DIMS=3x3x6x3,...` where each entry is `D_x x D_u x N x K`; `JSON=<path>` writes the document |
-| `make lint` | `ruff check .` + `pyright` on source dirs |
+| `make lint` | `ruff check .` + `pyrefly` on source dirs |
 
 The per-file targets run their file unconditionally — `make test-controllers` includes the slow horizon test, unlike `make test` which excludes it.
 

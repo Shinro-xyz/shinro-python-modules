@@ -140,7 +140,7 @@ measure-kernels:
 # Run linter and type checker
 lint:
 	ruff check .
-	pyright src/shinro/utils/ src/shinro/components.py src/shinro/controllers/ src/shinro/estimators/ src/shinro/trajectories/ src/shinro/plants/
+	pyrefly check src/shinro/utils/ src/shinro/components.py src/shinro/controllers/ src/shinro/estimators/ src/shinro/trajectories/ src/shinro/plants/
 
 # --- Docs -------------------------------------------------------------------
 # The API reference pages AND their nav are generated from each subpackage's
