@@ -2347,3 +2347,131 @@ class TestDeploymentRecord:
         manifest = json.loads((tmp_path / "graph_data_manifest.json").read_text())
         assert manifest["provenance"]["configs"]["configs/controllers/lqr_base.toml"] == "abc123"
         assert manifest["provenance"]["python_version"] == "3.12"
+
+
+# ─── ONNX policy oracle (imported graph -> .so) ─────────────────────────────
+
+#: The committed toy policy (scripts/gen_toy_onnx.py): 3 -> 4 -> 2 tanh MLP with
+#: the closed form action = [tanh(x0) + 0.5, tanh(x1) - 0.5].
+TOY_ONNX = REPO_ROOT / "tests" / "fixtures" / "models" / "toy_mlp.onnx"
+
+
+def _onnx_policy_graph(action_cfg: dict):
+    """Import the toy ONNX policy with the given (baked) action-space config."""
+    pytest.importorskip("onnx")
+    from shinro.codegen.onnx_import import import_onnx_policy
+
+    return import_onnx_policy(str(TOY_ONNX), obs_cfg={"state_keys": [0, 1, 2]}, action_cfg=action_cfg)
+
+
+@pytest.fixture(scope="session")
+def onnx_continuous_so(tmp_path_factory):
+    """The continuous (no epsilon port) baked policy kernel."""
+    d = tmp_path_factory.mktemp("zig-build-onnx-continuous")
+    return _build_so(_onnx_policy_graph({"action_space": "continuous"}), d, graph_path=d / "graph_data.zig")
+
+
+@pytest.fixture(scope="session")
+def onnx_discrete_so(tmp_path_factory):
+    """The deterministic discrete kernel (argmax + one_hot, no epsilon port)."""
+    d = tmp_path_factory.mktemp("zig-build-onnx-discrete")
+    return _build_so(_onnx_policy_graph({"action_space": "discrete"}), d, graph_path=d / "graph_data.zig")
+
+
+@pytest.fixture(scope="session")
+def onnx_discrete_eps_so(tmp_path_factory):
+    """The sampling discrete kernel: it consumes host Gumbel noise."""
+    d = tmp_path_factory.mktemp("zig-build-onnx-discrete-eps")
+    cfg = {"action_space": "discrete", "deterministic": False}
+    return _build_so(_onnx_policy_graph(cfg), d, graph_path=d / "graph_data.zig")
+
+
+@pytest.fixture(scope="session")
+def onnx_stochastic_eps_so(tmp_path_factory):
+    """The sampling stochastic kernel; the toy's 2 outputs read as [mean; log_std]."""
+    d = tmp_path_factory.mktemp("zig-build-onnx-stochastic-eps")
+    cfg = {"action_space": "stochastic", "deterministic": False}
+    return _build_so(_onnx_policy_graph(cfg), d, graph_path=d / "graph_data.zig")
+
+
+class TestOnnxPolicyOracle:
+    """An imported ONNX policy lowers to a .so that matches the interpreter.
+
+    The graph comes from the committed toy fixture, so this is the only oracle
+    whose subject is a *learned* policy rather than a hand-written control law:
+    it proves the importer's output (baked encoder, transposed Gemms, composed
+    activations, and the action post-processing) compiles bit-for-bit. Each
+    action space gets its own kernel because the space — and whether an
+    ``epsilon`` port exists — is baked at import time. Graphs lower to tmp
+    paths, never the shared ``src/shinro/runtime/graph_data.zig``.
+    """
+
+    def test_continuous_matches_interpreter_and_closed_form(self, onnx_continuous_so):
+        lib, cg = onnx_continuous_so
+        assert cg.inputs == ["state"]  # deterministic: no noise port
+        assert cg.state_outputs == []
+        n_out, n_state = output_split(cg)
+        assert (n_out, n_state) == (2, 0)
+
+        rng = np.random.default_rng(7)
+        for _ in range(50):
+            state = rng.normal(0.0, 1.0, 3)
+            out, _ = step_so(lib, pack_arrays(cg, {"state": state}), n_out, n_state)
+            traced = interpret(cg.graph, {"state": state})["u"]
+            closed = np.array([np.tanh(state[0]) + 0.5, np.tanh(state[1]) - 0.5])
+            np.testing.assert_allclose(out, traced, rtol=1e-14, atol=1e-14)
+            np.testing.assert_allclose(out, closed, rtol=1e-6, atol=1e-7)
+
+    def test_discrete_deterministic_one_hot(self, onnx_discrete_so):
+        lib, cg = onnx_discrete_so
+        assert cg.inputs == ["state"]
+        n_out, n_state = output_split(cg)
+
+        rng = np.random.default_rng(8)
+        for _ in range(25):
+            state = rng.normal(0.0, 1.0, 3)
+            out, _ = step_so(lib, pack_arrays(cg, {"state": state}), n_out, n_state)
+            traced = interpret(cg.graph, {"state": state})["u"]
+            logits = np.array([np.tanh(state[0]) + 0.5, np.tanh(state[1]) - 0.5])
+            want = np.zeros(2)
+            want[int(np.argmax(logits))] = 1.0
+            np.testing.assert_allclose(out, traced, rtol=0, atol=0)
+            np.testing.assert_allclose(out, want, rtol=0, atol=0)
+
+    def test_discrete_sampling_consumes_gumbel_noise(self, onnx_discrete_eps_so):
+        lib, cg = onnx_discrete_eps_so
+        assert cg.inputs == ["state", "epsilon"]
+        assert input_shape(cg.graph, "epsilon") == (2,)
+        n_out, n_state = output_split(cg)
+
+        rng = np.random.default_rng(9)
+        for _ in range(25):
+            state = rng.normal(0.0, 1.0, 3)
+            gumbel = -np.log(-np.log(rng.uniform(size=2)))  # the host's Gumbel noise
+            arrays = {"state": state, "epsilon": gumbel}
+            out, _ = step_so(lib, pack_arrays(cg, arrays), n_out, n_state)
+            traced = interpret(cg.graph, arrays)["u"]
+            logits = np.array([np.tanh(state[0]) + 0.5, np.tanh(state[1]) - 0.5])
+            want = np.zeros(2)
+            want[int(np.argmax(logits + gumbel))] = 1.0
+            np.testing.assert_allclose(out, traced, rtol=0, atol=0)
+            np.testing.assert_allclose(out, want, rtol=0, atol=0)
+
+    def test_stochastic_sampling_matches_interpreter_and_formula(self, onnx_stochastic_eps_so):
+        lib, cg = onnx_stochastic_eps_so
+        assert cg.inputs == ["state", "epsilon"]
+        assert input_shape(cg.graph, "epsilon") == (1,)  # the toy's 2 outputs -> n_u = 1
+        n_out, n_state = output_split(cg)
+
+        rng = np.random.default_rng(10)
+        for _ in range(25):
+            state = rng.normal(0.0, 1.0, 3)
+            eps = rng.normal(size=1)
+            arrays = {"state": state, "epsilon": eps}
+            out, _ = step_so(lib, pack_arrays(cg, arrays), n_out, n_state)
+            traced = interpret(cg.graph, arrays)["u"]
+            mean = np.tanh(state[0]) + 0.5
+            log_std = np.clip(np.tanh(state[1]) - 0.5, -10.0, 2.0)
+            want = mean + np.exp(log_std) * eps
+            np.testing.assert_allclose(out, traced, rtol=1e-14, atol=1e-14)
+            np.testing.assert_allclose(out, want, rtol=1e-12, atol=1e-12)
