@@ -35,6 +35,7 @@ import sys
 import tomllib
 from importlib.metadata import version
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -44,11 +45,14 @@ from shinro.utils.array_backend import NumpyBackend
 from shinro.utils.config_resolver import resolve_config_path
 from shinro.utils.linearization import derive_model
 
+if TYPE_CHECKING:
+    from shinro.codegen.compose import ComposedGraph
+
 EXIT_OK = 0
 EXIT_UNTRACEABLE = 1
 EXIT_USAGE = 2
 
-_COMPILE_KEYS = {"n_x", "n_u", "optimize", "target", "solver_dir", "oracle_tol"}
+_COMPILE_KEYS = {"n_x", "n_u", "optimize", "target", "solver_dir", "oracle_tol", "artifact_name"}
 _ALLOWED_OPTIMIZE = {"debug", "release"}
 
 
@@ -58,14 +62,24 @@ def _sha256(path: str) -> str:
         return hashlib.sha256(f.read()).hexdigest()
 
 
+def _sha256_raw(path: str) -> str:
+    """Return the sha256 of a file by literal path (no config-dir resolution).
+
+    Used for the ``.onnx`` weights, which live wherever the controller config
+    points and are not one of the resolved config locations.
+    """
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
 def _validate_compile(compile_cfg: dict | None, scenario_path: str) -> dict:
     """Parse and strictly validate the ``[compile]`` section.
 
     Returns a dict with ``n_x`` / ``n_u`` (optional — derived from ``[plant]``
-    when absent) and ``optimize`` / ``target`` / ``solver_dir`` (optional, with
-    defaults). Unknown keys and invalid ``optimize`` values are loud errors —
-    the section is the build spec, so a typo must not silently change the
-    build.
+    when absent) and ``optimize`` / ``target`` / ``solver_dir`` /
+    ``artifact_name`` (optional, with defaults). Unknown keys and invalid
+    ``optimize`` values are loud errors — the section is the build spec, so a
+    typo must not silently change the build.
 
     Raises:
         ValueError: On a missing section, unknown keys, or an invalid
@@ -83,12 +97,21 @@ def _validate_compile(compile_cfg: dict | None, scenario_path: str) -> dict:
             f"(got '{optimize}'). ReleaseSafe hangs in osqp_solve (Zig integration "
             f"bug) and ReleaseSmall is unvalidated — only ReleaseFast is shippable."
         )
+    # The artifact stem becomes lib/<name>.so + lib/<name>.{manifest,deployment}.json;
+    # a stray separator or space would silently write outside the prefix.
+    artifact_name = compile_cfg.get("artifact_name", "libbase")
+    if not isinstance(artifact_name, str) or not artifact_name or any(c in artifact_name for c in "/\\ \t"):
+        raise ValueError(
+            f"{scenario_path}: [compile].artifact_name must be a simple file-name stem "
+            f"like 'libbase' or 'lib_neural_network' (got {artifact_name!r})"
+        )
     return {
         "n_x": int(compile_cfg["n_x"]) if "n_x" in compile_cfg else None,
         "n_u": int(compile_cfg["n_u"]) if "n_u" in compile_cfg else None,
         "optimize": optimize,
         "target": compile_cfg.get("target", "native"),
         "solver_dir": compile_cfg.get("solver_dir"),
+        "artifact_name": artifact_name,
         # Optional oracle-B override for QP graphs whose realistic solution
         # settles more coarsely than the tier default at this problem size
         # (two independent OSQP runs — C-baked vs Python — agree to solver
@@ -107,51 +130,112 @@ def load_scenario(scenario_path: str) -> dict:
     ``n_x``/``n_u`` and the ``A_dynamics``/``B_dynamics`` model from it.
 
     Raises:
-        ValueError: On a missing ``[controller]``/``[estimator]`` section or an
-            invalid ``[compile]`` section.
+        ValueError: On a missing ``[controller]`` section, an invalid
+            ``[compile]`` section, or a missing ``[estimator]`` on anything
+            other than a policy-only (``onnx_rl``) scenario.
     """
     with open(resolve_config_path(scenario_path), "rb") as f:
         cfg = tomllib.load(f)
-    if "controller" not in cfg or "estimator" not in cfg:
-        raise ValueError(
-            f"{scenario_path}: scenario requires [controller] and [estimator] sections"
-        )
+    if "controller" not in cfg:
+        raise ValueError(f"{scenario_path}: scenario requires a [controller] section")
+    controller = cfg["controller"]
+    estimator = cfg.get("estimator")
+    if estimator is None:
+        # A policy-only scenario: the ONNX policy is a standalone graph with no
+        # estimator to compose with. Any other controller needs [estimator].
+        ctype = controller.get("type") or _type_from_component_config(controller["config"])
+        if ctype != "onnx_rl":
+            raise ValueError(
+                f"{scenario_path}: missing [estimator] section — only a policy-only 'onnx_rl' "
+                f"scenario may omit it (got controller type {ctype!r})"
+            )
     limits = None
     il = cfg.get("scenario", {}).get("input_limits")
     if il:
         limits = (np.array(il["min"], dtype=np.float64), np.array(il["max"], dtype=np.float64))
     return {
-        "estimator_config": cfg["estimator"]["config"],
-        "controller_config": cfg["controller"]["config"],
-        "estimator_type": cfg["estimator"].get("type"),
-        "controller_type": cfg["controller"].get("type"),
+        "estimator_config": estimator["config"] if estimator else None,
+        "controller_config": controller["config"],
+        "estimator_type": estimator.get("type") if estimator else None,
+        "controller_type": controller.get("type"),
         "input_limits": limits,
         "compile": _validate_compile(cfg.get("compile"), scenario_path),
         "plant": cfg.get("plant"),
     }
 
 
-def _provenance(scenario_path: str, spec: dict) -> dict:
+def _provenance(scenario_path: str, spec: dict, model_path: str | None = None) -> dict:
     """Build the provenance dict for ``lower_zig``.
 
     Records the sha256 of the scenario TOML itself (pinning the whole build
-    spec, including ``[compile]``) plus the estimator/controller configs — and
-    the plant config when derivation was used, so the deployment record's
-    config slot commits to every file the artifact was built from.
+    spec, including ``[compile]``) plus the estimator/controller configs — the
+    plant config when derivation was used, and the ``.onnx`` weights for a
+    policy-only scenario — so the deployment record's config slot commits to
+    every file the artifact was built from.
     """
     configs = {
         scenario_path: _sha256(scenario_path),
-        spec["estimator_config"]: _sha256(spec["estimator_config"]),
         spec["controller_config"]: _sha256(spec["controller_config"]),
     }
+    if spec["estimator_config"]:
+        configs[spec["estimator_config"]] = _sha256(spec["estimator_config"])
     plant = spec.get("plant")
     if plant and "config" in plant:
         configs[plant["config"]] = _sha256(plant["config"])
+    if model_path:
+        configs[model_path] = _sha256_raw(model_path)
     return {
         "configs": configs,
         "python_version": sys.version.split()[0],
         "numpy_version": version("numpy"),
     }
+
+
+def _policy_graph(spec: dict, scenario_path: str) -> ComposedGraph:
+    """Build the composed graph for a policy-only scenario (no estimator).
+
+    The controller config is read directly rather than through the factory —
+    the importer wants the raw ONNX/observation tables, and the policy graph is
+    standalone (nothing to compose it with). The ``.onnx`` path is recorded on
+    ``spec`` so the provenance can pin the weights.
+
+    Args:
+        spec: The loaded scenario spec (``estimator_config`` is None).
+        scenario_path: Scenario TOML path, for error messages.
+
+    Returns:
+        The imported, memoryless :class:`ComposedGraph`.
+
+    Raises:
+        ValueError: If the controller config has no ``model_path``.
+    """
+    from shinro.codegen.onnx_import import import_onnx_policy
+
+    with open(resolve_config_path(spec["controller_config"]), "rb") as f:
+        ctrl = tomllib.load(f)
+    model_path = ctrl.get("model_path")
+    if model_path is None:
+        raise ValueError(
+            f"{scenario_path}: a policy-only scenario needs the controller's model_path "
+            f"(artifact_dir is the *result* of this compile, not an input)"
+        )
+    action_cfg = {
+        "action_space": ctrl.get("action_space", "continuous"),
+        "deterministic": ctrl.get("deterministic", True),
+        "action_scale": ctrl.get("action_scale", 1.0),
+        "action_bias": ctrl.get("action_bias", 0.0),
+    }
+    for key in ("action_clip_low", "action_clip_high"):
+        if key in ctrl:
+            action_cfg[key] = ctrl[key]
+    spec["policy_model_path"] = model_path
+    return import_onnx_policy(
+        model_path,
+        n_x=spec["compile"]["n_x"],
+        obs_cfg=ctrl.get("observation", {}),
+        action_cfg=action_cfg,
+        output_name=ctrl.get("output_name"),
+    )
 
 
 def _type_from_component_config(config_path: str) -> str:
@@ -187,6 +271,22 @@ def gen_scenario(scenario_path: str, out_dir: str) -> tuple:
         NotImplementedError: If a component uses an untraceable op.
     """
     spec = load_scenario(scenario_path)
+
+    # A policy-only scenario (onnx_rl) is standalone: no estimator to compose
+    # with, so it bypasses the plant-derivation + build_composed_graph path and
+    # goes straight from the ONNX graph to the lowered table.
+    if spec["estimator_config"] is None:
+        cg = _policy_graph(spec, scenario_path)
+        out = Path(out_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        graph_path = out / "graph_data.zig"
+        lower_zig(
+            cg,
+            str(graph_path),
+            provenance=_provenance(scenario_path, spec, model_path=spec["policy_model_path"]),
+        )
+        return cg, graph_path
+
     n_x = spec["compile"]["n_x"]
     n_u = spec["compile"]["n_u"]
     est_cfg = spec["estimator_config"]

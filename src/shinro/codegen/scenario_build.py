@@ -71,13 +71,13 @@ class BuildError(RuntimeError):
 def _check_zig() -> bool:
     if shutil.which("zig") is not None:
         return True
-    print("ERROR: zig not on PATH — the e2e workflow needs it to compile libbase.so.", file=sys.stderr)
+    print("ERROR: zig not on PATH — the e2e workflow needs it to compile the kernel.", file=sys.stderr)
     print("Install: https://ziglang.org/download (or your package manager).", file=sys.stderr)
     print("Nothing was built.", file=sys.stderr)
     return False
 
 
-def _build(graph_path: Path, prefix: Path, optimize: str, target: str, solver_dir: str | None) -> None:
+def _build(graph_path: Path, prefix: Path, optimize: str, target: str, solver_dir: str | None, name: str = "libbase") -> None:
     """Compile the comptime VM against the given graph into an isolated prefix."""
     cmd = [
         "zig",
@@ -87,6 +87,7 @@ def _build(graph_path: Path, prefix: Path, optimize: str, target: str, solver_di
         "--prefix",
         str(prefix),
         f"-Dgraph={graph_path}",
+        f"-Dname={name}",
     ]
     if optimize == "release":
         cmd += ["-Doptimize=ReleaseFast"]
@@ -127,10 +128,11 @@ def build_scenario(
     optimize: str | None = None,
     target: str | None = None,
     solver_dir: str | None = None,
+    artifact_name: str | None = None,
     samples: int = 20,
     seed: int = 0,
 ) -> int:
-    """Compile a generated graph into a verified, stamped ``libbase.so``.
+    """Compile a generated graph into a verified, stamped kernel (``lib<name>.so``).
 
     Args:
         graph_dir: Directory containing ``graph_data.zig`` + its manifest
@@ -143,6 +145,8 @@ def build_scenario(
         target: Override ``[compile].target`` (zig triple, e.g.
             ``aarch64-linux-gnu``).
         solver_dir: Override ``[compile].solver_dir`` (baked OSQP solver dir).
+        artifact_name: Override ``[compile].artifact_name`` — the kernel is
+            installed as ``lib/<name>.so`` (default ``libbase`` → ``libbase.so``).
         samples: Random inputs for the oracle (default 20).
         seed: RNG seed for the oracle (default 0).
 
@@ -169,7 +173,7 @@ def build_scenario(
         return EXIT_USAGE
 
     # Build flags: CLI > [compile] TOML > defaults.
-    opt, tgt, sdir = "debug", "native", None
+    opt, tgt, sdir, name = "debug", "native", None, "libbase"
     if scenario:
         try:
             spec = load_scenario(scenario)
@@ -179,12 +183,15 @@ def build_scenario(
         opt = spec["compile"]["optimize"]
         tgt = spec["compile"]["target"]
         sdir = spec["compile"]["solver_dir"]
+        name = spec["compile"]["artifact_name"]
     if optimize:
         opt = optimize
     if target:
         tgt = target
     if solver_dir:
         sdir = solver_dir
+    if artifact_name:
+        name = artifact_name
 
     if manifest["has_solve_qp"] and not sdir:
         print(
@@ -198,7 +205,7 @@ def build_scenario(
     prefix_path = Path(prefix) if prefix else graph_dir
 
     try:
-        _build(graph_path, prefix_path, opt, tgt, sdir)
+        _build(graph_path, prefix_path, opt, tgt, sdir, name)
     except BuildError as e:
         print(f"BUILD FAILED: {e}", file=sys.stderr)
         return EXIT_BUILD
@@ -216,7 +223,7 @@ def build_scenario(
             # [compile].oracle_tol overrides the tier default for QP graphs
             # whose settling at this problem size is coarser than 1e-3.
             tol = spec["compile"].get("oracle_tol") or tol_for(manifest)
-            lib = load_so(prefix_path)
+            lib = load_so(prefix_path, name)
             max_err = run_oracle(lib, fresh_cg, samples, seed)
             if max_err >= tol:
                 print(
@@ -238,8 +245,8 @@ def build_scenario(
             file=sys.stderr,
         )
 
-    stamp(prefix_path, RUNTIME)
-    record = prefix_path / "lib" / "libbase.deployment.json"
+    stamp(prefix_path, RUNTIME, name)
+    record = prefix_path / "lib" / f"{name}.deployment.json"
     if verify(record, graph_path=graph_path) != 0:
         print("VERIFY FAILED: deployment record does not match artifacts", file=sys.stderr)
         return EXIT_BUILD
@@ -254,6 +261,7 @@ def main() -> int:
     parser.add_argument("--optimize", choices=["debug", "release"], help="override [compile].optimize")
     parser.add_argument("--target", help="override [compile].target (zig triple, e.g. aarch64-linux-gnu)")
     parser.add_argument("--solver-dir", help="override [compile].solver_dir (baked OSQP solver dir)")
+    parser.add_argument("--artifact-name", help="override [compile].artifact_name (kernel installs as lib/<name>.so)")
     parser.add_argument("--samples", type=int, default=20, help="random inputs for the oracle (default 20)")
     parser.add_argument("--seed", type=int, default=0, help="RNG seed for the oracle (default 0)")
     args = parser.parse_args()
@@ -264,6 +272,7 @@ def main() -> int:
         optimize=args.optimize,
         target=args.target,
         solver_dir=args.solver_dir,
+        artifact_name=args.artifact_name,
         samples=args.samples,
         seed=args.seed,
     )

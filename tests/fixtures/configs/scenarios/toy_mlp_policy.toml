@@ -1,0 +1,17 @@
+# Policy-only compile scenario: a committed toy ONNX MLP -> lib_neural_network.so.
+#
+#   make compile SCENARIO=tests/fixtures/configs/scenarios/toy_mlp_policy.toml OUT=build/toy_mlp
+#
+# There is no [estimator]: the ONNX policy is a standalone graph (only onnx_rl
+# may omit it). The controller config's model_path is CWD-relative, so run from
+# the repo root. artifact_name makes the deployed kernel lib_neural_network.so,
+# the name the onnx_rl adapter loads.
+
+[controller]
+type = "onnx_rl"
+config = "tests/fixtures/configs/controllers/onnx_toy.toml"
+
+[compile]
+n_x = 3
+n_u = 2
+artifact_name = "lib_neural_network"

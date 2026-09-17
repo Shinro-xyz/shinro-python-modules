@@ -87,11 +87,11 @@ def random_inputs(cg, rng: np.random.Generator) -> dict[str, np.ndarray]:
     return inputs
 
 
-def load_so(prefix: str | Path):
-    """dlopen ``<prefix>/lib/libbase.so`` and wire up the shinro_step C ABI."""
-    so_path = Path(prefix) / "lib" / "libbase.so"
+def load_so(prefix: str | Path, name: str = "libbase"):
+    """dlopen ``<prefix>/lib/<name>.so`` and wire up the shinro_step C ABI."""
+    so_path = Path(prefix) / "lib" / f"{name}.so"
     if not so_path.exists():
-        raise FileNotFoundError(f"zig build produced no libbase.so at {so_path}")
+        raise FileNotFoundError(f"zig build produced no {so_path.name} at {so_path}")
     lib = ctypes.CDLL(str(so_path))
     lib.shinro_step.argtypes = [ctypes.POINTER(ctypes.c_double)] * 3
     lib.shinro_step.restype = None
