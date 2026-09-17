@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 from shinro.codegen.interpreter import interpret
-from shinro.codegen.onnx_import import OUTPUT_PORT, STATE_PORT, import_onnx_policy
+from shinro.codegen.onnx_import import EPSILON_PORT, OUTPUT_PORT, STATE_PORT, import_onnx_policy
 
 onnx = pytest.importorskip("onnx")
 
@@ -46,6 +46,15 @@ def _save(nodes, inputs, outputs, initializers, tmp_path, name="policy.onnx"):
 def _run(cg, x):
     """Interpret the imported graph on a state vector."""
     return interpret(cg.graph, {STATE_PORT: np.asarray(x, dtype=np.float64)})[OUTPUT_PORT]
+
+
+def _sample(cg, x, epsilon):
+    """Interpret the imported graph feeding both the state and the noise port."""
+    feed = {
+        STATE_PORT: np.asarray(x, dtype=np.float64),
+        EPSILON_PORT: np.asarray(epsilon, dtype=np.float64),
+    }
+    return interpret(cg.graph, feed)[OUTPUT_PORT]
 
 
 def _op_names(cg):
@@ -111,6 +120,7 @@ class TestGemm:
         np.testing.assert_allclose(_run(cg, x), x @ w.T + b, rtol=1e-6)
         # transB is realized with a real transpose node, not a baked transposed const.
         assert {"transpose", "matmul", "add"} <= set(_op_names(cg))
+        assert _op_names(cg).count("add") == 2  # Gemm bias + the action bias
 
     def test_default_layout_transB_off(self, tmp_path):
         from onnx import helper
@@ -143,6 +153,8 @@ class TestGemm:
         cg = import_onnx_policy(path)
         x = np.array([2.0, 3.0, 0.0])
         np.testing.assert_allclose(_run(cg, x), 0.5 * (x @ w.T) + 2.0 * c, rtol=1e-6)
+        # Gemm's alpha + beta multipliers, plus the action-surface scale.
+        assert _op_names(cg).count("mul") == 3
 
     def test_no_bias(self, tmp_path):
         from onnx import helper
@@ -157,7 +169,7 @@ class TestGemm:
         )
         cg = import_onnx_policy(path)
         np.testing.assert_allclose(_run(cg, [3.0, 4.0]), [3.0, 4.0], rtol=1e-6)
-        assert "add" not in _op_names(cg)
+        assert _op_names(cg).count("add") == 1  # the action bias only; the Gemm has none
 
     def test_transA_rejected(self, tmp_path):
         from onnx import helper
@@ -446,3 +458,137 @@ class TestRejections:
         )
         with pytest.raises(ValueError, match="unknown tensor"):
             import_onnx_policy(path)
+
+
+def _gemm_policy(tmp_path, w, b=None, *, name="policy.onnx"):
+    """Build a single-Gemm policy in torch layout (transB=1)."""
+    from onnx import helper
+
+    w = np.asarray(w, dtype=np.float32)
+    inputs = ["state", "w"] + (["b"] if b is not None else [])
+    inits = [_init("w", w)] + ([_init("b", np.asarray(b, dtype=np.float32))] if b is not None else [])
+    return _save(
+        [helper.make_node("Gemm", inputs, ["y"], transB=1)],
+        [_vi("state", [None, w.shape[1]])],
+        [_vi("y", [None, w.shape[0]])],
+        inits,
+        tmp_path,
+        name,
+    )
+
+
+class TestActionSurface:
+    """The baked post-processing must mirror the old runtime `_postprocess`."""
+
+    def _tiny(self, tmp_path):
+        """2-output policy: raw(x) = [x0 + 0.5, 2*x1 - 0.5]."""
+        return _gemm_policy(tmp_path, [[1.0, 0.0, 0.0], [0.0, 2.0, 0.0]], [0.5, -0.5])
+
+    def _stochastic(self, tmp_path):
+        """4-output policy: raw(x) = [x0+1, x1+2, x2+3, 4] = [mean; log_std]."""
+        w = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [0.0, 0.0, 0.0]]
+        return _gemm_policy(tmp_path, w, [1.0, 2.0, 3.0, 4.0], name="stochastic.onnx")
+
+    def test_continuous_default_passthrough(self, tmp_path):
+        cg = import_onnx_policy(self._tiny(tmp_path))
+        assert cg.inputs == [STATE_PORT]
+        assert "clip" not in _op_names(cg)  # no clip configured
+        np.testing.assert_allclose(_run(cg, [1.0, 2.0, 3.0]), [1.5, 3.5], rtol=1e-6)
+
+    def test_continuous_default_still_emits_scale_bias(self, tmp_path):
+        """Uniform lowering: the default 1.0 / 0.0 still produce the mul/add nodes."""
+        from onnx import helper
+
+        path = _save(
+            [helper.make_node("MatMul", ["state", "w"], ["y"])],
+            [_vi("state", [None, 2])],
+            [_vi("y", [None, 2])],
+            [_init("w", np.eye(2, dtype=np.float32))],
+            tmp_path,
+        )
+        cg = import_onnx_policy(path)  # default continuous action config
+        ops = _op_names(cg)
+        assert ops.count("mul") == 1  # action scale, emitted even though it is 1.0
+        assert ops.count("add") == 1  # action bias, emitted even though it is 0.0
+
+    def test_continuous_scale_bias_clip(self, tmp_path):
+        cg = import_onnx_policy(
+            self._tiny(tmp_path),
+            action_cfg={"action_scale": 2.0, "action_bias": 1.0, "action_clip_low": -3.0, "action_clip_high": 3.0},
+        )
+        # raw [1.5, 1.5] -> *2+1 = [4, 4] -> clipped to 3
+        np.testing.assert_allclose(_run(cg, [1.0, 1.0, 0.0]), [3.0, 3.0], rtol=1e-6)
+
+    def test_continuous_vector_scale_bias(self, tmp_path):
+        path = _gemm_policy(tmp_path, [[1.0, 0.0, 0.0], [0.0, 2.0, 0.0]], name="vec.onnx")
+        cg = import_onnx_policy(path, action_cfg={"action_scale": [2.0, 3.0], "action_bias": [1.0, -1.0]})
+        # raw [1, 2] -> [1*2+1, 2*3-1] = [3, 5]
+        np.testing.assert_allclose(_run(cg, [1.0, 1.0, 0.0]), [3.0, 5.0], rtol=1e-6)
+
+    def test_discrete_deterministic_one_hot(self, tmp_path):
+        cg = import_onnx_policy(self._tiny(tmp_path), action_cfg={"action_space": "discrete"})
+        assert cg.inputs == [STATE_PORT]  # deterministic: no noise port
+        assert {"argmax", "one_hot"} <= set(_op_names(cg))
+        # equal logits [1.5, 1.5] -> first-max wins, matching numpy argmax
+        np.testing.assert_allclose(_run(cg, [1.0, 1.0, 1.0]), [1.0, 0.0], rtol=1e-6)
+
+    def test_discrete_ignores_scale_bias(self, tmp_path):
+        cg = import_onnx_policy(
+            self._tiny(tmp_path),
+            action_cfg={"action_space": "discrete", "action_scale": 5.0, "action_bias": 1.0},
+        )
+        np.testing.assert_allclose(_run(cg, [1.0, 1.0, 1.0]), [1.0, 0.0], rtol=1e-6)
+
+    def test_discrete_gumbel_max_uses_epsilon(self, tmp_path):
+        cg = import_onnx_policy(self._tiny(tmp_path), action_cfg={"action_space": "discrete", "deterministic": False})
+        assert cg.inputs == [STATE_PORT, EPSILON_PORT]
+        state = np.array([1.0, 1.0, 1.0])
+        # A huge positive Gumbel draw flips the argmax; the kernel only adds.
+        np.testing.assert_allclose(_sample(cg, state, [0.0, 100.0]), [0.0, 1.0], rtol=1e-6)
+        np.testing.assert_allclose(_sample(cg, state, [100.0, 0.0]), [1.0, 0.0], rtol=1e-6)
+
+    def test_discrete_gumbel_max_matches_softmax(self, tmp_path):
+        # logits = [0, ln 3] -> softmax p(1) = 0.75; Gumbel-max must reproduce it.
+        path = _gemm_policy(tmp_path, np.zeros((2, 3), dtype=np.float32), [0.0, np.log(3.0)], name="dist.onnx")
+        cg = import_onnx_policy(path, action_cfg={"action_space": "discrete", "deterministic": False})
+        rng = np.random.default_rng(0)
+        n = 2000
+        draws = -np.log(-np.log(rng.uniform(size=(n, 2))))
+        state = np.zeros(3)
+        hits = sum(int(np.argmax(_sample(cg, state, eps))) for eps in draws)
+        assert abs(hits / n - 0.75) < 0.06
+
+    def test_stochastic_deterministic_returns_mean(self, tmp_path):
+        cg = import_onnx_policy(self._stochastic(tmp_path), action_cfg={"action_space": "stochastic"})
+        assert cg.inputs == [STATE_PORT]
+        # raw = [11, 22, 33, 4] -> mean = [11, 22]
+        np.testing.assert_allclose(_run(cg, [10.0, 20.0, 30.0]), [11.0, 22.0], rtol=1e-6)
+
+    def test_stochastic_epsilon_formula(self, tmp_path):
+        cg = import_onnx_policy(self._stochastic(tmp_path), action_cfg={"action_space": "stochastic", "deterministic": False})
+        assert cg.inputs == [STATE_PORT, EPSILON_PORT]
+        # raw = [11, 22, 33, 4]; log_std clipped to 2 -> std = e^2
+        u = _sample(cg, [10.0, 20.0, 30.0], [0.5, -1.0])
+        std = np.exp(2.0)
+        np.testing.assert_allclose(u, [11.0 + std * 0.5, 22.0 - std], rtol=1e-6)
+
+    def test_stochastic_odd_output_rejected(self, tmp_path):
+        path = _gemm_policy(tmp_path, [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], name="odd.onnx")
+        with pytest.raises(ValueError, match="even"):
+            import_onnx_policy(path, action_cfg={"action_space": "stochastic"})
+
+    def test_invalid_action_space_rejected(self, tmp_path):
+        with pytest.raises(ValueError, match="action_space"):
+            import_onnx_policy(self._tiny(tmp_path), action_cfg={"action_space": "bogus"})
+
+    def test_single_sided_clip_rejected(self, tmp_path):
+        # The missing bound would be ±inf, which Zig cannot represent as a literal.
+        with pytest.raises(ValueError, match="together"):
+            import_onnx_policy(self._tiny(tmp_path), action_cfg={"action_clip_low": -1.0})
+
+    def test_infinite_clip_rejected(self, tmp_path):
+        with pytest.raises(ValueError, match="finite"):
+            import_onnx_policy(
+                self._tiny(tmp_path),
+                action_cfg={"action_clip_low": -np.inf, "action_clip_high": np.inf},
+            )
