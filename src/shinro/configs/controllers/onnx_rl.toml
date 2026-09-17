@@ -1,6 +1,6 @@
 # FILE: configs/controllers/onnx_rl.toml
 # ONNX RL policy adapter — wraps any ONNX-exported RL policy as a Controller.
-# Requires: pip install onnxruntime
+# Requires: pip install "shinro[onnx-rl]"  (the `onnx` package; no runtime engine)
 #
 # Export the actor network from your RL framework (sb3, RLlib, CleanRL,
 # custom torch, JAX, ...) to policy.onnx, then point model_path at it.

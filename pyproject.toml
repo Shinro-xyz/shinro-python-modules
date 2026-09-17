@@ -26,12 +26,13 @@ dependencies = [
 mujoco = ["mujoco>=3.0"]
 torch = ["torch>=2.0"]
 lerobot = ["lerobot>=0.5"]
-onnx-rl = ["onnxruntime>=1.17"]
+onnx-rl = ["onnx>=1.16"]
 media = ["imageio>=2.30", "Pillow>=10.0", "matplotlib>=3.8"]
 dev = [
     "pytest>=8.0",
     "ruff>=0.5",
     "pyrefly>=1.3",
+    "onnx>=1.16",
     "build>=1.2",
     "setuptools-scm[toml]>=8.0",
     "git-cliff>=2.0",
