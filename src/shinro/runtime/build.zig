@@ -18,7 +18,7 @@ pub fn build(b: *std.Build) void {
     // sources works; tracked as a Zig integration bug), so don't ship it:
     //   zig build -Doptimize=ReleaseFast --build-file runtime/build.zig --prefix build/release/
     // Cross targets need no sysroot, e.g. -Dtarget=aarch64-linux-gnu.
-    // The manifest (libbase.manifest.json) records optimize + strip mode.
+    // The manifest (lib<name>.manifest.json) records optimize + strip mode.
     const optimize = b.standardOptimizeOption(.{});
 
     // Build options: which generated graph and which baked OSQP solver to
@@ -35,6 +35,14 @@ pub fn build(b: *std.Build) void {
         "graph",
         "Path to the generated graph_data.zig (default: graph_data.zig)",
     ) orelse "graph_data.zig";
+    // Deployed artifact stem: `-Dname=lib_neural_network` installs
+    // lib/lib_neural_network.so (plus its .manifest.json). Defaults to the
+    // historical "libbase" → libbase.so, so existing builds are unchanged.
+    const lib_name = b.option(
+        []const u8,
+        "name",
+        "Installed artifact stem: <prefix>/lib/<name>.so (default: libbase)",
+    ) orelse "libbase";
     const solver_dir_opt = b.option(
         []const u8,
         "solver_dir",
@@ -127,11 +135,17 @@ pub fn build(b: *std.Build) void {
     }
 
     const lib = b.addLibrary(.{
-        .name = "base",
+        .name = lib_name,
         .root_module = lib_mod,
         .linkage = .dynamic,
     });
-    b.installArtifact(lib);
+    // Install under an explicit sub-path: Zig would otherwise prefix "lib",
+    // so `-Dname=lib_neural_network` would land as liblib_neural_network.so.
+    const install_lib = b.addInstallArtifact(lib, .{
+        .dest_dir = .{ .override = .lib },
+        .dest_sub_path = b.fmt("{s}.so", .{lib_name}),
+    });
+    b.getInstallStep().dependOn(&install_lib.step);
 
     // Zig-side unit tests. Only linalg.zig for now; future test files slot
     // in as additional test modules under runtime/tests/.
@@ -169,7 +183,7 @@ pub fn build(b: *std.Build) void {
     // contains, written next to the artifact after every build, plus a
     // timestamped archive copy under <prefix>/manifests/ so teams can browse
     // which controller combinations were built and when.
-    writeManifest(b, target, optimize, graph_path, solver_dir);
+    writeManifest(b, target, optimize, graph_path, solver_dir, lib_name);
 }
 
 // ─── build manifest (audit trail) ─────────────────────────────────────────
@@ -182,8 +196,13 @@ fn resolvePath(b: *std.Build, p: []const u8) []const u8 {
 }
 
 /// Read a file at build time; returns "" (with a warning) if unreadable.
+///
+/// The cap must clear the generated ``graph_data.zig``, which embeds every
+/// baked constant as a hex-float literal (~20 bytes per f64) — a 1M-parameter
+/// policy is a ~20 MB source file, so a small cap silently yields "" and the
+/// build panics as if the graph were stale.
 fn readFile(b: *std.Build, path: []const u8) []const u8 {
-    return std.Io.Dir.cwd().readFileAlloc(b.graph.io, path, b.allocator, .limited(1 << 20)) catch |err| {
+    return std.Io.Dir.cwd().readFileAlloc(b.graph.io, path, b.allocator, .limited(1 << 28)) catch |err| {
         std.debug.print("warning: could not read {s}: {s}\n", .{ path, @errorName(err) });
         return "";
     };
@@ -308,6 +327,7 @@ fn writeManifest(
     optimize: std.builtin.OptimizeMode,
     graph_path: []const u8,
     solver_dir: ?[]const u8,
+    lib_name: []const u8,
 ) void {
     const target_triple = target.result.zigTriple(b.allocator) catch @panic("OOM");
     const optimize_name = @tagName(optimize);
@@ -362,7 +382,8 @@ fn writeManifest(
     const cwd = std.Io.Dir.cwd();
     const lib_dir = std.fs.path.join(b.allocator, &.{ b.install_prefix, "lib" }) catch @panic("OOM");
     cwd.createDirPath(b.graph.io, lib_dir) catch {};
-    const report_path = std.fs.path.join(b.allocator, &.{ lib_dir, "libbase.manifest.json" }) catch @panic("OOM");
+    const report_name = std.fmt.allocPrint(b.allocator, "{s}.manifest.json", .{lib_name}) catch @panic("OOM");
+    const report_path = std.fs.path.join(b.allocator, &.{ lib_dir, report_name }) catch @panic("OOM");
     cwd.writeFile(b.graph.io, .{ .sub_path = report_path, .data = json_text }) catch |err| {
         std.debug.print("warning: could not write manifest {s}: {s}\n", .{ report_path, @errorName(err) });
     };

@@ -10,6 +10,7 @@ Compiled-artifact mode is exercised end-to-end by the Zig oracle suite.
 
 import dataclasses
 import json
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -17,6 +18,9 @@ import pytest
 from shinro.controllers.onnx_rl_adapter import KERNEL_FILENAME, OnnxRLAdapter, OnnxRLConfig, _CompiledPolicy
 
 onnx = pytest.importorskip("onnx")
+
+#: The committed toy policy (scripts/gen_toy_onnx.py): action = [tanh(x0)+0.5, tanh(x1)-0.5].
+_TOY = Path(__file__).resolve().parents[1] / "fixtures" / "models" / "toy_mlp.onnx"
 
 
 def _save_model(w, b, tmp_path, *, input_name="obs", output_name="output", name="policy.onnx"):
@@ -271,6 +275,28 @@ class TestBackendAgnostic:
         config.write_text(f'type = "onnx_rl"\nmodel_path = "{model_path}"\naction_space = "continuous"\n')
         ctrl = ControllerFactory(str(config)).create(backend=TorchBackend(device="cpu"))
         assert isinstance(ctrl.compute(torch.tensor([1.0, 0.0, 0.0])), torch.Tensor)
+
+
+class TestCommittedFixture:
+    """The checked-in toy MLP (scripts/gen_toy_onnx.py) drives the adapter."""
+
+    def test_continuous_matches_closed_form(self):
+        ctrl = OnnxRLAdapter.from_config({"model_path": str(_TOY)})
+        u = ctrl.compute(np.array([1.0, 2.0, 3.0]))
+        np.testing.assert_allclose(u, [np.tanh(1.0) + 0.5, np.tanh(2.0) - 0.5], rtol=1e-9)
+
+    def test_discrete_argmax(self):
+        ctrl = OnnxRLAdapter.from_config({"model_path": str(_TOY), "action_space": "discrete"})
+        # logits [tanh(1)+0.5, tanh(2)-0.5] = [1.26, 0.46] -> the first index wins
+        np.testing.assert_allclose(ctrl.compute(np.array([1.0, 2.0, 3.0])), [1.0, 0.0], rtol=0, atol=0)
+
+    def test_committed_controller_config_loads(self):
+        """The fixture controller TOML (CWD-relative model_path) goes through the factory."""
+        from shinro.factories.controller_factory import ControllerFactory
+
+        ctrl = ControllerFactory("tests/fixtures/configs/controllers/onnx_toy.toml").create()
+        u = ctrl.compute(np.array([1.0, 2.0, 3.0]))
+        np.testing.assert_allclose(u, [np.tanh(1.0) + 0.5, np.tanh(2.0) - 0.5], rtol=1e-9)
 
 
 class TestCompiledModeSurface:

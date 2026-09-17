@@ -1,9 +1,9 @@
 """Stamp a deployment record for a built ``libbase.so``.
 
-Post-compile step: after ``zig build`` produces ``<prefix>/lib/libbase.so``,
-this module reads the build manifest (``libbase.manifest.json``), hashes the
+Post-compile step: after ``zig build`` produces ``<prefix>/lib/lib<name>.so``,
+this module reads the build manifest (``lib<name>.manifest.json``), hashes the
 binary and the baked solver tree, and writes a deterministic deployment
-record (``libbase.deployment.json``) carrying a single **master hash** that
+record (``lib<name>.deployment.json``) carrying a single **master hash** that
 commits to the whole config -> graph -> solver -> binary chain.
 
 The master hash is a pure function of its inputs (no timestamps in the
@@ -62,7 +62,7 @@ def _master(config_slot: str, graph_slot: str, solver_slot: str, binary_slot: st
     )
 
 
-def stamp(prefix: Path, build_root: Path) -> dict:
+def stamp(prefix: Path, build_root: Path, name: str = "libbase") -> dict:
     """Compute and write the deployment record for a built prefix dir.
 
     Args:
@@ -70,18 +70,20 @@ def stamp(prefix: Path, build_root: Path) -> dict:
         build_root: The zig build root, used to resolve a relative
             ``solver_dir`` recorded in the manifest (default: the packaged
             ``src/shinro/runtime/``).
+        name: Artifact stem — ``<name>.so`` / ``<name>.manifest.json``
+            (default ``libbase``). Must match the ``-Dname`` the build used.
 
     Returns:
         The deployment record dict (also written to disk).
     """
     lib_dir = prefix / "lib"
-    manifest_path = lib_dir / "libbase.manifest.json"
-    so_path = lib_dir / "libbase.so"
+    manifest_path = lib_dir / f"{name}.manifest.json"
+    so_path = lib_dir / f"{name}.so"
 
     if not manifest_path.exists():
         raise FileNotFoundError(f"no build manifest at {manifest_path}")
     if not so_path.exists():
-        raise FileNotFoundError(f"no libbase.so at {so_path}")
+        raise FileNotFoundError(f"no {so_path.name} at {so_path}")
 
     manifest = json.loads(manifest_path.read_text())
 
@@ -124,7 +126,7 @@ def stamp(prefix: Path, build_root: Path) -> dict:
         "binary": {"sha256": binary_slot, "path": str(so_path)},
     }
 
-    record_path = lib_dir / "libbase.deployment.json"
+    record_path = lib_dir / f"{name}.deployment.json"
     record_path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
 
     # Archive copy: timestamp in filename only, so the record stays a pure
@@ -141,15 +143,16 @@ def stamp(prefix: Path, build_root: Path) -> dict:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Stamp a deployment record for a built libbase.so.")
+    parser = argparse.ArgumentParser(description="Stamp a deployment record for a built kernel (lib<name>.so).")
     parser.add_argument("--prefix", default="build", help="zig build prefix dir (default: build)")
     parser.add_argument(
         "--build-root",
         default=str(runtime_root()),
         help="zig build root for resolving a relative solver_dir (default: the packaged runtime)",
     )
+    parser.add_argument("--name", default="libbase", help="artifact stem, e.g. libbase → libbase.so (default: libbase)")
     args = parser.parse_args()
-    stamp(Path(args.prefix), Path(args.build_root))
+    stamp(Path(args.prefix), Path(args.build_root), args.name)
 
 
 if __name__ == "__main__":

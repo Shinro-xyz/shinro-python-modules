@@ -45,8 +45,7 @@ def _scenario_toml(tmp_path, compile_section: str) -> Path:
     cfg = tmp_path / "s.toml"
     cfg.write_text(
         '[controller]\nconfig = "configs/controllers/lqr_base.toml"\n'
-        '[estimator]\nconfig = "configs/estimators/kalman_base.toml"\n'
-        + compile_section
+        '[estimator]\nconfig = "configs/estimators/kalman_base.toml"\n' + compile_section
     )
     return cfg
 
@@ -104,9 +103,7 @@ def test_scenario_template_stays_in_sync_with_compile_schema():
     cfg = tomllib.loads(text)
 
     compile_cfg = cfg.get("compile", {})
-    assert set(compile_cfg) <= _COMPILE_KEYS, (
-        f"template [compile] has keys outside the schema: {set(compile_cfg) - _COMPILE_KEYS}"
-    )
+    assert set(compile_cfg) <= _COMPILE_KEYS, f"template [compile] has keys outside the schema: {set(compile_cfg) - _COMPILE_KEYS}"
     for key in _COMPILE_KEYS:
         assert key in text, f"template does not document [compile] key '{key}'"
 
@@ -178,3 +175,106 @@ def test_e2e_shared_graph_untouched(tmp_path):
     assert _run(GEN, str(SCENARIO), "--out", str(out)).returncode == 0
     assert _run(BUILD, str(out), "--scenario", str(SCENARIO)).returncode == 0
     assert shipped.read_bytes() == before
+
+
+# ─── policy-only (onnx_rl) scenarios — committed toy fixture ─────────────────
+
+# A checked-in 3 -> 4 -> 2 tanh MLP (scripts/gen_toy_onnx.py) plus its controller
+# config and a policy-only compile scenario, so the whole ONNX -> .so path runs
+# against a stable fixture with no model synthesis in the test.
+TOY_SCENARIO = REPO_ROOT / "tests" / "fixtures" / "configs" / "scenarios" / "toy_mlp_policy.toml"
+TOY_ONNX = REPO_ROOT / "tests" / "fixtures" / "models" / "toy_mlp.onnx"
+
+
+def _policy_scenario(tmp_path, *, controller_config, compile_section):
+    """A minimal policy-only scenario around a given controller config."""
+    cfg = tmp_path / "policy_scenario.toml"
+    cfg.write_text(f'[controller]\nconfig = "{controller_config}"\n' + compile_section)
+    return cfg
+
+
+def test_toy_onnx_fixture_matches_its_generator(tmp_path):
+    """The committed .onnx matches scripts/gen_toy_onnx.py (regenerate-to-check)."""
+    import numpy as np
+    from onnx import numpy_helper
+
+    onnx = pytest.importorskip("onnx")
+    fresh = tmp_path / "toy_mlp.onnx"
+    result = _run(REPO_ROOT / "scripts" / "gen_toy_onnx.py", "--out", str(fresh))
+    assert result.returncode == 0, result.stderr
+
+    committed = onnx.load(str(TOY_ONNX)).graph
+    regenerated = onnx.load(str(fresh)).graph
+    assert [n.op_type for n in committed.node] == [n.op_type for n in regenerated.node]
+    assert [t.name for t in committed.initializer] == [t.name for t in regenerated.initializer]
+    for a, b in zip(committed.initializer, regenerated.initializer, strict=True):
+        np.testing.assert_array_equal(numpy_helper.to_array(a), numpy_helper.to_array(b))
+
+
+def test_policy_scenario_omits_estimator(tmp_path):
+    """A policy-only scenario (no [estimator]) loads and lowers standalone."""
+    from shinro.codegen.scenario_gen import gen_scenario, load_scenario
+
+    pytest.importorskip("onnx")
+    spec = load_scenario(str(TOY_SCENARIO))
+    assert spec["estimator_config"] is None
+
+    out = tmp_path / "g"
+    cg, graph_path = gen_scenario(str(TOY_SCENARIO), str(out))
+    assert cg.inputs == ["state"]
+    assert cg.outputs == ["u"]
+    assert cg.state_outputs == []
+    assert graph_path.exists()
+
+
+def test_policy_scenario_provenance_pins_onnx_weights(tmp_path):
+    """The deployment record's config slot commits to the exact .onnx file."""
+    from shinro.codegen.scenario_gen import gen_scenario
+
+    pytest.importorskip("onnx")
+    out = tmp_path / "g"
+    gen_scenario(str(TOY_SCENARIO), str(out))
+    configs = json.loads((out / "graph_data_manifest.json").read_text())["provenance"]["configs"]
+    key = next(k for k in configs if k.endswith("toy_mlp.onnx"))
+    assert configs[key] == hashlib.sha256(TOY_ONNX.read_bytes()).hexdigest()
+
+
+def test_non_policy_scenario_still_requires_estimator(tmp_path):
+    """Only onnx_rl may drop [estimator]; a classical controller still needs one."""
+    from shinro.codegen.scenario_gen import load_scenario
+
+    scenario = _policy_scenario(
+        tmp_path,
+        controller_config="configs/controllers/lqr_base.toml",
+        compile_section="[compile]\nn_x = 3\nn_u = 3\n",
+    )
+    with pytest.raises(ValueError, match=r"missing \[estimator\]"):
+        load_scenario(str(scenario))
+
+
+def test_compile_rejects_unsafe_artifact_name(tmp_path):
+    """artifact_name is a file-name stem: separators must be rejected."""
+    from shinro.codegen.scenario_gen import load_scenario
+
+    bad = _scenario_toml(tmp_path, '[compile]\nn_x = 3\nn_u = 3\nartifact_name = "../evil"\n')
+    with pytest.raises(ValueError, match="artifact_name"):
+        load_scenario(str(bad))
+
+
+@pytest.mark.skipif(shutil.which("zig") is None, reason="zig not on PATH")
+def test_e2e_policy_named_artifact(tmp_path):
+    """The committed policy scenario builds lib_neural_network.so and verifies."""
+    out = tmp_path / "scenario"
+    gen = _run(GEN, str(TOY_SCENARIO), "--out", str(out))
+    assert gen.returncode == 0, gen.stderr
+    build = _run(BUILD, str(out), "--scenario", str(TOY_SCENARIO))
+    assert build.returncode == 0, build.stderr
+    assert "oracle B" in build.stdout
+
+    so = out / "lib" / "lib_neural_network.so"
+    record = out / "lib" / "lib_neural_network.deployment.json"
+    assert so.exists()
+    assert (out / "lib" / "lib_neural_network.manifest.json").exists()
+    assert record.exists()
+    assert not (out / "lib" / "libbase.so").exists()
+    assert json.loads(record.read_text())["slots"]["binary"] == hashlib.sha256(so.read_bytes()).hexdigest()

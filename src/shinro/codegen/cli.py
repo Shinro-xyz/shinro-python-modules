@@ -29,6 +29,7 @@ def main() -> int:
     parser.add_argument("--optimize", choices=["debug", "release"], help="override [compile].optimize")
     parser.add_argument("--target", help="override [compile].target (zig triple, e.g. aarch64-linux-gnu)")
     parser.add_argument("--solver-dir", help="override [compile].solver_dir (baked OSQP solver dir)")
+    parser.add_argument("--artifact-name", help="override [compile].artifact_name (kernel installs as lib/<name>.so)")
     parser.add_argument("--samples", type=int, default=20, help="random inputs for the oracle (default 20)")
     parser.add_argument("--seed", type=int, default=0, help="RNG seed for the oracle (default 0)")
     args = parser.parse_args()
@@ -57,6 +58,7 @@ def main() -> int:
         optimize=args.optimize,
         target=args.target,
         solver_dir=args.solver_dir,
+        artifact_name=args.artifact_name,
         samples=args.samples,
         seed=args.seed,
     )
