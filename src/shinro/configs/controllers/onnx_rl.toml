@@ -1,29 +1,49 @@
 # FILE: configs/controllers/onnx_rl.toml
-# ONNX RL policy adapter — wraps any ONNX-exported RL policy as a Controller.
-# Requires: pip install "shinro[onnx-rl]"  (the `onnx` package; no runtime engine)
+# ONNX RL policy adapter — run any ONNX-exported RL policy as a Controller.
 #
-# Export the actor network from your RL framework (sb3, RLlib, CleanRL,
-# custom torch, JAX, ...) to policy.onnx, then point model_path at it.
+# Requires: pip install "shinro[onnx-rl]"  (the `onnx` package, compile-time only;
+# there is no onnxruntime dependency — the deployed kernel has no dependencies).
 #
-# Usage:
-#   python -m demos.demo_base_tracking --controller onnx_rl
+# Export the actor network from any RL stack (sb3, RLlib, CleanRL, custom torch,
+# JAX, ...) to policy.onnx, then pick one of two interchangeable backends:
+#
+#   eager     — model_path points at the .onnx; the graph is imported once and run
+#               in-process by the numpy interpreter (no build step, no artifact).
+#   compiled  — artifact_dir points at a `make compile --out` directory; the
+#               kernel `lib/<artifact_name>.so` is dlopen'd and driven through the
+#               C ABI (the deployment path; the .onnx is not needed then).
+#
+# Both backends run the same graph, so they agree bit-for-bit. The observation
+# encoder and the action space are baked into that graph, so one policy = one
+# artifact: retraining means re-exporting and re-compiling.
+#
+# Compile a policy-only scenario (no [estimator] — only onnx_rl may omit it):
+#   make compile SCENARIO=tests/fixtures/configs/scenarios/toy_mlp_policy.toml OUT=build/policy
+# then set artifact_dir = "build/policy" above.
+#
+# Sampling action spaces draw noise on the host and feed it to the kernel's
+# epsilon port (Gumbel for discrete, standard normal for stochastic); `seed`
+# seeds that generator, and reset() reseeds it.
 
 type = "onnx_rl"
 name = "ppo_policy"
-model_path = "path/to/policy.onnx"
+model_path = "path/to/policy.onnx"     # eager backend (import + interpret)
+# artifact_dir = "build/policy"        # compiled backend; wins if both are set
+# n_x = 6                              # plant state dim when state_keys stop short of the last entry
+# output_name = "action"               # ONNX output to import (default: the model's first)
 action_space = "continuous"            # continuous | discrete | stochastic
-deterministic = true                   # false samples from the policy distribution
-action_scale = 1.0                     # u = scale * a + bias (tanh-squashed policies)
+deterministic = true                   # false samples (discrete: Gumbel-max; stochastic: Gaussian)
+action_scale = 1.0                     # u = scale * u + bias (continuous / stochastic only)
 action_bias = 0.0
-# action_clip_low = -1.0
-# action_clip_high = 1.0
+# action_clip_low = -1.0               # both bounds are required together — a single
+# action_clip_high = 1.0               #   bound would be ±inf, which the lowerer cannot emit
 seed = 0
 
 [observation]
 # input_name = "obs"                   # override ONNX input name if needed
 state_keys = [0, 1, 2]                 # integer indices into the plant state vector
-normalize = false                       # apply (x - mean) / std before the model
+normalize = false                      # apply (x - mean) / std before the model
 # obs_mean = [0.0, 0.0, 0.0]
 # obs_std = [1.0, 1.0, 1.0]
-# clip = [-1.0, 1.0]                    # observation clipping
-add_batch_dim = true                    # ONNX models expect [B, obs_dim]
+# clip = [-1.0, 1.0]                   # observation clipping
+# add_batch_dim = true                 # legacy: the compiled path treats the batch as 1 implicitly
