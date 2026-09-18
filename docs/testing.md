@@ -36,7 +36,7 @@ The [`Makefile`](../Makefile) provides short named targets. `make test-<name>` r
 | `make test-all` | Full suite, including the slow horizon test (still excludes the opt-in markers) |
 | `make test-quick` | Unit tests only (controllers, estimators, trajectories, plants, factories, components, array backend, batched adapter, controllability, mcp server) |
 | `make test-functional` | Functional MCP server tests (spawns a real server; opt-in, clears the `mcp` marker exclusion) |
-| `make test-integration` | Full-loop physics-backed suite in `tests/integration/` (requires MuJoCo; opt-in, not in CI) |
+| `make test-integration` | Full-loop physics-backed suite in `tests/integration/` (requires MuJoCo; opt-in locally, run by CI's `integration` job) |
 | `make test-controllers` | `tests/test_controllers.py` |
 | `make test-estimators` | `tests/test_estimators.py` |
 | `make test-plants` | `tests/test_plants.py` |
@@ -77,7 +77,7 @@ python3 run_tests.py --int       # integration suite (MuJoCo required, opt-in)
 
 - `make test` and bare `python3 run_tests.py` skip it with `-k "not test_very_large_horizon_mpc_times_out"`.
 - `make test-all` and `make test-controllers` include it.
-- CI (`.github/workflows/test.yml`) runs the full `tests/` directory with no filter, so the slow test runs there.
+- CI's `test` job runs `make test-all`, which includes it.
 
 ## Integration Tests
 
@@ -90,15 +90,27 @@ make test-integration   # equivalent to:
 python3 -m pytest tests/integration/ -v --tb=short --override-ini="addopts="
 ```
 
-These are opt-in for a reason: they require a working MuJoCo install and are heavier than the unit
-suite, and they are intentionally not part of CI.
+These are opt-in locally because they require a working MuJoCo install plus the tracked
+`lekiwi-sim` assets. CI runs them in the dedicated `integration` job (which installs the
+`[mujoco]` extra), so a green CI does cover the full-loop suite.
 
 ## CI
 
-There is currently **no CI configuration in this repository** — the `.github/`
-directory is absent. The `addopts` marker exclusions apply to any plain
-`pytest tests/` invocation, so integration and MCP-functional tests are opt-in
-everywhere (CI or local) unless the runner clears `addopts` explicitly.
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs five jobs on pushes to `main`
+and on pull requests:
+
+| Job | Covers |
+| ----- | -------- |
+| `test` | `make test-all` on Python 3.12, 3.13, and 3.14 (matrix; `fail-fast: false`) |
+| `lint` | `make lint` — `ruff check .` + `pyrefly` on the typed source subset |
+| `zig` | Installs Zig 0.16.0, runs `make test-zig` (native `zig build test` + `tests/test_zig_lowering.py`) and the zig-gated tests in `tests/test_compile_scenario.py` / `tests/test_measure.py` |
+| `mcp` | `make test-functional` (the `mcp`-marked subprocess protocol suite) |
+| `integration` | Installs the `[mujoco]` extra and runs `make test-integration` (the `integration`-marked full-loop suite) |
+
+The marker-gated `integration` / `mcp` suites still require the Make targets locally (plain
+`pytest tests/` skips them), but CI runs them explicitly in their own jobs. The `zig` job is what
+keeps `tests/test_zig_lowering.py` honest: without `zig` on `PATH` the whole file reports as
+skipped, so a green run there only means something when the job installed Zig.
 
 ## Fixtures
 
@@ -119,7 +131,7 @@ The tests fall into four groups:
 
 - **Unit tests** — construction validation, shape checking, mathematical accuracy (governing equations verified analytically), convergence, error handling, and `from_config` factory loading. Most files fall here.
 - **Functional tests** — `tests/test_mcp_server_functional.py` spawns a real MCP server and talks to it end to end; slower and heavier. Gated behind the `mcp` marker (opt-in, like `integration`) so the default suite doesn't spawn subprocesses.
-- **Integration tests** — `tests/integration/` full-loop physics-backed simulations (MuJoCo), excluded by default (see above).
+- **Integration tests** — `tests/integration/` full-loop physics-backed simulations (MuJoCo), excluded by default locally but run by CI's `integration` job (see above).
 - **Adversarial / robustness** — `tests/test_adversarial.py` probes edge cases and misuse of the public API.
 
 ## Adding a New Test Group
@@ -134,5 +146,5 @@ The tests fall into four groups:
 
 For the agent-facing operational guide (which suite to run for a given change,
 the silent-skip gotchas, and how to interpret results), load the
-[`shinro-testing` skill](../.opencode/skills/shinro-testing/SKILL.md). This
+[`shinro-testing` skill](../.agents/skills/shinro-testing/SKILL.md). This
 document is the human reference; the skill is the decision procedure.

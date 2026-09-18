@@ -26,6 +26,10 @@ run actually means the tests ran.
 - **Fixtures:** `tests/conftest.py` — `bk` (parametrized numpy+torch), `rng`
   (seeded), `numpy_backend`, `torch_backend`.
 - **Human reference:** `docs/testing.md` (may drift; trust the TOML/Makefile).
+- **CI:** `.github/workflows/ci.yml` — five jobs: `test` (`make test-all`, Python
+  3.12/3.13/3.14 matrix), `lint`, `zig` (installs Zig 0.16.0), `mcp`, and
+  `integration`. CI runs every suite, so "green in CI" now means all of them ran;
+  locally they are still separate opt-in targets.
 - **Lab notes:** `lab-notes/daily/<date>.md` — every session's changes get a
   semantic summary with test results.
 
@@ -79,7 +83,9 @@ run actually means the tests ran.
   `SKIPPED` lines. If a file you expected to run shows nothing, check the
   gotchas above.
 - **A green `make test` does not cover integration, mcp, or zig.** Those are
-  separate opt-in suites; run them when your change touches their areas.
+  separate opt-in suites; run them when your change touches their areas. (CI
+  runs each in its own job — see `.github/workflows/ci.yml` — so a green CI does
+  cover them, but a green local `make test` does not.)
 - **Counts are ×2 for `bk`-parametrized tests** (numpy + torch).
 
 ## Workflow
