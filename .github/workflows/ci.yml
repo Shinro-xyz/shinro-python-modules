@@ -1,13 +1,30 @@
 name: CI
+
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+
+# Cancel superseded runs on the same ref, but let a run finish reporting.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Must satisfy src/shinro/runtime/build.zig.zon's minimum_zig_version.
+  ZIG_VERSION: "0.16.0"
+
 jobs:
+  # ---------------------------------------------------------------------------
+  # Unit + default suite across the supported Python versions. `make test-all`
+  # runs the whole tests/ tree (including the intentionally-slow horizon test)
+  # and leaves the opt-in `integration` / `mcp` markers to their own jobs.
+  # ---------------------------------------------------------------------------
   test:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
     steps:
@@ -19,14 +36,111 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements-dev.txt', 'requirements.txt') }}
+          key: >-
+            ${{ runner.os }}-pip-${{ matrix.python-version }}-
+            ${{ hashFiles('requirements-dev.txt', 'requirements.txt') }}
           restore-keys: |
+            ${{ runner.os }}-pip-${{ matrix.python-version }}-
             ${{ runner.os }}-pip-
-      - run: pip install -r requirements-dev.txt
-      - run: pip install -r requirements.txt
-      - run: pip install -e .
-      - run: python -c "import shinro; print(shinro.__version__)"
-      - run: python -c "from shinro.controllers import LQR; print('ok')"
-      - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
-      - run: pytest tests/ -v --tb=short
-      - run: pyrefly check src/shinro/utils/ src/shinro/components.py src/shinro/controllers/ src/shinro/estimators/ src/shinro/trajectories/ src/shinro/plants/
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt -r requirements.txt
+          pip install -e .
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Import smoke test
+        run: |
+          python -c "import shinro; print(shinro.__version__)"
+          python -c "from shinro.controllers import LQR; print('ok')"
+      - run: make test-all
+
+  # ---------------------------------------------------------------------------
+  # Lint: ruff (whole repo) + pyrefly (the typed source subset). Mirrors
+  # `make lint`, which the old workflow only half-ran (pyrefly, no ruff).
+  # ---------------------------------------------------------------------------
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt -r requirements.txt
+          pip install -e .
+      - run: make lint
+
+  # ---------------------------------------------------------------------------
+  # Zig VM. Without `zig` on PATH the whole tests/test_zig_lowering.py file and
+  # the zig-gated tests in the default suite silently skip, so this job is what
+  # makes the lowering suite real: native `zig build test` + the Python oracle
+  # that cross-checks the compiled .so against the interpreter, plus the
+  # zig-gated default-suite tests (test_compile_scenario.py, test_measure.py).
+  # ---------------------------------------------------------------------------
+  zig:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Zig ${{ env.ZIG_VERSION }}
+        run: |
+          base="https://ziglang.org/download/${ZIG_VERSION}"
+          name="zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
+          curl -fsSL "$base/$name" -o /tmp/zig.tar.xz
+          mkdir -p /opt/zig
+          tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1
+          echo "/opt/zig" >> "$GITHUB_PATH"
+      - run: zig version
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt -r requirements.txt
+          pip install -e .
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - run: make test-zig
+      - name: Zig-gated default-suite tests
+        run: |
+          python3 -m pytest -v --tb=short \
+            tests/test_compile_scenario.py tests/test_measure.py
+
+  # ---------------------------------------------------------------------------
+  # MCP server protocol suite (spawns the real server subprocess). Excluded
+  # from the default run by the `mcp` marker.
+  # ---------------------------------------------------------------------------
+  mcp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt -r requirements.txt
+          pip install -e .
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - run: make test-functional
+
+  # ---------------------------------------------------------------------------
+  # Full-loop physics-backed suite (MuJoCo + the tracked lekiwi-sim assets).
+  # Excluded from the default run by the `integration` marker.
+  # ---------------------------------------------------------------------------
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt -r requirements.txt
+          pip install -e '.[mujoco]'
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - run: make test-integration
