@@ -8,7 +8,7 @@
 // The VM is comptime-specialized along one axis only: the outer `inline for`
 // over the node table unrolls every node, so each node's op and shape are
 // comptime constants and its slot is a fixed-size slice of one contiguous
-// stack buffer — no heap, no runtime op dispatch. The element loops *inside*
+// file-scope buffer — no heap, no runtime op dispatch. The element loops *inside*
 // each node are runtime `for` loops over those comptime-known sizes. Unrolling
 // them too emits one statement per element (~`buf_len` of them) and forces the
 // compiler to optimize a single function of hundreds of thousands of
@@ -36,6 +36,19 @@ const sm = if (g.has_solve_qp) @import("solver_meta") else struct {};
 const la = @import("linalg.zig");
 const qp = if (g.has_solve_qp) @import("qp.zig") else struct {};
 
+/// Per-tick workspace: every node's output slot is a slice of `workspace`,
+/// addressed by `g.offsets`. Declared at file scope rather than as a local in
+/// `shinro_step` so its size — `g.buf_len` f64, tens of MiB for large policies
+/// — does not have to fit on the caller's stack (a stack-local copy overflows
+/// the default 16 MiB stack past roughly 500k parameters).
+///
+/// This is process-global mutable state, so `shinro_step` is **not reentrant
+/// or thread-safe**: one call must finish before the next starts. That is the
+/// deployment model (one control loop, one tick at a time) and matches the QP
+/// path's statically-allocated `solver` global. The graph writes every slot
+/// before it is read, so the buffer needs no initialization.
+var workspace: [g.buf_len]f64 align(16) = undefined;
+
 /// Run one tick of the closed-loop step through the generated node table.
 ///
 /// The C-ABI entry point (exported as `shinro_step`) that the host calls once
@@ -49,10 +62,13 @@ const qp = if (g.has_solve_qp) @import("qp.zig") else struct {};
 ///
 /// The `inline for` over `g.nodes` unrolls the whole node table at compile
 /// time, so every node's op and shape are comptime constants and every array
-/// is a fixed-size slice of the single stack buffer — no heap, no runtime op
-/// dispatch. The element loops *within* each node are runtime loops over those
-/// comptime-known sizes, so code size and compile time scale with the node
-/// count rather than with `buf_len`.
+/// is a fixed-size slice of the single file-scope `workspace` — no heap, no
+/// runtime op dispatch. The element loops *within* each node are runtime loops over
+/// those comptime-known sizes, so code size and compile time scale with the
+/// node count rather than with `buf_len`.
+///
+/// Not reentrant or thread-safe: writes go to the shared file-scope
+/// `workspace` (see its declaration). Callers run one tick at a time.
 ///
 /// Args:
 ///     inputs: Flat buffer of this tick's host inputs.
@@ -61,10 +77,9 @@ const qp = if (g.has_solve_qp) @import("qp.zig") else struct {};
 ///         written (fed back as state inputs next tick).
 export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) void {
     @setEvalBranchQuota(1_000_000);
-    var buf: [g.buf_len]f64 align(16) = undefined;
 
     inline for (g.nodes, 0..) |node, i| {
-        const out = buf[g.offsets[i]..][0 .. node.rows * node.cols];
+        const out = workspace[g.offsets[i]..][0 .. node.rows * node.cols];
 
         switch (node.op) {
             .cst => {
@@ -74,7 +89,7 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
                 for (0..node.rows * node.cols) |j| out[j] = inputs[node.aux + j];
             },
             .out => {
-                const src = node_input(g.nodes[0..], node, &buf);
+                const src = node_input(g.nodes[0..], node, &workspace);
                 if (node.aux < g.n_outputs) {
                     for (0..node.rows * node.cols) |j| outputs[g.output_offsets[node.aux] + j] = src[j];
                 } else {
@@ -82,8 +97,8 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
                 }
             },
             .matmul => {
-                const a = node_input(g.nodes[0..], node, &buf);
-                const b = node_input_at(g.nodes[0..], node.inputs[1], &buf);
+                const a = node_input(g.nodes[0..], node, &workspace);
+                const b = node_input_at(g.nodes[0..], node.inputs[1], &workspace);
                 const left = g.nodes[node.inputs[0]];
                 const right = g.nodes[node.inputs[1]];
                 if (left.vec) {
@@ -100,30 +115,30 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
                     for (0..node.rows * node.cols) |j| out[j] = r[j];
                 }
             },
-            .add => ew2(g.nodes[0..], node, i, &buf, .add),
-            .sub => ew2(g.nodes[0..], node, i, &buf, .sub),
-            .mul => ew2(g.nodes[0..], node, i, &buf, .mul),
-            .div => ew2(g.nodes[0..], node, i, &buf, .div),
-            .ne => ew2(g.nodes[0..], node, i, &buf, .ne),
-            .lt => ew2(g.nodes[0..], node, i, &buf, .lt),
-            .pow => ew2(g.nodes[0..], node, i, &buf, .pow),
+            .add => ew2(g.nodes[0..], node, i, &workspace, .add),
+            .sub => ew2(g.nodes[0..], node, i, &workspace, .sub),
+            .mul => ew2(g.nodes[0..], node, i, &workspace, .mul),
+            .div => ew2(g.nodes[0..], node, i, &workspace, .div),
+            .ne => ew2(g.nodes[0..], node, i, &workspace, .ne),
+            .lt => ew2(g.nodes[0..], node, i, &workspace, .lt),
+            .pow => ew2(g.nodes[0..], node, i, &workspace, .pow),
             .neg => {
-                const s = node_input(g.nodes[0..], node, &buf);
+                const s = node_input(g.nodes[0..], node, &workspace);
                 for (0..node.rows * node.cols) |j| out[j] = -s[j];
             },
             .abs => {
-                const s = node_input(g.nodes[0..], node, &buf);
+                const s = node_input(g.nodes[0..], node, &workspace);
                 for (0..node.rows * node.cols) |j| out[j] = @abs(s[j]);
             },
             .sign => {
                 // Matches np.sign: -1 / 0 / +1 (0 maps to 0, not +1).
-                const s = node_input(g.nodes[0..], node, &buf);
+                const s = node_input(g.nodes[0..], node, &workspace);
                 for (0..node.rows * node.cols) |j| {
                     out[j] = if (s[j] > 0.0) 1.0 else if (s[j] < 0.0) -1.0 else 0.0;
                 }
             },
             .transpose => {
-                const s = node_input(g.nodes[0..], node, &buf);
+                const s = node_input(g.nodes[0..], node, &workspace);
                 // True 2-D transpose: out (node.rows, node.cols) = src.T, so
                 // out[i][j] = src[j][i] — flat out[i*node.cols + j] =
                 // s[j*src.cols + i]. (The old form baked in the square case's
@@ -133,24 +148,24 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
                 }
             },
             .inv => {
-                const s = node_input(g.nodes[0..], node, &buf);
+                const s = node_input(g.nodes[0..], node, &workspace);
                 const r = la.inv(node.rows, s);
                 for (0..node.rows * node.cols) |j| out[j] = r[j];
             },
             .reshape => {
-                const s = node_input(g.nodes[0..], node, &buf);
+                const s = node_input(g.nodes[0..], node, &workspace);
                 for (0..node.rows * node.cols) |j| out[j] = s[j];
             },
             .clip => {
-                const s = node_input(g.nodes[0..], node, &buf);
+                const s = node_input(g.nodes[0..], node, &workspace);
                 for (0..node.rows * node.cols) |j| {
                     out[j] = std.math.clamp(s[j], g.clip_lo[node.aux + j], g.clip_hi[node.aux + j]);
                 }
             },
             .where_op => {
-                const cond = node_input(g.nodes[0..], node, &buf);
-                const a = node_input_at(g.nodes[0..], node.inputs[1], &buf);
-                const b = node_input_at(g.nodes[0..], node.inputs[2], &buf);
+                const cond = node_input(g.nodes[0..], node, &workspace);
+                const a = node_input_at(g.nodes[0..], node.inputs[1], &workspace);
+                const b = node_input_at(g.nodes[0..], node.inputs[2], &workspace);
                 const cond_n = g.nodes[node.inputs[0]];
                 const a_n = g.nodes[node.inputs[1]];
                 const b_n = g.nodes[node.inputs[2]];
@@ -165,7 +180,7 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
                 }
             },
             .any => {
-                const s = node_input(g.nodes[0..], node, &buf);
+                const s = node_input(g.nodes[0..], node, &workspace);
                 var found = false;
                 for (0..g.nodes[node.inputs[0]].rows * g.nodes[node.inputs[0]].cols) |j| {
                     if (s[j] != 0.0) found = true;
@@ -180,36 +195,36 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
             // scalar index to a depth-row; copy/slice are flat copies with
             // slice's `aux` holding the input offset.
             .copy => {
-                const s = node_input(g.nodes[0..], node, &buf);
+                const s = node_input(g.nodes[0..], node, &workspace);
                 for (0..node.rows * node.cols) |j| out[j] = s[j];
             },
             .tanh => {
-                const s = node_input(g.nodes[0..], node, &buf);
+                const s = node_input(g.nodes[0..], node, &workspace);
                 const r = la.tanh(node.rows * node.cols, s);
                 for (0..node.rows * node.cols) |j| out[j] = r[j];
             },
             .relu => {
-                const s = node_input(g.nodes[0..], node, &buf);
+                const s = node_input(g.nodes[0..], node, &workspace);
                 const r = la.relu(node.rows * node.cols, s);
                 for (0..node.rows * node.cols) |j| out[j] = r[j];
             },
             .exp => {
-                const s = node_input(g.nodes[0..], node, &buf);
+                const s = node_input(g.nodes[0..], node, &workspace);
                 const r = la.elementwise_exponential(node.rows * node.cols, s);
                 for (0..node.rows * node.cols) |j| out[j] = r[j];
             },
             .sin => {
-                const s = node_input(g.nodes[0..], node, &buf);
+                const s = node_input(g.nodes[0..], node, &workspace);
                 const r = la.sin_vec(node.rows * node.cols, s);
                 for (0..node.rows * node.cols) |j| out[j] = r[j];
             },
             .cos => {
-                const s = node_input(g.nodes[0..], node, &buf);
+                const s = node_input(g.nodes[0..], node, &workspace);
                 const r = la.cos_vec(node.rows * node.cols, s);
                 for (0..node.rows * node.cols) |j| out[j] = r[j];
             },
             .argmax => {
-                const s = node_input(g.nodes[0..], node, &buf);
+                const s = node_input(g.nodes[0..], node, &workspace);
                 const n_in = g.nodes[node.inputs[0]].rows * g.nodes[node.inputs[0]].cols;
                 const idx = la.argmax(n_in, s);
                 out[0] = @floatFromInt(idx);
@@ -219,7 +234,7 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
                 // 1 = axis 0 down columns, 2 = axis 1 across rows). The output
                 // shape was fixed at trace time, so rows*cols is the exact
                 // element count the chosen reduction produces.
-                const s = node_input(g.nodes[0..], node, &buf);
+                const s = node_input(g.nodes[0..], node, &workspace);
                 const src = g.nodes[node.inputs[0]];
                 if (node.aux == 0) {
                     const r = la.min_all(src.rows * src.cols, s);
@@ -233,13 +248,13 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
                 }
             },
             .one_hot => {
-                const s = node_input(g.nodes[0..], node, &buf);
+                const s = node_input(g.nodes[0..], node, &workspace);
                 const idx: usize = @intFromFloat(s[0]);
                 const r = la.onehot(node.rows, idx);
                 for (0..node.rows * node.cols) |j| out[j] = r[j];
             },
             .slice => {
-                const s = node_input(g.nodes[0..], node, &buf);
+                const s = node_input(g.nodes[0..], node, &workspace);
                 const src = g.nodes[node.inputs[0]];
                 if (src.vec) {
                     // 1-D source: aux is the flat element offset.
@@ -258,7 +273,7 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
             // output flat length is n_inputs * in_len == node.rows * node.cols.
             .stack => {
                 for (node.inputs, 0..) |inp_idx, row| {
-                    const src = node_input_at(g.nodes[0..], inp_idx, &buf);
+                    const src = node_input_at(g.nodes[0..], inp_idx, &workspace);
                     const in_len = g.nodes[inp_idx].rows * g.nodes[inp_idx].cols;
                     for (0..in_len) |j| out[row * in_len + j] = src[j];
                 }
@@ -284,7 +299,7 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
                             ") — rebuild with the matching -Dsolver_dir");
                     }
                 }
-                const q_vec = node_input(g.nodes[0..], node, &buf);
+                const q_vec = node_input(g.nodes[0..], node, &workspace);
                 qp.solve_qp(q_vec, out);
             },
         }
