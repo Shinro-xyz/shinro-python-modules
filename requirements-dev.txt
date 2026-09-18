@@ -3,3 +3,4 @@ ruff>=0.9
 build>=1.2
 setuptools>=68
 setuptools-scm[toml]>=8.0
+onnx>=1.16

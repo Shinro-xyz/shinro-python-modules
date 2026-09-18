@@ -195,10 +195,9 @@ def _policy_scenario(tmp_path, *, controller_config, compile_section):
 
 def test_toy_onnx_fixture_matches_its_generator(tmp_path):
     """The committed .onnx matches scripts/gen_toy_onnx.py (regenerate-to-check)."""
+    onnx = pytest.importorskip("onnx")
     import numpy as np
     from onnx import numpy_helper
-
-    onnx = pytest.importorskip("onnx")
     fresh = tmp_path / "toy_mlp.onnx"
     result = _run(REPO_ROOT / "scripts" / "gen_toy_onnx.py", "--out", str(fresh))
     assert result.returncode == 0, result.stderr
