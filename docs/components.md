@@ -16,7 +16,7 @@ Registered via `register_controller`; created with `ControllerFactory`. All
 implement `compute(current, target)` and `reset()`.
 
 | Registered name | Class | File | Config |
-|-----------------|-------|------|--------|
+| ----------------- | ------- | ------ | -------- |
 | `LQR` | `LQR` | `controllers/lqr.py` | `configs/controllers/lqr_base.toml` |
 | `PID` | `PIDController` | `controllers/pid.py` | `configs/controllers/pid_arm.toml` |
 | `MPC_LTI` | `MPC_LTI_Base` | `controllers/mpc_lti.py` | `configs/controllers/mpc_lti_base.toml` |
@@ -43,7 +43,7 @@ linearization set `input_dim` and expose `dynamics(x, u)` (see
 `docs/how-it-works.md` and `utils/linearization.py`).
 
 | Registered name | Class | File | Config |
-|-----------------|-------|------|--------|
+| ----------------- | ------- | ------ | -------- |
 | `ArmRobot` | `ArmRobot` | `plants/armrobot.py` | `configs/plants/armrobot.toml` |
 | `HolonomicMobileRobot` | `HolonomicMobileRobot` | `plants/holonomicmobilerobot.py` | `configs/plants/holonomic_base.toml` |
 | `InvertedPendulum` | `InvertedPendulum` | `plants/inverted_pendulum.py` | `configs/plants/inverted_pendulum.toml` |
@@ -71,7 +71,7 @@ Registered via `register_trajectory`; created with `TrajectoryFactory`. All
 implement `generate(...)` and `position_at(t)`.
 
 | Registered name | Class | File | Config |
-|-----------------|-------|------|--------|
+| ----------------- | ------- | ------ | -------- |
 | `cubic_segments` | `CubicPolynomial` | `trajectories/cubic_polynomial.py` | `configs/trajectories/arm_extension.toml` |
 | `quintic_segments` | `QuinticPolynomial` / `QuinticPolynomialConfigAdapter` | `trajectories/quintic_polynomial.py` | `configs/trajectories/arm_quintic.toml` |
 | `waypoints` | `WaypointSchedule` | `trajectories/quintic_polynomial.py` | `configs/trajectories/arm_lift.toml`, `base_straight.toml`, `base_triangle.toml` |
@@ -92,7 +92,7 @@ via `plant.physics_engine(engine)`. MuJoCo requires the optional
 Not registry-based; import directly from `shinro.utils`.
 
 | Symbol | Module | Purpose |
-|--------|--------|---------|
+| -------- | -------- | --------- |
 | `ArrayBackend`, `NumpyBackend`, `TorchBackend` | `utils/array_backend.py` | Backend-agnostic array abstraction; `parse_matrix` converts TOML lists to matrices |
 | `BatchedDynamicsAdapter` | `utils/batched_adapter.py` | Batches N parallel trajectory rollouts for sampling-based controllers (MPPI) |
 | `linearize`, `linearize_plant` | `utils/linearization.py` | Numeric linearization of plant dynamics around an operating point |
@@ -105,7 +105,7 @@ Tracing/composition/lowering pipeline. See `docs/codegen.md` for the full
 walkthrough.
 
 | Symbol | Module | Purpose |
-|--------|--------|---------|
+| -------- | -------- | --------- |
 | `Tracer`, `Graph`, `Node` | `codegen/tracing.py` | Abstract values + graph records; operator overloads emit nodes |
 | `TraceBackend` | `codegen/trace_backend.py` | Recording `ArrayBackend` used during tracing |
 | `trace_node`, `trace_node_with_state` | `codegen/trace_node.py` | Trace one component call |
