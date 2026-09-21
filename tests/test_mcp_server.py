@@ -646,6 +646,7 @@ class TestEstimatorEstimate:
             name="kf", type="KalmanFilter",
             params={"dt": 0.02, "process_noise": [0.01, 0.01], "measurement_noise": [0.001, 0.001]},
         )
+        data = {}
         for _ in range(20):
             data = json.loads(estimator_estimate(name="kf", measurement=[1.0, 2.0], control_input=[0.0, 0.0]))
         assert abs(data["state_estimate"][0] - 1.0) < 0.1
@@ -657,6 +658,7 @@ class TestEstimatorEstimate:
             name="lo", type="LuenbergerObserver",
             params={"dt": 0.02, "observer_gain": [0.8, 0.8]},
         )
+        data = {}
         for _ in range(20):
             data = json.loads(estimator_estimate(name="lo", measurement=[1.0, 2.0], control_input=[0.0, 0.0]))
         assert abs(data["state_estimate"][0] - 1.0) < 0.1
@@ -1199,6 +1201,7 @@ class TestPIDOutputLimits:
         """PID with output limits prevents integral windup on saturated channels."""
         create_controller(name="pid", type="PID", params={"dt": 0.02, "kp": [0.0], "ki": [10.0], "kd": [0.0]})
         set_pid_output_limits(name="pid", min=[-0.5], max=[0.5])
+        data = {}
         for _ in range(10):
             data = json.loads(controller_compute(name="pid", state=[1.0], reference=[0.0]))
         assert abs(data["action"][0]) <= 0.5 + 1e-4

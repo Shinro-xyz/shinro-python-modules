@@ -34,5 +34,7 @@ std = [0.01, 0.01, 0.02]
 # Compile-time spec for the e2e compilation pipeline (scripts/gen_scenario.py).
 # n_x / n_u are baked into the graph at trace time ("fixed as compiled").
 [compile]
+optimize = "debug"        # "debug" | "release" (release -> ReleaseFast)
+artifact_name = "libbase"   # kernel installs as lib/<name>.so
 n_x = 3
 n_u = 3

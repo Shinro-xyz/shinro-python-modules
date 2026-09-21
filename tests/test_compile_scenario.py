@@ -41,8 +41,33 @@ def _run(script: Path, *args: str) -> subprocess.CompletedProcess:
 
 # ─── [compile] validation (no zig) ─────────────────────────────────────────
 
+def _with_required_compile_keys(body: str) -> str:
+    """Inject the now-required [compile] keys unless the test supplies them.
+
+    `optimize` and `artifact_name` are required since 2026-09-21 (no silent
+    defaults); minimal test scenarios omit them, so fill them in here.
+    """
+    if "[compile]" not in body:
+        return body
+    inject = ""
+    if "optimize" not in body:
+        inject += 'optimize = "debug"\n'
+    if "artifact_name" not in body:
+        inject += 'artifact_name = "libbase"\n'
+    return body.replace("[compile]\n", "[compile]\n" + inject, 1) if inject else body
+
+
 
 def _scenario_toml(tmp_path, compile_section: str) -> Path:
+    # [compile] requires optimize + artifact_name; inject them unless the test
+    # is deliberately supplying (an invalid value for) one of them.
+    if "[compile]" in compile_section:
+        inject = ""
+        if "optimize" not in compile_section:
+            inject += 'optimize = "debug"\n'
+        if "artifact_name" not in compile_section:
+            inject += 'artifact_name = "libbase"\n'
+        compile_section = compile_section.replace("[compile]\n", "[compile]\n" + inject, 1)
     cfg = tmp_path / "s.toml"
     cfg.write_text(
         '[controller]\nconfig = "samples/controllers/lqr_base.toml"\n'
@@ -299,7 +324,10 @@ TOY_ONNX = REPO_ROOT / "tests" / "fixtures" / "models" / "toy_mlp.onnx"
 def _policy_scenario(tmp_path, *, controller_config, compile_section):
     """A minimal policy-only scenario around a given controller config."""
     cfg = tmp_path / "policy_scenario.toml"
-    cfg.write_text(f'[controller]\nconfig = "{controller_config}"\n' + compile_section)
+    cfg.write_text(
+        f'[controller]\nconfig = "{controller_config}"\n'
+        + _with_required_compile_keys(compile_section)
+    )
     return cfg
 
 

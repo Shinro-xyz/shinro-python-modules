@@ -28,5 +28,7 @@ config = "samples/estimators/kalman_base.toml"
 # Build spec: dims are baked into the graph at trace time. MPPI's N/K/D_u come
 # from the controller config (and the plant's control dim), not from here.
 [compile]
+optimize = "debug"        # "debug" | "release" (release -> ReleaseFast)
+artifact_name = "libbase"   # kernel installs as lib/<name>.so
 n_x = 3
 n_u = 3

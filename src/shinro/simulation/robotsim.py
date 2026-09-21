@@ -33,7 +33,7 @@ class RobotSim:
         state = sim.get_state()
     """
 
-    def __init__(self, config_path: str, xml_string: str = None, assets: dict = None):
+    def __init__(self, config_path: str, xml_string: str | None = None, assets: dict | None = None):
         with open(resolve_config_path(config_path), "rb") as f:
             self.config = tomllib.load(f)
 

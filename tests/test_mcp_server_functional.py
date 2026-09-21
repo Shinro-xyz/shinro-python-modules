@@ -30,6 +30,7 @@ def server():
     _next_id = [0]
 
     def _request(method: str, params: dict | None = None) -> dict:
+        assert proc.stdin is not None and proc.stdout is not None and proc.stderr is not None
         _next_id[0] += 1
         req = json.dumps({
             "jsonrpc": "2.0",
@@ -50,6 +51,7 @@ def server():
 
     def _notify(method: str, params: dict | None = None) -> None:
         """Send a notification (no response expected)."""
+        assert proc.stdin is not None
         req = json.dumps({
             "jsonrpc": "2.0",
             "method": method,
@@ -193,6 +195,7 @@ class TestControllerFunctional:
                     "state_cost": [1.0, 1.0],
                     "control_cost": [0.1, 0.1],
                     "delta_u_penalty": [0.5, 0.5],
+                    "A_dynamics": [[1.0, 0.0], [0.0, 1.0]], "B_dynamics": [[0.02, 0.0], [0.0, 0.02]],
                     "constraints": {
                         "upper": [0.5, 0.5, 0.5, 0.5],
                         "lower": [-0.5, -0.5, -0.5, -0.5],
@@ -631,7 +634,7 @@ class TestMPCConstraintsFunctional:
             "name": "create_controller",
             "arguments": {
                 "name": "mpc", "type": "MPC_LTI",
-                "params": {"dt": 0.02, "horizon": 5, "state_cost": [1.0, 1.0], "control_cost": [0.1, 0.1]},
+                "params": {"dt": 0.02, "horizon": 5, "state_cost": [1.0, 1.0], "control_cost": [0.1, 0.1], "A_dynamics": [[1.0, 0.0], [0.0, 1.0]], "B_dynamics": [[0.02, 0.0], [0.0, 0.02]]},
             },
         })
         resp = server("tools/call", {
@@ -653,7 +656,7 @@ class TestMPCConstraintsFunctional:
             "name": "create_controller",
             "arguments": {
                 "name": "mpc", "type": "MPC_LTI",
-                "params": {"dt": 0.02, "horizon": 5, "state_cost": [1.0, 1.0], "control_cost": [0.1, 0.1]},
+                "params": {"dt": 0.02, "horizon": 5, "state_cost": [1.0, 1.0], "control_cost": [0.1, 0.1], "A_dynamics": [[1.0, 0.0], [0.0, 1.0]], "B_dynamics": [[0.02, 0.0], [0.0, 0.02]]},
             },
         })
         server("tools/call", {

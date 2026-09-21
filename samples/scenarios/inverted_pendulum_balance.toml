@@ -31,6 +31,7 @@ type = "waypoints"
 config = "samples/trajectories/inverted_pendulum_upright.toml"
 
 [compile]
+artifact_name = "libbase"   # kernel installs as lib/<name>.so
 n_x = 2
 n_u = 1
 optimize = "debug"

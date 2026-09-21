@@ -12,6 +12,7 @@ type = "onnx_rl"
 config = "tests/fixtures/configs/controllers/onnx_toy.toml"
 
 [compile]
+optimize = "debug"
 n_x = 3
 n_u = 2
 artifact_name = "lib_neural_network"

@@ -25,9 +25,25 @@ BASE_TRACKING = str(REPO_ROOT / "tests" / "integration" / "scenarios" / "base_tr
 TOY_POLICY = str(REPO_ROOT / "tests" / "fixtures" / "configs" / "scenarios" / "toy_mlp_policy.toml")
 
 
+
+def _with_required_compile_keys(body: str) -> str:
+    """Inject the now-required [compile] keys unless the test supplies them.
+
+    `optimize` and `artifact_name` are required since 2026-09-21 (no silent
+    defaults); minimal test scenarios omit them, so fill them in here.
+    """
+    if "[compile]" not in body:
+        return body
+    inject = ""
+    if "optimize" not in body:
+        inject += 'optimize = "debug"\n'
+    if "artifact_name" not in body:
+        inject += 'artifact_name = "libbase"\n'
+    return body.replace("[compile]\n", "[compile]\n" + inject, 1) if inject else body
+
 def _scenario(tmp_path, body: str):
     path = tmp_path / "scenario.toml"
-    path.write_text(body)
+    path.write_text(_with_required_compile_keys(body))
     return str(path)
 
 

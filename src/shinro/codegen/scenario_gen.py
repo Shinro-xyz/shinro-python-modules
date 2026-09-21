@@ -74,21 +74,27 @@ def _validate_compile(compile_cfg: dict | None, scenario_path: str) -> dict:
 
     Returns a dict with ``n_x`` / ``n_u`` (optional — derived from ``[plant]``
     when absent), ``recipe`` (optional — inferred from the sections when
-    absent), and ``optimize`` / ``target`` / ``solver_dir`` / ``artifact_name`` /
-    ``out`` / ``solver`` (optional, with defaults). Unknown keys and invalid
-    ``optimize`` values are loud errors — the section is the build spec, so a
-    typo must not silently change the build.
+    absent), and ``target`` / ``solver_dir`` / ``out`` / ``solver`` (optional,
+    with defaults). ``optimize`` and ``artifact_name`` are **required** — the
+    section is the build spec, and a missing key is a loud error rather than a
+    substituted default. Unknown keys and invalid ``optimize`` values are loud
+    errors too, so a typo must not silently change the build.
 
     Raises:
-        ValueError: On a missing section, unknown keys, or an invalid
-            ``optimize`` value.
+        ValueError: On a missing section, unknown keys, or a missing/invalid
+            ``optimize`` or ``artifact_name``.
     """
     if compile_cfg is None:
         raise ValueError(f"{scenario_path}: missing [compile] section")
     unknown = set(compile_cfg) - _COMPILE_KEYS
     if unknown:
         raise ValueError(f"{scenario_path}: [compile] has unknown key(s): {sorted(unknown)}")
-    optimize = compile_cfg.get("optimize", "debug")
+    if "optimize" not in compile_cfg:
+        raise ValueError(
+            f"{scenario_path}: [compile] requires 'optimize' ('debug' or 'release') — "
+            f"the build spec never substitutes a default"
+        )
+    optimize = compile_cfg["optimize"]
     if optimize not in _ALLOWED_OPTIMIZE:
         raise ValueError(
             f"{scenario_path}: [compile].optimize must be 'debug' or 'release' "
@@ -97,7 +103,12 @@ def _validate_compile(compile_cfg: dict | None, scenario_path: str) -> dict:
         )
     # The artifact stem becomes lib/<name>.so + lib/<name>.{manifest,deployment}.json;
     # a stray separator or space would silently write outside the prefix.
-    artifact_name = compile_cfg.get("artifact_name", "libbase")
+    if "artifact_name" not in compile_cfg:
+        raise ValueError(
+            f"{scenario_path}: [compile] requires 'artifact_name' (the kernel installs as "
+            f"lib/<name>.so) — the build spec never substitutes a default"
+        )
+    artifact_name = compile_cfg["artifact_name"]
     if not isinstance(artifact_name, str) or not artifact_name or any(c in artifact_name for c in "/\\ \t"):
         raise ValueError(
             f"{scenario_path}: [compile].artifact_name must be a simple file-name stem "

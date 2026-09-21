@@ -27,4 +27,5 @@ name = "cartpole_lqr_kf_derived"
 input_limits = { min = [-10.0], max = [10.0] }
 
 [compile]
+artifact_name = "libbase"
 optimize = "release"
