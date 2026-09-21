@@ -17,8 +17,8 @@ import pytest
 
 # LeKiwi repo layout constants (pure pathlib, no MuJoCo needed).
 _LEKIWI_HOME = Path(__file__).parent.parent.parent
-_MJCF_PATH = _LEKIWI_HOME / "lekiwi-sim" / "mjcf_lcmm_robot.xml"
-_MESH_DIR = _LEKIWI_HOME / "lekiwi-sim" / "meshes"
+_MJCF_PATH = _LEKIWI_HOME / "vendor" / "lekiwi-sim" / "mjcf_lcmm_robot.xml"
+_MESH_DIR = _LEKIWI_HOME / "vendor" / "lekiwi-sim" / "meshes"
 
 
 @pytest.fixture(scope="session")

@@ -92,7 +92,7 @@ python3 -m pytest tests/integration/ -v --tb=short --override-ini="addopts="
 ```
 
 These are opt-in locally because they require a working MuJoCo install plus the tracked
-`lekiwi-sim` assets. CI runs them in the dedicated `integration` job (which installs the
+`vendor/lekiwi-sim` assets. CI runs them in the dedicated `integration` job (which installs the
 `[mujoco]` extra), so a green CI does cover the full-loop suite.
 
 ## CI

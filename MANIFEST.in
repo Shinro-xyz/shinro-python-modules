@@ -10,6 +10,6 @@ recursive-exclude demos *
 recursive-exclude tests *
 recursive-exclude lab-notes *
 recursive-exclude deprecated *
-recursive-exclude lekiwi-sim *
+recursive-exclude vendor *
 global-exclude *.gif
 global-exclude __pycache__

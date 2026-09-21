@@ -7,7 +7,7 @@ combined robots (e.g., arm + base), and unknown XMLs with a fallback.
 
 Usage:
     python scripts/generate_robot_config.py samples/models/pendulum.xml
-    python scripts/generate_robot_config.py lekiwi-sim/mjcf_lcmm_robot.xml
+    python scripts/generate_robot_config.py vendor/lekiwi-sim/mjcf_lcmm_robot.xml
     python scripts/generate_robot_config.py samples/models/ --output-dir samples/plants/
     python scripts/generate_robot_config.py some_robot.xml --type InvertedPendulum
 """

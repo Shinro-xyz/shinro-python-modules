@@ -123,7 +123,7 @@ python -m demos.demo_smc --build                          # ...and run the compi
 Auto-generate a robot config from a MuJoCo model:
 
 ```bash
-python scripts/generate_robot_config.py lekiwi-sim/mjcf_lcmm_robot.xml > robot_config.toml
+python scripts/generate_robot_config.py vendor/lekiwi-sim/mjcf_lcmm_robot.xml > samples/robot_config.toml
 ```
 
 ## Repo structure

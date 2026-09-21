@@ -337,7 +337,7 @@ class ScenarioFactory:
             from pathlib import Path
 
             from demos.helpers import inject_free_joint, load_model_assets
-            from lekiwi_sim import HERE, MJCF_PATH
+            from vendor.lekiwi_sim import HERE, MJCF_PATH
 
             xml = inject_free_joint(Path(MJCF_PATH).read_text())
             assets = load_model_assets(HERE / "lekiwi-sim" / "meshes")
