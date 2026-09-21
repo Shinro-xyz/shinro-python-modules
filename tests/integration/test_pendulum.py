@@ -1,5 +1,7 @@
 """Pendulum balance integration: plant-only closed-loop LQR + estimator on the inverted pendulum."""
 
+from __future__ import annotations
+
 import pytest
 
 from shinro.factories import ScenarioFactory

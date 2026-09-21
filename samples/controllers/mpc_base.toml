@@ -1,6 +1,8 @@
 type = "MPC_DeltaU"
 name = "base_controller"
 dt = 0.02
+A_dynamics = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+B_dynamics = [[0.02, 0.0, 0.0], [0.0, 0.02, 0.0], [0.0, 0.0, 0.02]]
 horizon = 15
 state_cost = [100.0, 100.0, 50.0]
 control_cost = [0.1, 0.1, 0.1]

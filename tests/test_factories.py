@@ -43,7 +43,7 @@ class TestControllerFactory:
         """ControllerFactory creates an LQR controller from a valid config."""
         from shinro.factories.controller_factory import ControllerFactory
         config = tmp_path / "lqr.toml"
-        config.write_text("""type = "LQR"\ndt = 0.02\nstate_cost = [1.0, 1.0]\ncontrol_cost = [0.1, 0.1]\n""")
+        config.write_text("""type = "LQR"\ndt = 0.02\nA_dynamics = [[1.0, 0.0], [0.0, 1.0]]\nB_dynamics = [[0.02, 0.0], [0.0, 0.02]]\nstate_cost = [1.0, 1.0]\ncontrol_cost = [0.1, 0.1]\n""")
         factory = ControllerFactory(str(config))
         ctrl = factory.create(backend=bk)
         from shinro.controllers.lqr import LQR
@@ -64,7 +64,8 @@ class TestControllerFactory:
     def test_create_from_config_dict(self, bk):
         """ControllerFactory accepts a config dict directly (no path)."""
         from shinro.factories.controller_factory import ControllerFactory
-        cfg = {"type": "LQR", "dt": 0.02, "state_cost": [1.0, 1.0], "control_cost": [0.1, 0.1]}
+        cfg = {"type": "LQR", "dt": 0.02, "state_cost": [1.0, 1.0], "control_cost": [0.1, 0.1],
+           "A_dynamics": [[1.0, 0.0], [0.0, 1.0]], "B_dynamics": [[0.02, 0.0], [0.0, 0.02]]}
         ctrl = ControllerFactory(config=cfg).create(backend=bk)
         from shinro.controllers.lqr import LQR
         assert isinstance(ctrl, LQR)
@@ -92,7 +93,7 @@ class TestControllerFactory:
         """ControllerFactory creates an MPC_LTI controller from a valid config."""
         from shinro.factories.controller_factory import ControllerFactory
         config = tmp_path / "mpc.toml"
-        config.write_text("""type = "MPC_LTI"\ndt = 0.1\nhorizon = 5\nstate_cost = [1.0, 1.0]\ncontrol_cost = [1.0, 1.0]\n""")
+        config.write_text("""type = "MPC_LTI"\ndt = 0.1\nhorizon = 5\nA_dynamics = [[1.0, 0.0], [0.0, 1.0]]\nB_dynamics = [[0.1, 0.0], [0.0, 0.1]]\nstate_cost = [1.0, 1.0]\ncontrol_cost = [1.0, 1.0]\n""")
         factory = ControllerFactory(str(config))
         ctrl = factory.create(backend=bk)
         from shinro.controllers.mpc_lti import MPC_LTI
@@ -209,7 +210,7 @@ class TestFactoryBackendPassthrough:
         """ControllerFactory passes the backend to the created controller."""
         from shinro.factories.controller_factory import ControllerFactory
         config = tmp_path / "lqr.toml"
-        config.write_text("""type = "LQR"\ndt = 0.02\nstate_cost = [1.0, 1.0]\ncontrol_cost = [0.1, 0.1]\n""")
+        config.write_text("""type = "LQR"\ndt = 0.02\nA_dynamics = [[1.0, 0.0], [0.0, 1.0]]\nB_dynamics = [[0.02, 0.0], [0.0, 0.02]]\nstate_cost = [1.0, 1.0]\ncontrol_cost = [0.1, 0.1]\n""")
         factory = ControllerFactory(str(config))
         ctrl = factory.create(backend=bk)
         assert ctrl.bk is bk

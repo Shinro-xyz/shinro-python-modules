@@ -82,7 +82,7 @@ class TestCreateController:
         )
         create_controller(
             name="x", type="LQR",
-            params={"state_cost": [1.0], "control_cost": [1.0], "dt": 0.1},
+            params={"state_cost": [1.0], "control_cost": [1.0], "dt": 0.1, "A_dynamics": [[1.0]], "B_dynamics": [[0.1]]},
         )
         assert _store["x"]._registry_name == "LQR"
 
@@ -145,7 +145,7 @@ class TestControllerCompute:
         """LQR compute returns a 2-element action vector."""
         create_controller(
             name="lqr", type="LQR",
-            params={"state_cost": [1.0, 1.0], "control_cost": [1.0, 1.0], "dt": 0.1},
+            params={"state_cost": [1.0, 1.0], "control_cost": [1.0, 1.0], "dt": 0.1, "A_dynamics": [[1.0, 0.0], [0.0, 1.0]], "B_dynamics": [[0.1, 0.0], [0.0, 0.1]]},
         )
         data = json.loads(
             controller_compute(name="lqr", state=[0.5, -0.3], reference=[0.0, 0.0])
@@ -162,6 +162,7 @@ class TestControllerCompute:
                 "state_cost": [1.0, 1.0],
                 "control_cost": [0.1, 0.1],
                 "delta_u_penalty": [0.5, 0.5],
+                "A_dynamics": [[1.0, 0.0], [0.0, 1.0]], "B_dynamics": [[0.02, 0.0], [0.0, 0.02]],
             },
         )
         data = json.loads(
@@ -179,6 +180,7 @@ class TestControllerCompute:
                 "state_cost": [1.0, 1.0],
                 "control_cost": [0.1, 0.1],
                 "delta_u_penalty": [0.5, 0.5],
+                "A_dynamics": [[1.0, 0.0], [0.0, 1.0]], "B_dynamics": [[0.02, 0.0], [0.0, 0.02]],
             },
         )
         data = json.loads(controller_compute(name="mpc", state=[0.5, -0.3]))
@@ -192,6 +194,7 @@ class TestControllerCompute:
                 "dt": 0.02, "horizon": 5,
                 "state_cost": [1.0, 1.0],
                 "control_cost": [0.1, 0.1],
+                "A_dynamics": [[1.0, 0.0], [0.0, 1.0]], "B_dynamics": [[0.02, 0.0], [0.0, 0.02]],
             },
         )
         data = json.loads(controller_compute(name="mpc_lti", state=[0.5, -0.3]))
@@ -206,7 +209,7 @@ class TestControllerCompute:
         """Computing with a state vector of wrong dimension returns an error."""
         create_controller(
             name="lqr", type="LQR",
-            params={"state_cost": [1.0, 1.0], "control_cost": [1.0, 1.0], "dt": 0.1},
+            params={"state_cost": [1.0, 1.0], "control_cost": [1.0, 1.0], "dt": 0.1, "A_dynamics": [[1.0, 0.0], [0.0, 1.0]], "B_dynamics": [[0.1, 0.0], [0.0, 0.1]]},
         )
         result = controller_compute(name="lqr", state=[1.0])
         assert "Error in compute" in result
@@ -215,7 +218,7 @@ class TestControllerCompute:
         """Computing with an empty state vector returns an error."""
         create_controller(
             name="lqr", type="LQR",
-            params={"state_cost": [1.0, 1.0], "control_cost": [1.0, 1.0], "dt": 0.1},
+            params={"state_cost": [1.0, 1.0], "control_cost": [1.0, 1.0], "dt": 0.1, "A_dynamics": [[1.0, 0.0], [0.0, 1.0]], "B_dynamics": [[0.1, 0.0], [0.0, 0.1]]},
         )
         result = controller_compute(name="lqr", state=[])
         assert "Error in compute" in result
@@ -276,7 +279,7 @@ class TestControllerReset:
         """LQR has no internal state, reset is a no-op (returns success)."""
         create_controller(
             name="lqr", type="LQR",
-            params={"state_cost": [1.0], "control_cost": [1.0], "dt": 0.1},
+            params={"state_cost": [1.0], "control_cost": [1.0], "dt": 0.1, "A_dynamics": [[1.0]], "B_dynamics": [[0.1]]},
         )
         result = controller_reset(name="lqr")
         assert "reset" in result.lower()
@@ -306,7 +309,7 @@ class TestListTools:
         )
         create_controller(
             name="b", type="LQR",
-            params={"state_cost": [1.0], "control_cost": [1.0], "dt": 0.1},
+            params={"state_cost": [1.0], "control_cost": [1.0], "dt": 0.1, "A_dynamics": [[1.0]], "B_dynamics": [[0.1]]},
         )
         data = json.loads(list_controllers())
         assert data["controllers"]["a"] == "PID"
@@ -432,7 +435,7 @@ class TestMaliciousEdgeCases:
                 name="bad_mpc", type="MPC_LTI",
                 params={
                     "dt": 0.02, "horizon": -5,
-                    "state_cost": [1.0], "control_cost": [0.1],
+                    "state_cost": [1.0], "control_cost": [0.1], "A_dynamics": [[1.0]], "B_dynamics": [[0.02]],
                 },
             )
 
@@ -443,7 +446,7 @@ class TestMaliciousEdgeCases:
                 name="bad_mpc", type="MPC_LTI",
                 params={
                     "dt": 0.02, "horizon": 0,
-                    "state_cost": [1.0], "control_cost": [0.1],
+                    "state_cost": [1.0], "control_cost": [0.1], "A_dynamics": [[1.0]], "B_dynamics": [[0.02]],
                 },
             )
 
@@ -471,6 +474,7 @@ class TestMaliciousEdgeCases:
                 params={
                     "state_cost": [-1.0, -1.0],
                     "control_cost": [1.0, 1.0],
+                    "A_dynamics": [[1.0, 0.0], [0.0, 1.0]], "B_dynamics": [[0.1, 0.0], [0.0, 0.1]],
                     "dt": 0.1,
                 },
             )
@@ -483,6 +487,7 @@ class TestMaliciousEdgeCases:
                 params={
                     "state_cost": [1.0, 1.0],
                     "control_cost": [-1.0, -1.0],
+                    "A_dynamics": [[1.0, 0.0], [0.0, 1.0]], "B_dynamics": [[0.1, 0.0], [0.0, 0.1]],
                     "dt": 0.1,
                 },
             )
@@ -495,7 +500,7 @@ class TestMaliciousEdgeCases:
 from shinro.mcp.server import create_controller
 result = create_controller(
     name="bad_mpc", type="MPC_LTI",
-    params={"dt": 0.02, "horizon": 10000, "state_cost": [1.0], "control_cost": [0.1]},
+    params={"dt": 0.02, "horizon": 10000, "state_cost": [1.0], "control_cost": [0.1], "A_dynamics": [[1.0]], "B_dynamics": [[0.02]]},
 )
 print(result)
 """
@@ -513,6 +518,8 @@ print(result)
             params={
                 "state_cost": [1.0] * n,
                 "control_cost": [1.0] * n,
+                "A_dynamics": [[1.0 if i == j else 0.0 for j in range(n)] for i in range(n)],
+                "B_dynamics": [[0.1 if i == j else 0.0 for j in range(n)] for i in range(n)],
                 "dt": 0.1,
             },
         )
@@ -549,6 +556,7 @@ print(result)
                 "state_cost": [1.0, 1.0],
                 "control_cost": [0.1, 0.1],
                 "delta_u_penalty": [0.5, 0.5],
+                "A_dynamics": [[1.0, 0.0], [0.0, 1.0]], "B_dynamics": [[0.02, 0.0], [0.0, 0.02]],
                 "constraints": {
                     "upper": [0.5, 0.5, 0.5, 0.5],
                     "lower": [-0.5, -0.5, -0.5, -0.5],
@@ -1102,7 +1110,7 @@ class TestMPCConstraints:
     def test_set_mpc_constraints_on_mpc_lti(self):
         """Setting constraints on MPC_LTI returns success."""
         create_controller(name="mpc", type="MPC_LTI", params={
-            "dt": 0.02, "horizon": 5, "state_cost": [1.0, 1.0], "control_cost": [0.1, 0.1],
+            "dt": 0.02, "horizon": 5, "state_cost": [1.0, 1.0], "control_cost": [0.1, 0.1], "A_dynamics": [[1.0, 0.0], [0.0, 1.0]], "B_dynamics": [[0.02, 0.0], [0.0, 0.02]],
         })
         result = set_mpc_constraints(name="mpc", upper=[0.5, 0.5], lower=[-0.5, -0.5])
         assert "Constraints set" in result
@@ -1111,7 +1119,7 @@ class TestMPCConstraints:
         """Setting constraints on MPC_DeltaU returns success."""
         create_controller(name="mpc", type="MPC_DeltaU", params={
             "dt": 0.02, "horizon": 5, "state_cost": [1.0, 1.0],
-            "control_cost": [0.1, 0.1], "delta_u_penalty": [0.5, 0.5],
+            "control_cost": [0.1, 0.1], "delta_u_penalty": [0.5, 0.5], "A_dynamics": [[1.0, 0.0], [0.0, 1.0]], "B_dynamics": [[0.02, 0.0], [0.0, 0.02]],
         })
         result = set_mpc_constraints(name="mpc", upper=[0.5, 0.5, 0.5, 0.5], lower=[-0.5, -0.5, -0.5, -0.5])
         assert "Constraints set" in result
@@ -1119,7 +1127,7 @@ class TestMPCConstraints:
     def test_set_mpc_constraints_with_custom_matrix(self):
         """Setting constraints with a custom F matrix works."""
         create_controller(name="mpc", type="MPC_LTI", params={
-            "dt": 0.02, "horizon": 5, "state_cost": [1.0, 1.0], "control_cost": [0.1, 0.1],
+            "dt": 0.02, "horizon": 5, "state_cost": [1.0, 1.0], "control_cost": [0.1, 0.1], "A_dynamics": [[1.0, 0.0], [0.0, 1.0]], "B_dynamics": [[0.02, 0.0], [0.0, 0.02]],
         })
         result = set_mpc_constraints(
             name="mpc",
@@ -1143,7 +1151,7 @@ class TestMPCConstraints:
     def test_get_mpc_constraints_returns_bounds(self):
         """Getting constraints returns the upper and lower bounds."""
         create_controller(name="mpc", type="MPC_LTI", params={
-            "dt": 0.02, "horizon": 5, "state_cost": [1.0, 1.0], "control_cost": [0.1, 0.1],
+            "dt": 0.02, "horizon": 5, "state_cost": [1.0, 1.0], "control_cost": [0.1, 0.1], "A_dynamics": [[1.0, 0.0], [0.0, 1.0]], "B_dynamics": [[0.02, 0.0], [0.0, 0.02]],
         })
         set_mpc_constraints(name="mpc", upper=[0.5, 0.5, 0.5, 0.5], lower=[-0.5, -0.5, -0.5, -0.5])
         data = json.loads(get_mpc_constraints(name="mpc"))
@@ -1164,7 +1172,7 @@ class TestMPCConstraints:
     def test_mpc_constraints_are_respected_in_compute(self):
         """MPC with hard constraints respects the bounds in compute()."""
         create_controller(name="mpc", type="MPC_LTI", params={
-            "dt": 0.02, "horizon": 5, "state_cost": [1.0, 1.0], "control_cost": [0.1, 0.1],
+            "dt": 0.02, "horizon": 5, "state_cost": [1.0, 1.0], "control_cost": [0.1, 0.1], "A_dynamics": [[1.0, 0.0], [0.0, 1.0]], "B_dynamics": [[0.02, 0.0], [0.0, 0.02]],
         })
         set_mpc_constraints(name="mpc", upper=[0.5, 0.5, 0.5, 0.5], lower=[-0.5, -0.5, -0.5, -0.5])
         data = json.loads(controller_compute(name="mpc", state=[10.0, 10.0]))
@@ -1197,7 +1205,7 @@ class TestPIDOutputLimits:
 
     def test_set_pid_output_limits_on_non_pid_returns_error(self):
         """Setting output limits on an LQR controller returns an error."""
-        create_controller(name="lqr", type="LQR", params={"state_cost": [1.0], "control_cost": [1.0], "dt": 0.1})
+        create_controller(name="lqr", type="LQR", params={"state_cost": [1.0], "control_cost": [1.0], "dt": 0.1, "A_dynamics": [[1.0]], "B_dynamics": [[0.1]]})
         result = set_pid_output_limits(name="lqr", min=[-0.5], max=[0.5])
         assert "not a PID type" in result
 

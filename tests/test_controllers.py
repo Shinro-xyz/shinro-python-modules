@@ -125,7 +125,13 @@ class TestLQR:
 
     def test_lqr_from_config(self, bk):
         """from_config creates a valid LQR controller with a gain matrix."""
-        config = {"state_cost": [1.0, 1.0], "control_cost": [1.0, 1.0], "dt": 0.1}
+        config = {
+            "state_cost": [1.0, 1.0],
+            "control_cost": [1.0, 1.0],
+            "dt": 0.1,
+            "A_dynamics": [[1.0, 0.0], [0.0, 1.0]],
+            "B_dynamics": [[0.1, 0.0], [0.0, 0.1]],
+        }
         from shinro.controllers.lqr import LQR
 
         lqr = LQR.from_config(config, backend=bk)
@@ -388,6 +394,8 @@ class TestMPC:
             "state_cost": [1.0, 1.0],
             "control_cost": [1.0, 1.0],
             "dt": 0.1,
+            "A_dynamics": [[1.0, 0.0], [0.0, 1.0]],
+            "B_dynamics": [[0.1, 0.0], [0.0, 0.1]],
         }
         from shinro.controllers.mpc_lti import MPC_LTI_Base
 

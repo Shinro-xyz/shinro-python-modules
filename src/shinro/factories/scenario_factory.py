@@ -51,7 +51,7 @@ class Scenario:
     plant: Plant
     controller: Controller | None
     estimator: StateEstimator | None
-    trajectory: TrajectoryGenerator | Any
+    trajectory: TrajectoryGenerator | None
     config: dict[str, Any] = field(default_factory=dict)
 
     def run(self, steps: int | None = None, seed: int | None = None):
@@ -68,6 +68,7 @@ class Scenario:
         """
         from shinro.simulation.runner import run_phase_schedule, run_scenario
 
+        self._require_trajectory()
         if self.controller is None:
             return run_phase_schedule(self, steps=steps)
         return run_scenario(self, steps=steps, seed=seed)
@@ -80,9 +81,23 @@ class Scenario:
         """
         from shinro.simulation.runner import iter_phase_schedule, iter_scenario
 
+        self._require_trajectory()
         if self.controller is None:
             return iter_phase_schedule(self, steps=steps)
         return iter_scenario(self, steps=steps, seed=seed)
+
+    def _require_trajectory(self) -> None:
+        """A run needs a reference (closed loop) or a schedule (feedforward).
+
+        A compile-only scenario has no ``[trajectory]`` and is built with
+        ``trajectory=None``; running it is a loud error rather than a guess.
+        """
+        if self.trajectory is None:
+            raise ValueError(
+                "scenario has no [trajectory] section — a run needs a reference (closed loop) "
+                "or a schedule (feedforward). Add [trajectory], or use `shinro check`/`build` "
+                "for a compile-only scenario."
+            )
 
     def reset(self) -> None:
         """Restore the TOML initial state and clear controller/estimator state.
@@ -159,10 +174,15 @@ class ScenarioFactory:
             ValueError: If component dimensions disagree with the plant.
         """
         plant_cfg = self.config["plant"]
-        sim_cfg = self.config.get("sim", {"config": "samples/robot_config.toml"})
         physics_cfg = self.config.get("physics", {})
 
         if "sim" in self.config:
+            sim_cfg = self.config["sim"]
+            if "config" not in sim_cfg:
+                raise ValueError(
+                    f"{self.config_path}: [sim] requires 'config' (path to the sim manifest "
+                    f"TOML) — shinro never substitutes a default"
+                )
             sim, plant = self._build_sim_plant(plant_cfg, sim_cfg, physics_cfg)
             derive_model = False
             scenario_dt = self.config.get("scenario", {}).get("dt")
@@ -190,7 +210,9 @@ class ScenarioFactory:
                 return factory_cls(path).create(backend=backend)
             return factory_cls(path).create()
 
-        trajectory = _create(TrajectoryFactory, self.config["trajectory"]["config"])
+        trajectory = None
+        if "trajectory" in self.config:
+            trajectory = _create(TrajectoryFactory, self.config["trajectory"]["config"])
 
         controller = None
         estimator = None

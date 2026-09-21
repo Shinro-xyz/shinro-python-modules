@@ -241,9 +241,11 @@ class MPC_LTI_DeltaU(MPC_LTI):
             horizon: Prediction horizon.
             state_cost: Diagonal Q weights (n_x,) or full Q matrix (n_x, n_x).
             control_cost: Diagonal R weights (n_u,) or full R matrix (n_u, n_u).
-            dt: Time step.
-            A_dynamics: Optional full A matrix (n_x, n_x). Defaults to I.
-            B_dynamics: Optional full B matrix (n_x, n_u). Defaults to dt * I.
+            dt: Time step (used for validation against the plant).
+            A_dynamics: Full A matrix (n_x, n_x). Required unless a scenario with a
+                plant derives it.
+            B_dynamics: Full B matrix (n_x, n_u). Required unless a scenario with a
+                plant derives it.
             constraints: Optional dict with ``upper`` and ``lower`` bound lists.
 
         Args:
@@ -255,15 +257,15 @@ class MPC_LTI_DeltaU(MPC_LTI):
         """
         bk = backend or NumpyBackend()
         cfg = cls.parse_config(config)
+        if cfg.A_dynamics is None or cfg.B_dynamics is None:
+            raise ValueError(
+                "MPC_DeltaU: A_dynamics and B_dynamics are required — declare them in the config, "
+                "or build the controller through a scenario with a plant (which derives them)."
+            )
+        A = bk.array(cfg.A_dynamics)
+        B = bk.array(cfg.B_dynamics)
         Q = parse_matrix(bk, cfg.state_cost)
         n = Q.shape[0]
-        A = bk.array(cfg.A_dynamics) if cfg.A_dynamics is not None else bk.eye(n)
-        if cfg.B_dynamics is not None:
-            B = bk.array(cfg.B_dynamics)
-        elif cfg.dt is not None:
-            B = cfg.dt * bk.eye(n)
-        else:
-            raise ValueError("MPC_DeltaU: no B_dynamics and no dt — standalone use requires one of them")
         ctrl = cls(
             delta_u_penalty=parse_matrix(bk, cfg.delta_u_penalty),
             horizon=cfg.horizon,
@@ -355,9 +357,11 @@ class MPC_LTI_Base(MPC_LTI):
             horizon: Prediction horizon.
             state_cost: Diagonal Q weights (n_x,) or full Q matrix (n_x, n_x).
             control_cost: Diagonal R weights (n_u,) or full R matrix (n_u, n_u).
-            dt: Time step.
-            A_dynamics: Optional full A matrix (n_x, n_x). Defaults to I.
-            B_dynamics: Optional full B matrix (n_x, n_u). Defaults to dt * I.
+            dt: Time step (used for validation against the plant).
+            A_dynamics: Full A matrix (n_x, n_x). Required unless a scenario with a
+                plant derives it.
+            B_dynamics: Full B matrix (n_x, n_u). Required unless a scenario with a
+                plant derives it.
             constraints: Optional dict with ``upper`` and ``lower`` bound lists.
 
         Args:
@@ -369,15 +373,15 @@ class MPC_LTI_Base(MPC_LTI):
         """
         bk = backend or NumpyBackend()
         cfg = cls.parse_config(config)
+        if cfg.A_dynamics is None or cfg.B_dynamics is None:
+            raise ValueError(
+                "MPC_LTI: A_dynamics and B_dynamics are required — declare them in the config, "
+                "or build the controller through a scenario with a plant (which derives them)."
+            )
+        A = bk.array(cfg.A_dynamics)
+        B = bk.array(cfg.B_dynamics)
         Q = parse_matrix(bk, cfg.state_cost)
         n = Q.shape[0]
-        A = bk.array(cfg.A_dynamics) if cfg.A_dynamics is not None else bk.eye(n)
-        if cfg.B_dynamics is not None:
-            B = bk.array(cfg.B_dynamics)
-        elif cfg.dt is not None:
-            B = cfg.dt * bk.eye(n)
-        else:
-            raise ValueError("MPC_LTI: no B_dynamics and no dt — standalone use requires one of them")
         ctrl = cls(
             horizon=cfg.horizon,
             control_cost_matrix=parse_matrix(bk, cfg.control_cost),
