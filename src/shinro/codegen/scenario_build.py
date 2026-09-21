@@ -170,6 +170,21 @@ GATE_A_TICKS = 50
 TOL_GATE_A = 1e-9
 
 
+def _resolve_native_ref(graph_dir: Path, optimize: str, name: str, explicit: str | None) -> tuple[Path, dict] | None:
+    """Locate the oracle-verified native record for a cross build (or ``None``).
+
+    Explicit ``--native-record`` wins; otherwise the per-mode convention: the
+    sibling ``<graph_dir>/../<optimize>-native/lib/<name>.deployment.json``.
+    """
+    path = Path(explicit) if explicit else graph_dir.parent / f"{optimize}-native" / "lib" / f"{name}.deployment.json"
+    if not path.exists():
+        return None
+    try:
+        return path, json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
 def _run_gate_a(cg, spec: dict, seed: int) -> int | None:
     """Pre-compile gate A: ``interpret(cg)`` vs the live estimator+controller.
 
@@ -206,6 +221,7 @@ def build_scenario(
     target: str | None = None,
     solver_dir: str | None = None,
     solver: str | None = None,
+    native_record: str | None = None,
     artifact_name: str | None = None,
     samples: int = 20,
     seed: int = 0,
@@ -225,6 +241,9 @@ def build_scenario(
         solver_dir: Override ``[compile].solver_dir`` (pre-baked OSQP solver dir).
         solver: Override ``[compile].solver`` — bake this solver on demand
             (e.g. ``"emosqp"``) into ``<graph_dir>/emosqp``.
+        native_record: For a cross-compiled build, path to the oracle-verified
+            native record to reference (default: the per-mode sibling
+            ``<graph_dir>/../<optimize>-native/lib/<name>.deployment.json``).
         artifact_name: Override ``[compile].artifact_name`` — the kernel is
             installed as ``lib/<name>.so`` (default ``libbase`` → ``libbase.so``).
         samples: Random inputs for the oracle (default 20).
@@ -255,6 +274,7 @@ def build_scenario(
     # Build flags: CLI > [compile] TOML > defaults.
     opt, tgt, sdir, name = "debug", "native", None, "libbase"
     solver_name: str | None = None
+    spec: dict | None = None
     if scenario:
         try:
             spec = load_scenario(scenario)
@@ -296,7 +316,7 @@ def build_scenario(
             )
             return EXIT_USAGE
         if solver_name:
-            if not scenario:
+            if spec is None:
                 print(
                     "ERROR: [compile].solver needs --scenario (it bakes from the "
                     "scenario's controller config).",
@@ -323,6 +343,7 @@ def build_scenario(
     # compile time or stamping a "verified" record for the wrong math.
     fresh_cg = None
     if scenario:
+        assert spec is not None  # set whenever scenario is, above
         try:
             fresh_cg = _check_graph_integrity(scenario, graph_dir)
         except (ValueError, FileNotFoundError) as e:
@@ -346,6 +367,7 @@ def build_scenario(
 
     oracle: dict | None = None
     if scenario:
+        assert spec is not None  # set whenever scenario is, above
         if tgt == "native":
             # [compile].oracle_tol overrides the tier default for QP graphs
             # whose settling at this problem size is coarser than 1e-3.
@@ -386,7 +408,16 @@ def build_scenario(
         )
         oracle = {"status": "not_run", "reason": "unverified build (--scenario omitted)"}
 
-    stamp(prefix_path, RUNTIME, name, oracle=oracle)
+    native_ref = None
+    if scenario and tgt != "native":
+        native_ref = _resolve_native_ref(graph_dir, opt, name, native_record)
+        if native_ref is None:
+            print(
+                f"NOTE: no native record to reference (looked for <out>/../{opt}-native/lib/{name}.deployment.json; "
+                f"pass --native-record <path> to point at the oracle-verified native build)",
+                file=sys.stderr,
+            )
+    stamp(prefix_path, RUNTIME, name, oracle=oracle, native_record=native_ref)
     record = prefix_path / "lib" / f"{name}.deployment.json"
     if verify(record, graph_path=graph_path) != 0:
         print("VERIFY FAILED: deployment record does not match artifacts", file=sys.stderr)
@@ -403,6 +434,7 @@ def main() -> int:
     parser.add_argument("--target", help="override [compile].target (zig triple, e.g. aarch64-linux-gnu)")
     parser.add_argument("--solver-dir", help="override [compile].solver_dir (pre-baked OSQP solver dir)")
     parser.add_argument("--solver", help="override [compile].solver (bake on demand, e.g. emosqp)")
+    parser.add_argument("--native-record", help="cross build: path to the oracle-verified native record to reference")
     parser.add_argument("--artifact-name", help="override [compile].artifact_name (kernel installs as lib/<name>.so)")
     parser.add_argument("--samples", type=int, default=20, help="random inputs for the oracle (default 20)")
     parser.add_argument("--seed", type=int, default=0, help="RNG seed for the oracle (default 0)")
@@ -415,6 +447,7 @@ def main() -> int:
         target=args.target,
         solver_dir=args.solver_dir,
         solver=args.solver,
+        native_record=args.native_record,
         artifact_name=args.artifact_name,
         samples=args.samples,
         seed=args.seed,

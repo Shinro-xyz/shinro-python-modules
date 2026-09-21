@@ -30,6 +30,7 @@ def compile_scenario(
     target: str | None = None,
     solver_dir: str | None = None,
     solver: str | None = None,
+    native_record: str | None = None,
     artifact_name: str | None = None,
     samples: int = 20,
     seed: int = 0,
@@ -44,6 +45,7 @@ def compile_scenario(
         target: Override ``[compile].target`` (zig triple).
         solver_dir: Override ``[compile].solver_dir`` (pre-baked OSQP solver dir).
         solver: Override ``[compile].solver`` (bake on demand, e.g. ``emosqp``).
+        native_record: For a cross build, path to the oracle-verified native record.
         artifact_name: Override ``[compile].artifact_name``.
         samples: Random inputs for the oracle (default 20).
         seed: RNG seed for the oracle (default 0).
@@ -77,6 +79,7 @@ def compile_scenario(
         target=target,
         solver_dir=solver_dir,
         solver=solver,
+        native_record=native_record,
         artifact_name=artifact_name,
         samples=samples,
         seed=seed,
@@ -91,6 +94,7 @@ def main() -> int:
     parser.add_argument("--target", help="override [compile].target (zig triple, e.g. aarch64-linux-gnu)")
     parser.add_argument("--solver-dir", help="override [compile].solver_dir (pre-baked OSQP solver dir)")
     parser.add_argument("--solver", help="override [compile].solver (bake on demand, e.g. emosqp)")
+    parser.add_argument("--native-record", help="cross build: path to the oracle-verified native record to reference")
     parser.add_argument("--artifact-name", help="override [compile].artifact_name (kernel installs as lib/<name>.so)")
     parser.add_argument("--samples", type=int, default=20, help="random inputs for the oracle (default 20)")
     parser.add_argument("--seed", type=int, default=0, help="RNG seed for the oracle (default 0)")
@@ -102,6 +106,7 @@ def main() -> int:
         target=args.target,
         solver_dir=args.solver_dir,
         solver=args.solver,
+        native_record=args.native_record,
         artifact_name=args.artifact_name,
         samples=args.samples,
         seed=args.seed,

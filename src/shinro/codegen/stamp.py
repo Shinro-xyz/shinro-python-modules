@@ -74,7 +74,13 @@ def _master(config_slot: str, graph_slot: str, solver_slot: str, binary_slot: st
     )
 
 
-def stamp(prefix: Path, build_root: Path, name: str = "libbase", oracle: dict | None = None) -> dict:
+def stamp(
+    prefix: Path,
+    build_root: Path,
+    name: str = "libbase",
+    oracle: dict | None = None,
+    native_record: tuple[Path, dict] | None = None,
+) -> dict:
     """Compute and write the deployment record for a built prefix dir.
 
     Args:
@@ -88,6 +94,12 @@ def stamp(prefix: Path, build_root: Path, name: str = "libbase", oracle: dict | 
             ``{"status": "passed", "samples": 20, ...}`` or
             ``{"status": "not_run", "reason": "cross-compiled"}``. When
             ``None`` the record notes the oracle was not run.
+        native_record: Optional ``(path, record_dict)`` of the oracle-verified
+            *native* build of the same config/graph/solver — set for a
+            cross-compiled build, so the record references the verification it
+            cannot run itself. Adds a top-level ``"native_ref"`` block with the
+            native master hash and whether the config/graph/solver slots agree
+            (only the binary slot legitimately differs across targets).
 
     Returns:
         The deployment record dict (also written to disk).
@@ -150,6 +162,19 @@ def stamp(prefix: Path, build_root: Path, name: str = "libbase", oracle: dict | 
         "solver": manifest.get("solver"),
         "binary": {"sha256": binary_slot, "path": str(so_path)},
     }
+
+    # A cross-compiled build cannot run the ctypes oracle here; when the
+    # oracle-verified native build of the same config/graph/solver is known,
+    # reference it so the record points at the verification that does cover it.
+    if native_record is not None:
+        npath, nrec = native_record
+        nslots = nrec.get("slots") or {}
+        matches = all(record["slots"][k] == nslots.get(k) for k in ("config", "graph", "solver"))
+        record["native_ref"] = {
+            "record": str(npath),
+            "master_hash": nrec.get("master_hash"),
+            "slots_match": matches,
+        }
 
     record_path = lib_dir / f"{name}.deployment.json"
     record_path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")

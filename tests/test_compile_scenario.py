@@ -87,6 +87,36 @@ def test_load_scenario_rejects_unknown_solver(tmp_path):
         load_scenario(str(_scenario_toml(tmp_path, '[compile]\nn_x = 3\nn_u = 3\nsolver = "bogus"\n')))
 
 
+def test_resolve_native_ref_none_when_absent(tmp_path):
+    from shinro.codegen.scenario_build import _resolve_native_ref
+
+    assert _resolve_native_ref(tmp_path / "debug-aarch64-linux-gnu", "debug", "libbase", None) is None
+
+
+def test_resolve_native_ref_finds_per_mode_sibling(tmp_path):
+    from shinro.codegen.scenario_build import _resolve_native_ref
+
+    rec = tmp_path / "debug-native" / "lib" / "libbase.deployment.json"
+    rec.parent.mkdir(parents=True)
+    rec.write_text(json.dumps({"master_hash": "nativehash", "slots": {}}))
+
+    got = _resolve_native_ref(tmp_path / "debug-aarch64-linux-gnu", "debug", "libbase", None)
+    assert got is not None
+    path, data = got
+    assert path == rec
+    assert data["master_hash"] == "nativehash"
+
+
+def test_resolve_native_ref_prefers_explicit(tmp_path):
+    from shinro.codegen.scenario_build import _resolve_native_ref
+
+    explicit = tmp_path / "elsewhere.json"
+    explicit.write_text(json.dumps({"master_hash": "explicit", "slots": {}}))
+
+    got = _resolve_native_ref(tmp_path / "debug-aarch64-linux-gnu", "debug", "libbase", str(explicit))
+    assert got is not None and got[0] == explicit
+
+
 def test_gen_scenario_matches_shipped_graph(tmp_path):
     """The gen stage reproduces the shipped KF+LQR graph node-for-node."""
     from scripts.gen_base import build_base_graph
@@ -206,6 +236,27 @@ def test_e2e_mpc_bakes_solver_on_demand(tmp_path):
     build2 = _run(BUILD, str(out), "--scenario", str(MPC_SCENARIO))
     assert build2.returncode == 0, build2.stderr
     assert "reusing current emosqp bake" in build2.stdout
+
+
+@pytest.mark.skipif(shutil.which("zig") is None, reason="zig not on PATH")
+def test_e2e_cross_references_native(tmp_path):
+    """A cross build records a native_ref to the oracle-verified native record."""
+    native = tmp_path / "debug-native"
+    cross = tmp_path / "debug-aarch64-linux-gnu"
+    assert _run(GEN, str(SCENARIO), "--out", str(native)).returncode == 0
+    assert _run(BUILD, str(native), "--scenario", str(SCENARIO)).returncode == 0
+    assert _run(GEN, str(SCENARIO), "--out", str(cross)).returncode == 0
+
+    build = _run(BUILD, str(cross), "--scenario", str(SCENARIO), "--target", "aarch64-linux-gnu")
+    assert build.returncode == 0, build.stderr
+
+    nrec = json.loads((native / "lib" / "libbase.deployment.json").read_text())
+    crec = json.loads((cross / "lib" / "libbase.deployment.json").read_text())
+    assert crec["oracle"]["status"] == "not_run"
+    assert crec["oracle"]["reason"] == "cross-compiled"
+    ref = crec["native_ref"]
+    assert ref["master_hash"] == nrec["master_hash"]
+    assert ref["slots_match"] is True
 
 
 @pytest.mark.skipif(shutil.which("zig") is None, reason="zig not on PATH")
