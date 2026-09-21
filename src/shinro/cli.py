@@ -19,6 +19,10 @@ Each verb is a thin dispatcher over the existing package APIs
 :mod:`shinro.codegen.verify`, :class:`shinro.factories.ScenarioFactory`) — this
 module owns no pipeline logic of its own.
 
+Third-party components: ``--import MODULE`` (repeatable) imports a module
+before the verb runs, so a ``@register_*`` component defined outside shinro is
+visible to the registry. Accepted both before and after the verb name.
+
 Exit codes: 0 ok · 1 gate failed (untraceable · behavior · drift) · 2
 usage/config · 3 oracle mismatch · 4 build/verify failure · 5 zig missing.
 """
@@ -43,6 +47,7 @@ from shinro.codegen.component_cli import (
 from shinro.codegen.scenario_gen import load_scenario
 from shinro.codegen.verify import verify
 from shinro.utils.config_resolver import resolve_config_path
+from shinro.utils.plugin_loader import PluginImportError, import_modules
 
 EXIT_GATE = 1
 
@@ -215,12 +220,32 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     return verify(record, Path(args.binary) if args.binary else None, graph, solver_dir)
 
 
+_IMPORT_HELP = "import a module before the verb runs so its @register_* components are visible (repeatable)"
+
+
+def _add_import_flag(parser: argparse.ArgumentParser, default: object) -> None:
+    """Add ``--import MODULE``. Accepted both before and after the verb name.
+
+    On subparsers the default is ``argparse.SUPPRESS`` so a flag given before the
+    verb is not clobbered; when given after the verb it appends to the same list.
+    """
+    parser.add_argument(
+        "--import",
+        action="append",
+        default=default,
+        dest="import_modules",
+        metavar="MODULE",
+        help=_IMPORT_HELP,
+    )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="shinro",
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    _add_import_flag(parser, default=[])
     sub = parser.add_subparsers(dest="verb", required=True)
 
     c = sub.add_parser("check", help="construct a component (or scenario) and print the trace contract")
@@ -260,11 +285,21 @@ def _build_parser() -> argparse.ArgumentParser:
     v.add_argument("--graph", help="graph_data.zig to verify (default: <out>/graph_data.zig)")
     v.add_argument("--solver-dir", help="baked solver dir to verify")
 
+    # Also accepted after the verb (`shinro build x.toml --import my_pkg`);
+    # SUPPRESS keeps a pre-verb flag from being overwritten.
+    for p in (c, r, t, b, v):
+        _add_import_flag(p, default=argparse.SUPPRESS)
+
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
+    try:
+        import_modules(args.import_modules)
+    except PluginImportError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return EXIT_USAGE
     handlers = {
         "check": _cmd_check,
         "run": _cmd_run,

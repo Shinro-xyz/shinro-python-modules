@@ -10,6 +10,12 @@ field or pass to a factory. The **class** is the Python class behind it.
 Several registered names may map to the same class (e.g. `MPC_LTI` and
 `MPC_DeltaU` are two registration names of the same `MPC_LTI_DeltaU` class).
 
+Which components the CLI knows about depends on what was imported before
+dispatch — shinro imports only its built-ins. A component registered in a
+third-party package is made visible with `--import MODULE` (repeatable), e.g.
+`shinro build scenario.toml --import my_pkg.components`. See
+`factories/__init__.py` (the built-in imports) and `utils/plugin_loader.py`.
+
 ## Controllers
 
 Registered via `register_controller`; created with `ControllerFactory`. All

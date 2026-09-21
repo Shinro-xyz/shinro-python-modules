@@ -5,12 +5,14 @@ stay declarative. These helpers unpack the ``StepRecord`` history and apply the
 declared thresholds.
 """
 
+from collections.abc import Iterable
+
 import numpy as np
 
 from .scenario_runner import StepRecord
 
 
-def tracking_error(records: list[StepRecord]) -> np.ndarray:
+def tracking_error(records: Iterable[StepRecord]) -> np.ndarray:
     """Per-step tracking error ``||reference - plant_state||``.
 
     Args:
@@ -27,7 +29,7 @@ def tracking_error(records: list[StepRecord]) -> np.ndarray:
     )
 
 
-def estimator_error(records: list[StepRecord]) -> np.ndarray:
+def estimator_error(records: Iterable[StepRecord]) -> np.ndarray:
     """Per-step estimator error ``||estimated - true_state||``.
 
     Args:
@@ -44,7 +46,7 @@ def estimator_error(records: list[StepRecord]) -> np.ndarray:
     )
 
 
-def assert_steady_state(records: list[StepRecord], tolerance: float, tail: int = 100) -> None:
+def assert_steady_state(records: Iterable[StepRecord], tolerance: float, tail: int = 100) -> None:
     """Assert the mean tracking error over the last ``tail`` steps is bounded.
 
     Args:
@@ -60,7 +62,7 @@ def assert_steady_state(records: list[StepRecord], tolerance: float, tail: int =
     assert mean <= tolerance, f"steady-state tracking error {mean:.4f} > tolerance {tolerance}"
 
 
-def assert_estimator_recovery(records: list[StepRecord], tolerance: float, tail: int = 100) -> None:
+def assert_estimator_recovery(records: Iterable[StepRecord], tolerance: float, tail: int = 100) -> None:
     """Assert the estimator error stays bounded over the trailing steps.
 
     Args:
@@ -76,7 +78,7 @@ def assert_estimator_recovery(records: list[StepRecord], tolerance: float, tail:
     assert mean <= tolerance, f"estimator error {mean:.4f} > tolerance {tolerance}"
 
 
-def assert_finite_state(records: list[StepRecord]) -> None:
+def assert_finite_state(records: Iterable[StepRecord]) -> None:
     """Assert every plant state in the history is finite.
 
     Args:

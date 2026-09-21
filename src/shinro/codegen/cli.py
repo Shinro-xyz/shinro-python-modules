@@ -8,6 +8,10 @@ that ``make compile`` runs in a checkout:
 2. **build** — ``zig build`` the comptime VM against that graph, then
    integrity-check, oracle-verify, stamp, and verify the deployment record.
 
+Third-party components: ``--import MODULE`` (repeatable) imports a module
+before compiling, so a ``@register_*`` component defined outside shinro is
+visible to the registry.
+
 Requires ``zig`` on PATH for the build stage. Exit codes: 0 ok · 1
 untraceable · 2 usage/config · 3 oracle mismatch · 4 build/verify failure ·
 5 zig missing.
@@ -20,6 +24,7 @@ import sys
 
 from shinro.codegen.scenario_build import build_scenario
 from shinro.codegen.scenario_gen import EXIT_UNTRACEABLE, EXIT_USAGE, gen_scenario
+from shinro.utils.plugin_loader import PluginImportError, import_modules
 
 
 def compile_scenario(
@@ -98,7 +103,20 @@ def main() -> int:
     parser.add_argument("--artifact-name", help="override [compile].artifact_name (kernel installs as lib/<name>.so)")
     parser.add_argument("--samples", type=int, default=20, help="random inputs for the oracle (default 20)")
     parser.add_argument("--seed", type=int, default=0, help="RNG seed for the oracle (default 0)")
+    parser.add_argument(
+        "--import",
+        action="append",
+        default=[],
+        dest="import_modules",
+        metavar="MODULE",
+        help="import a module before compiling so its @register_* components are visible (repeatable)",
+    )
     args = parser.parse_args()
+    try:
+        import_modules(args.import_modules)
+    except PluginImportError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return EXIT_USAGE
     return compile_scenario(
         args.scenario,
         args.out,

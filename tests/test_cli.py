@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from shinro.cli import _resolve_out, main
+from shinro.factories.registry import _CONTROLLER_REGISTRY
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CONFIG = REPO_ROOT / "samples"
@@ -151,3 +152,81 @@ class TestBuildVerifyE2E:
             assert "VERIFY FAILED" in capsys.readouterr().out
         finally:
             config.write_bytes(original)
+
+
+class TestImportFlag:
+    """``--import MODULE`` makes a third-party @register_* component visible.
+
+    shinro imports only its built-ins, so without the flag the registry lookup
+    fails; the flag is the CLI's equivalent of a driver script's ``import``.
+    """
+
+    MOD = "shinro_ext_component"
+    TYPE = "ExtP"
+
+    @pytest.fixture
+    def ext_module(self, tmp_path, monkeypatch):
+        """Create a real importable module that registers a controller."""
+        (tmp_path / f"{self.MOD}.py").write_text(
+            "from dataclasses import dataclass\n"
+            "from shinro.components import Controller\n"
+            "from shinro.factories.registry import register_controller\n"
+            "from shinro.utils.array_backend import NumpyBackend, parse_matrix\n"
+            "\n"
+            "@dataclass(frozen=True)\n"
+            "class ExtCfg:\n"
+            "    gain: list[list[float]]\n"
+            "    name: str = 'extp'\n"
+            "\n"
+            "@register_controller('ExtP')\n"
+            "class ExtP(Controller):\n"
+            "    Config = ExtCfg\n"
+            "\n"
+            "    def __init__(self, gain_matrix, backend=None):\n"
+            "        self.bk = backend or NumpyBackend()\n"
+            "        self.K = gain_matrix\n"
+            "\n"
+            "    def compute(self, current_state, target_state=None):\n"
+            "        if target_state is None:\n"
+            "            target_state = self.bk.zeros_like(current_state)\n"
+            "        return self.K @ (target_state - current_state)\n"
+            "\n"
+            "    @classmethod\n"
+            "    def from_config(cls, config, backend=None):\n"
+            "        bk = backend or NumpyBackend()\n"
+            "        return cls(parse_matrix(bk, cls.parse_config(config).gain), backend=bk)\n"
+        )
+        monkeypatch.syspath_prepend(str(tmp_path))
+        yield self.MOD
+        # The decorator side-effect persists in the registry, so undo both.
+        sys.modules.pop(self.MOD, None)
+        _CONTROLLER_REGISTRY.pop(self.TYPE, None)
+
+    @pytest.fixture
+    def ext_config(self, tmp_path):
+        cfg = tmp_path / "extp.toml"
+        cfg.write_text("type = 'ExtP'\ngain = [[1.0, 0.0], [0.0, 1.0]]\n")
+        return str(cfg)
+
+    def test_flag_after_verb(self, ext_module, ext_config, capsys):
+        assert main(["check", ext_config, "--import", ext_module]) == 0
+        assert f"OK: {self.TYPE} (controller) constructs" in capsys.readouterr().out
+
+    def test_flag_before_verb(self, ext_module, ext_config, capsys):
+        assert main(["--import", ext_module, "check", ext_config]) == 0
+        assert f"OK: {self.TYPE} (controller) constructs" in capsys.readouterr().out
+
+    def test_invisible_without_flag(self, ext_module, ext_config, capsys):
+        """The import is what enables the type — without it the lookup fails."""
+        assert main(["check", ext_config]) == 2
+        assert self.TYPE in capsys.readouterr().err
+
+    def test_inventory_lists_imported_type(self, ext_module, capsys):
+        assert main(["trace", "--import", ext_module]) == 0
+        assert self.TYPE in capsys.readouterr().out
+
+    def test_unimportable_module_is_clean_error(self, ext_config, capsys):
+        assert main(["check", ext_config, "--import", "definitely_not_a_module_xyz"]) == 2
+        err = capsys.readouterr().err
+        assert "cannot import" in err
+        assert "definitely_not_a_module_xyz" in err

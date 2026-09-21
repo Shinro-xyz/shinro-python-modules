@@ -119,6 +119,28 @@ This chains trace → compose → oracle-verify → lower to a Zig comptime VM �
 — a C-ABI entry point ready for deployment (e.g. to a Cake module on a
 Raspberry Pi). See [`codegen.md`](./codegen.md) for the full walkthrough.
 
+## 5. Third-party components on the CLI
+
+A component you register in your own package (`@register_controller("MyP")`)
+isn't visible to the CLI by default — shinro imports only its built-ins. Pass
+`--import` (repeatable) to import your module before the verb runs:
+
+```bash
+shinro --import my_pkg.components build my_scenario.toml
+shinro build my_scenario.toml --import my_pkg.components   # also accepted after the verb
+```
+
+Accepted before *or* after the verb name, and by `shinro-compile` too. An
+unimportable module is a clean error, not a traceback:
+
+```bash
+$ shinro check cfg.toml --import my_pkg.typo
+ERROR: cannot import 'my_pkg.typo': ModuleNotFoundError: No module named 'my_pkg'
+```
+
+This is the flag equivalent of a driver script's `import my_pkg` — the scenario
+TOML, tracing, and lowering are all unchanged.
+
 ## What next
 
 - **[`how-it-works.md`](./how-it-works.md)** — the five ABCs and how data flows
