@@ -391,9 +391,11 @@ make compile SCENARIO=tests/integration/scenarios/base_tracking.toml
    recurrent state by attr-diff, so a new controller's integral or a new
    estimator's observer state compose with zero per-component declaration.
 2. **`scripts/build_scenario.py`** (zig) — pre-flight zig check, build flags
-   from `[compile]` (CLI > TOML > default), `zig build -Dgraph=<abs>`, then
-   **verifies before stamping**: re-gens the graph in-process and byte-compares
-   manifests (integrity), runs the ctypes oracle (`shinro_step` vs
+   from `[compile]` (CLI > TOML > default), then **verifies before stamping**:
+   re-gens the graph in-process and byte-compares manifests (integrity), runs
+   **gate A** (the composed graph vs the live estimator/controller over N ticks
+   — the tracer/composer must reproduce the component math), `zig build
+   -Dgraph=<abs>`, then the ctypes **oracle B** (`shinro_step` vs
    `interpret()`, tol 1e-12 / 1e-3 for QP), then `stamp_deployment` +
    `verify_deployment`. The oracle outcome is recorded in the deployment
    record — a cross-compiled build records `not_run`, since it cannot be
@@ -436,7 +438,7 @@ APIs, and each maps to one gate:
 | `shinro check <cfg.toml>` | constructs — a component config goes through its factory `create()` + the inferred trace contract; a scenario TOML goes through `ScenarioFactory.build()` and reports the composed roles |
 | `shinro run <scenario.toml>` | behavior — `Scenario.run()` then `SimResult.check()` against `[scenario.tolerance]`; non-zero exit when a tolerance is exceeded |
 | `shinro trace <cfg.toml>` | trace fidelity — `trace_node` op coverage + the `interpret()`-vs-live oracle (bit-exact) |
-| `shinro build <scenario.toml>` | lowering — trace → compose → lower → `zig build` → oracle → stamp → verify |
+| `shinro build <scenario.toml>` | lowering — trace → compose → lower → gate A (interpret vs live) → `zig build` → oracle B → stamp → verify |
 | `shinro verify <scenario.toml>` | drift — re-hash the stamped artifacts against the deployment record |
 
 `build`/`verify` default `--out` to `build/<scenario-stem>/<optimize>-<target>`
