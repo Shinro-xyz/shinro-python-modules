@@ -13,21 +13,32 @@ and — when ``--scenario`` is given — verifies the result before stamping:
    ``aarch64-linux-gnu``). A QP (MPC) graph needs a solver: ``solver =
    "emosqp"`` bakes one on demand into ``<graph_dir>/emosqp`` (reused when
    current), while ``solver_dir`` consumes a pre-baked tree.
-3. **Build** — ``zig build -Dgraph=<abs path>`` into an isolated prefix, so the
+3. **Integrity check** — re-runs the gen stage in-process and byte-compares the
+   fresh graph manifest against the on-disk one, proving the on-disk graph is
+   exactly what this scenario produces (deterministic lowering).
+4. **Gate A** — drives the live estimator + controller and ``interpret(composed
+   graph)`` over N ticks and compares the control: does the graph reproduce the
+   components' math? Mismatch → exit 3, *before* any compile time is spent. Only
+   for ``closed_loop_tracking`` — a policy-only graph has no live pair.
+5. **Build** — ``zig build -Dgraph=<abs path>`` into an isolated prefix, so the
    shared ``src/shinro/runtime/graph_data.zig`` is never touched.
-4. **Integrity check** — re-runs the gen stage in-process and byte-compares the
-   fresh graph manifest against the on-disk one, proving the ``.so`` was built
-   from exactly the graph this scenario produces (deterministic lowering).
-5. **Oracle B** — loads the ``.so`` via ctypes and compares ``shinro_step``
+6. **Oracle B** — loads the ``.so`` via ctypes and compares ``shinro_step``
    against ``interpret()`` on N random inputs across every output and state
    port (tolerance 1e-12; 1e-3 for QP graphs). Mismatch → exit 3. Skipped
    for non-native targets — a cross-compiled ``.so`` cannot be dlopen'd on
    the host, so the oracle only runs when the target matches the host
    architecture (``native`` or an explicit host triple); the integrity
    check still runs either way.
-6. **Stamp + verify** — writes the deployment record (master hash over
+7. **Stamp + verify** — writes the deployment record (master hash over
    config/graph/solver/binary, plus the build provenance and the oracle
    outcome) and re-hashes the artifacts against it.
+
+The two oracles are complementary layers of *equivalence*: **gate A** (pre-
+compile, numpy) proves ``interpret(graph) == the live components`` — the
+tracer/composer is faithful; **oracle B** (post-compile) proves
+``.so == interpret(graph)`` — the Zig VM is faithful. Neither alone certifies
+the deployed artifact; only both together, plus the integrity check, make the
+stamp's "verified" claim true.
 
 Without ``--scenario`` the build is stamped only — no oracle, no integrity
 check — and prints a loud warning that the artifact is unverified.
@@ -150,8 +161,45 @@ def _check_graph_integrity(scenario_path: str, graph_dir: Path):
     return fresh_cg
 
 
+#: Gate A runs this many ticks; > 1 so a frozen recurrence (identical at tick
+#: 0) only passes if the graph actually threads state back correctly.
+GATE_A_TICKS = 50
+#: Gate A tolerance. ``interpret()`` and the live components run the same numpy
+#: ops in the same order, so agreement is bit-exact in practice; a small epsilon
+#: leaves room for platform FP without masking a real divergence.
+TOL_GATE_A = 1e-9
+
+
+def _run_gate_a(cg, spec: dict, seed: int) -> int | None:
+    """Pre-compile gate A: ``interpret(cg)`` vs the live estimator+controller.
+
+    Returns an exit code on mismatch, or ``None`` to proceed. Only the
+    ``closed_loop_tracking`` recipe has an estimator+controller pair to drive
+    live; a policy-only graph has no live closed loop to compare.
+    """
+    from shinro.codegen.gate_a import run_gate_a
+    from shinro.codegen.recipes import live_components
+
+    try:
+        est, ctrl, n_x, n_u, limits = live_components(spec)
+    except (ValueError, FileNotFoundError) as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return EXIT_USAGE
+    max_err = run_gate_a(cg, est, ctrl, n_x, n_u, input_limits=limits, ticks=GATE_A_TICKS, seed=seed)
+    if max_err > TOL_GATE_A:
+        print(
+            f"GATE A MISMATCH: composed graph diverged from the live components "
+            f"(max abs err {max_err:.3e} > {TOL_GATE_A:.1e}); the tracer/composer does "
+            f"not reproduce the component math — refusing to stamp.",
+            file=sys.stderr,
+        )
+        return EXIT_ORACLE
+    print(f"gate A (interpret vs live): {GATE_A_TICKS} ticks, max abs err {max_err:.3e} ✓")
+    return None
+
+
 def build_scenario(
-    graph_dir: str,
+    graph_dir: str | Path,
     scenario: str | None = None,
     prefix: str | None = None,
     optimize: str | None = None,
@@ -268,6 +316,26 @@ def build_scenario(
         )
         return EXIT_USAGE
 
+    # Pre-compile verification (scenario required): (1) the on-disk graph is
+    # exactly what the scenario produces (integrity), then (2) the composed
+    # graph reproduces the live estimator+controller math (gate A). Both run
+    # before the zig build so a trace/compose bug fails fast — without spending
+    # compile time or stamping a "verified" record for the wrong math.
+    fresh_cg = None
+    if scenario:
+        try:
+            fresh_cg = _check_graph_integrity(scenario, graph_dir)
+        except (ValueError, FileNotFoundError) as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            return EXIT_USAGE
+        except NotImplementedError as e:
+            print(f"TRACE FAILED: {e}", file=sys.stderr)
+            return EXIT_USAGE
+        if spec["compile"]["recipe"] == "closed_loop_tracking":
+            rc = _run_gate_a(fresh_cg, spec, seed)
+            if rc is not None:
+                return rc
+
     prefix_path = Path(prefix) if prefix else graph_dir
 
     try:
@@ -278,14 +346,6 @@ def build_scenario(
 
     oracle: dict | None = None
     if scenario:
-        try:
-            fresh_cg = _check_graph_integrity(scenario, graph_dir)
-        except (ValueError, FileNotFoundError) as e:
-            print(f"ERROR: {e}", file=sys.stderr)
-            return EXIT_USAGE
-        except NotImplementedError as e:
-            print(f"TRACE FAILED: {e}", file=sys.stderr)
-            return EXIT_USAGE
         if tgt == "native":
             # [compile].oracle_tol overrides the tier default for QP graphs
             # whose settling at this problem size is coarser than 1e-3.

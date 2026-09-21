@@ -98,12 +98,27 @@ def build_composed_graph(
     Returns:
         A :class:`ComposedGraph` for one closed-loop step.
     """
+    est, ctrl = instantiate(estimator_config, controller_config, plant)
+    return build_composed_graph_from_instances(est, ctrl, n_x, n_u, input_limits)
+
+
+def instantiate(estimator_config, controller_config, plant=None):
+    """Instantiate the estimator + controller (attaching the plant to the controller).
+
+    The single construction site: :func:`build_composed_graph` composes the
+    traced graphs from these instances, and gate A
+    (:mod:`shinro.codegen.gate_a`) drives the *same* instances live, so the
+    graph and the live loop cannot be built from different components.
+    """
     est = _factory(EstimatorFactory, estimator_config)
     ctrl = _factory(ControllerFactory, controller_config)
-
     if plant is not None and hasattr(ctrl, "attach_plant"):
         ctrl.attach_plant(plant)
+    return est, ctrl
 
+
+def build_composed_graph_from_instances(est, ctrl, n_x, n_u, input_limits=None):
+    """Trace + compose already-instantiated components into a closed-loop step graph."""
     est_input_shapes = {"measurement": (n_x, 1), "control_input": (n_u, 1)}
     ctrl_input_shapes = {
         name: (n_u,) if name == "u_prev" else (n_x,)

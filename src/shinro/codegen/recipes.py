@@ -35,7 +35,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from shinro.codegen import build_composed_graph, lower_zig
+from shinro.codegen import lower_zig
+from shinro.codegen.build import build_composed_graph, instantiate
 from shinro.codegen.runtime_paths import runtime_root
 from shinro.factories.registry import _CONTROLLER_REGISTRY, _ESTIMATOR_REGISTRY, _PLANT_REGISTRY
 from shinro.utils.array_backend import NumpyBackend
@@ -131,6 +132,19 @@ def closed_loop_tracking(spec: dict) -> ComposedGraph:
     loud error, mirroring the ``[scenario].dt`` check, so a stale dimension
     cannot silently bake the wrong graph size.
     """
+    est_cfg, ctrl_cfg, n_x, n_u, limits, plant = closed_loop_configs(spec)
+    return build_composed_graph(est_cfg, ctrl_cfg, n_x, n_u, input_limits=limits, plant=plant)
+
+
+def closed_loop_configs(spec: dict) -> tuple:
+    """Resolve ``(est_cfg, ctrl_cfg, n_x, n_u, input_limits, plant)`` for a spec.
+
+    The shared front half of the ``closed_loop_tracking`` recipe. A plant-only
+    ``[plant]`` section (``type`` + ``config``) is authoritative for the dims and
+    model; a declared ``[compile]`` dim that disagrees is a loud error.
+    :func:`live_components` reuses this so gate A drives exactly the components
+    the graph was traced from.
+    """
     n_x = spec["compile"]["n_x"]
     n_u = spec["compile"]["n_u"]
     est_cfg = spec["estimator_config"]
@@ -176,8 +190,18 @@ def closed_loop_tracking(spec: dict) -> ComposedGraph:
         raise ValueError(
             f"{spec['scenario_path']}: cannot determine n_x/n_u — set [compile] n_x/n_u or add a [plant] section"
         )
+    return est_cfg, ctrl_cfg, n_x, n_u, spec["input_limits"], plant
 
-    return build_composed_graph(est_cfg, ctrl_cfg, n_x, n_u, input_limits=spec["input_limits"], plant=plant)
+
+def live_components(spec: dict) -> tuple:
+    """Instantiate the live estimator/controller for gate A.
+
+    Returns ``(est, ctrl, n_x, n_u, input_limits)`` — the same instances
+    :func:`closed_loop_tracking` traces, rebuilt from the same configs.
+    """
+    est_cfg, ctrl_cfg, n_x, n_u, limits, plant = closed_loop_configs(spec)
+    est, ctrl = instantiate(est_cfg, ctrl_cfg, plant)
+    return est, ctrl, n_x, n_u, limits
 
 
 @register_graph("policy_only")
