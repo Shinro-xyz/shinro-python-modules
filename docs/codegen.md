@@ -399,10 +399,11 @@ make compile SCENARIO=tests/integration/scenarios/base_tracking.toml
    record — a cross-compiled build records `not_run`, since it cannot be
    `dlopen`'d on the host.
 
-The `[compile]` section is the build spec: `n_x`/`n_u` (baked at trace time),
-`optimize` (`debug`/`release` → ReleaseFast only), `target` (cross-compile),
-`solver_dir` (required for QP graphs). Unknown keys and invalid `optimize`
-values are loud errors. Component swaps are TOML edits: change
+The `[compile]` section is the build spec: `n_x`/`n_u` (baked at trace time;
+optional when a plant-only `[plant]` derives them), `optimize`
+(`debug`/`release` → ReleaseFast only), `target` (cross-compile), `solver_dir`
+(required for QP graphs), `out` (explicit output dir). Unknown keys and invalid
+`optimize` values are loud errors. Component swaps are TOML edits: change
 `[controller]`/`[estimator]` and re-run `make compile` — the graph is
 regenerated from scratch, and the C-ABI port layout (printed by the gen stage,
 recorded in the manifest) is the only thing the host must re-pack.
@@ -436,9 +437,10 @@ APIs, and each maps to one gate:
 | `shinro build <scenario.toml>` | lowering — trace → compose → lower → `zig build` → oracle → stamp → verify |
 | `shinro verify <scenario.toml>` | drift — re-hash the stamped artifacts against the deployment record |
 
-`build`/`verify` default `--out` to `build/<scenario-stem>` so different
-scenarios never clobber each other's graph and record; pass `--out` to
-override. `shinro-compile` remains as the `build`-only alias.
+`build`/`verify` default `--out` to `build/<scenario-stem>/<optimize>-<target>`
+(or `[compile].out` when set), so different scenarios, build modes, and targets
+never clobber each other's graph and record; pass `--out` to override.
+`shinro-compile` remains as the `build`-only alias.
 
 ### Build manifest (audit trail)
 

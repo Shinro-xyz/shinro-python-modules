@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from shinro.cli import _default_out, main
+from shinro.cli import _resolve_out, main
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CONFIG = REPO_ROOT / "src" / "shinro" / "configs"
@@ -22,11 +22,27 @@ CARTPOLE = str(REPO_ROOT / "tests" / "integration" / "scenarios" / "cartpole_bal
 BASE = str(REPO_ROOT / "tests" / "integration" / "scenarios" / "base_tracking.toml")
 
 
-class TestDefaultOut:
-    def test_per_scenario_stem(self):
-        """Different scenarios land in different dirs, so builds never clobber."""
-        assert _default_out("tests/integration/scenarios/base_tracking.toml") == "build/base_tracking"
-        assert _default_out("a/cartpole_balance.toml") == "build/cartpole_balance"
+class TestResolveOut:
+    @staticmethod
+    def _spec(**over):
+        return {"compile": {"optimize": "debug", "target": "native", "out": None, **over}}
+
+    def test_default_is_per_scenario_and_mode(self):
+        """The default keys on the scenario *and* the build mode, so builds never clobber."""
+        assert (
+            _resolve_out("tests/integration/scenarios/base_tracking.toml", self._spec(), None, None, None)
+            == "build/base_tracking/debug-native"
+        )
+        assert (
+            _resolve_out("a/cartpole_balance.toml", self._spec(), None, "release", "aarch64-linux-gnu")
+            == "build/cartpole_balance/release-aarch64-linux-gnu"
+        )
+
+    def test_declared_out_wins_over_default(self):
+        assert _resolve_out("a/b.toml", self._spec(out="build/custom"), None, None, None) == "build/custom"
+
+    def test_cli_out_wins_over_declared(self):
+        assert _resolve_out("a/b.toml", self._spec(out="build/custom"), "build/flag", None, None) == "build/flag"
 
 
 class TestCheck:
@@ -108,6 +124,16 @@ class TestBuildVerifyE2E:
         assert "oracle B" in capsys.readouterr().out
 
         assert main(["verify", BASE, "--out", out]) == 0
+        assert "OK:" in capsys.readouterr().out
+
+    def test_default_out_is_per_mode(self, tmp_path, monkeypatch, capsys):
+        """With no --out, build and verify agree on build/<stem>/<optimize>-<target>."""
+        monkeypatch.chdir(tmp_path)
+        assert main(["build", BASE]) == 0
+        out = Path("build") / "base_tracking" / "debug-native"
+        assert (out / "lib" / "libbase.so").exists()
+        capsys.readouterr()
+        assert main(["verify", BASE]) == 0
         assert "OK:" in capsys.readouterr().out
 
     def test_verify_detects_drift(self, tmp_path, capsys):

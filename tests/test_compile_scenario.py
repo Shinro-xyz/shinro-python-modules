@@ -65,6 +65,16 @@ def test_load_scenario_rejects_invalid_optimize(tmp_path):
         load_scenario(str(_scenario_toml(tmp_path, '[compile]\nn_x = 3\nn_u = 3\noptimize = "release-safe"\n')))
 
 
+def test_load_scenario_parses_out(tmp_path):
+    spec = load_scenario(str(_scenario_toml(tmp_path, '[compile]\nn_x = 3\nn_u = 3\nout = "build/custom"\n')))
+    assert spec["compile"]["out"] == "build/custom"
+
+
+def test_load_scenario_rejects_empty_out(tmp_path):
+    with pytest.raises(ValueError, match="out"):
+        load_scenario(str(_scenario_toml(tmp_path, '[compile]\nn_x = 3\nn_u = 3\nout = ""\n')))
+
+
 def test_gen_scenario_matches_shipped_graph(tmp_path):
     """The gen stage reproduces the shipped KF+LQR graph node-for-node."""
     from scripts.gen_base import build_base_graph

@@ -9,8 +9,10 @@ the four gates (behavior → trace → lowering → drift):
     shinro build  <scenario.toml>  trace → compose → lower → zig → oracle → stamp → verify
     shinro verify <scenario.toml>  re-hash the stamped artifacts (drift gate)
 
-``build``/``verify`` default their output dir to ``build/<scenario-stem>`` so
-different scenarios never clobber each other; pass ``--out`` to override.
+``build``/``verify`` default their output dir to
+``build/<scenario-stem>/<optimize>-<target>`` (or ``[compile].out`` when set),
+so different scenarios, build modes, and targets never clobber each other; pass
+``--out`` to override.
 
 Each verb is a thin dispatcher over the existing package APIs
 (:mod:`shinro.codegen.component_cli`, :mod:`shinro.codegen.cli`,
@@ -45,14 +47,28 @@ from shinro.utils.config_resolver import resolve_config_path
 EXIT_GATE = 1
 
 
-def _default_out(scenario_path: str) -> str:
-    """Per-scenario output dir (``build/<scenario-stem>``).
+def _resolve_out(
+    scenario_path: str,
+    spec: dict,
+    out_flag: str | None,
+    optimize_flag: str | None,
+    target_flag: str | None,
+) -> str:
+    """Resolve the build/verify output dir.
 
-    Keyed on the scenario file's stem so two scenarios built in sequence land in
-    separate dirs — the shared ``build/scenario`` default would let the second
-    clobber the first's graph and record.
+    Precedence: ``--out`` > ``[compile].out`` > ``build/<scenario-stem>/<optimize>-<target>``.
+    The default is keyed on the scenario *and* the build mode, so a Debug and a
+    ReleaseFast build (or a native and a cross build) of the same scenario land
+    in separate dirs instead of overwriting each other's graph and record.
     """
-    return str(Path("build") / Path(scenario_path).stem)
+    if out_flag:
+        return out_flag
+    compile_spec = spec["compile"]
+    if compile_spec.get("out"):
+        return compile_spec["out"]
+    optimize = optimize_flag or compile_spec["optimize"]
+    target = target_flag or compile_spec["target"]
+    return str(Path("build") / Path(scenario_path).stem / f"{optimize}-{target}")
 
 
 def _config_kind(path: str) -> str | None:
@@ -158,7 +174,12 @@ def _cmd_trace(args: argparse.Namespace) -> int:
 
 
 def _cmd_build(args: argparse.Namespace) -> int:
-    out = args.out or _default_out(args.scenario)
+    try:
+        spec = load_scenario(args.scenario)
+    except (ValueError, FileNotFoundError) as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return EXIT_USAGE
+    out = _resolve_out(args.scenario, spec, args.out, args.optimize, args.target)
     return compile_scenario(
         args.scenario,
         out,
@@ -178,7 +199,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         print(f"ERROR: {e}", file=sys.stderr)
         return EXIT_USAGE
     name = spec["compile"]["artifact_name"]
-    out = Path(args.out) if args.out else Path(_default_out(args.scenario))
+    out = Path(_resolve_out(args.scenario, spec, args.out, args.optimize, args.target))
     record = out / "lib" / f"{name}.deployment.json"
     if not record.exists():
         print(f"ERROR: no deployment record at {record} — run `shinro build {args.scenario}` first", file=sys.stderr)
@@ -218,7 +239,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     b = sub.add_parser("build", help="trace -> compose -> lower -> zig -> oracle -> stamp -> verify")
     b.add_argument("scenario", help="scenario TOML path")
-    b.add_argument("--out", help="output dir (default: build/<scenario-stem>)")
+    b.add_argument("--out", help="output dir (default: [compile].out or build/<scenario-stem>/<optimize>-<target>)")
     b.add_argument("--optimize", choices=["debug", "release"], help="override [compile].optimize")
     b.add_argument("--target", help="override [compile].target (zig triple)")
     b.add_argument("--solver-dir", help="override [compile].solver_dir (baked OSQP solver dir)")
@@ -228,7 +249,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
     v = sub.add_parser("verify", help="re-hash the stamped artifacts against the deployment record")
     v.add_argument("scenario", help="scenario TOML path")
-    v.add_argument("--out", help="output dir holding the record (default: build/<scenario-stem>)")
+    v.add_argument("--out", help="output dir holding the record (default: [compile].out or build/<scenario-stem>/<optimize>-<target>)")
+    v.add_argument("--optimize", choices=["debug", "release"], help="build mode to locate (default: [compile].optimize)")
+    v.add_argument("--target", help="build target to locate (default: [compile].target)")
     v.add_argument("--binary", help="deployed .so (default: the record's binary path)")
     v.add_argument("--graph", help="graph_data.zig to verify (default: <out>/graph_data.zig)")
     v.add_argument("--solver-dir", help="baked solver dir to verify")
