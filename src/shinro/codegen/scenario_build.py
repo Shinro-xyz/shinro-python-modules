@@ -7,10 +7,12 @@ and — when ``--scenario`` is given — verifies the result before stamping:
 
 1. **Pre-flight** — ``zig`` must be on PATH (loud error, exit 5).
 2. **Build flags** — from the scenario's ``[compile]`` section (``optimize`` /
-   ``target`` / ``solver_dir``), overridable on the CLI. ``optimize = "release"``
-   maps to ``-Doptimize=ReleaseFast`` (the only validated release mode);
-   ``target`` cross-compiles (e.g. ``aarch64-linux-gnu``); ``solver_dir`` is
-   required for QP (MPC) graphs and ignored otherwise.
+   ``target`` / ``solver`` / ``solver_dir``), overridable on the CLI.
+   ``optimize = "release"`` maps to ``-Doptimize=ReleaseFast`` (the only
+   validated release mode); ``target`` cross-compiles (e.g.
+   ``aarch64-linux-gnu``). A QP (MPC) graph needs a solver: ``solver =
+   "emosqp"`` bakes one on demand into ``<graph_dir>/emosqp`` (reused when
+   current), while ``solver_dir`` consumes a pre-baked tree.
 3. **Build** — ``zig build -Dgraph=<abs path>`` into an isolated prefix, so the
    shared ``src/shinro/runtime/graph_data.zig`` is never touched.
 4. **Integrity check** — re-runs the gen stage in-process and byte-compares the
@@ -101,6 +103,32 @@ def _build(graph_path: Path, prefix: Path, optimize: str, target: str, solver_di
         raise BuildError(f"zig build failed:\n{result.stderr.strip()[:2000]}")
 
 
+def _bake_on_demand(solver_name: str, spec: dict, graph_dir: Path, manifest: dict) -> str:
+    """Bake the QP solver for the scenario's controller into ``<graph_dir>/emosqp``.
+
+    Reuses an existing bake when its ``n_vars`` and controller-config sha match
+    (:func:`shinro.codegen.bake.bake_is_current`), so re-running a build does not
+    regenerate the solver. Returns the bake dir to pass as ``solver_dir``.
+    """
+    from shinro.codegen.bake import SOLVERS, bake_emosqp, bake_is_current
+
+    if solver_name not in SOLVERS:
+        raise ValueError(f"unknown solver '{solver_name}' (registered: {sorted(SOLVERS)})")
+    expected = (manifest.get("solve_qp") or {}).get("expected_n_vars")
+    if expected is None:
+        raise ValueError("graph manifest has no solve_qp.expected_n_vars")
+    config = spec["controller_config"]
+    bake_dir = graph_dir / "emosqp"
+    if bake_is_current(str(bake_dir), expected, config):
+        print(f"reusing current {solver_name} bake at {bake_dir}")
+    else:
+        print(f"baking {solver_name} solver for {config} (n_vars={expected}) -> {bake_dir}")
+        baked = bake_emosqp(config, str(bake_dir))
+        if baked.n_vars != expected:
+            raise ValueError(f"baked n_vars={baked.n_vars} != graph expected_n_vars={expected}")
+    return str(bake_dir)
+
+
 def _check_graph_integrity(scenario_path: str, graph_dir: Path):
     """Re-gen the scenario and byte-compare its manifest against the on-disk one.
 
@@ -129,6 +157,7 @@ def build_scenario(
     optimize: str | None = None,
     target: str | None = None,
     solver_dir: str | None = None,
+    solver: str | None = None,
     artifact_name: str | None = None,
     samples: int = 20,
     seed: int = 0,
@@ -145,7 +174,9 @@ def build_scenario(
         optimize: Override ``[compile].optimize`` (``"debug"``/``"release"``).
         target: Override ``[compile].target`` (zig triple, e.g.
             ``aarch64-linux-gnu``).
-        solver_dir: Override ``[compile].solver_dir`` (baked OSQP solver dir).
+        solver_dir: Override ``[compile].solver_dir`` (pre-baked OSQP solver dir).
+        solver: Override ``[compile].solver`` — bake this solver on demand
+            (e.g. ``"emosqp"``) into ``<graph_dir>/emosqp``.
         artifact_name: Override ``[compile].artifact_name`` — the kernel is
             installed as ``lib/<name>.so`` (default ``libbase`` → ``libbase.so``).
         samples: Random inputs for the oracle (default 20).
@@ -175,6 +206,7 @@ def build_scenario(
 
     # Build flags: CLI > [compile] TOML > defaults.
     opt, tgt, sdir, name = "debug", "native", None, "libbase"
+    solver_name: str | None = None
     if scenario:
         try:
             spec = load_scenario(scenario)
@@ -184,6 +216,7 @@ def build_scenario(
         opt = spec["compile"]["optimize"]
         tgt = spec["compile"]["target"]
         sdir = spec["compile"]["solver_dir"]
+        solver_name = spec["compile"]["solver"]
         name = spec["compile"]["artifact_name"]
     if optimize:
         opt = optimize
@@ -191,14 +224,46 @@ def build_scenario(
         tgt = target
     if solver_dir:
         sdir = solver_dir
+    if solver:
+        solver_name = solver
     if artifact_name:
         name = artifact_name
 
-    if manifest["has_solve_qp"] and not sdir:
+    # A QP graph links a baked OSQP solver. Either consume a pre-baked
+    # solver_dir, or bake one on demand (into the isolated <graph_dir>/emosqp).
+    if manifest["has_solve_qp"]:
+        if sdir and solver_name:
+            print(
+                "ERROR: QP graph has both a solver_dir and [compile].solver — they are "
+                "mutually exclusive (solver_dir reuses a pre-baked solver; solver bakes one).",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+        if not sdir and not solver_name:
+            print(
+                "ERROR: graph contains a .solve_qp node but no solver — set "
+                "[compile].solver (bake on demand) or [compile].solver_dir / "
+                "--solver-dir (reuse a pre-baked OSQP solver).",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+        if solver_name:
+            if not scenario:
+                print(
+                    "ERROR: [compile].solver needs --scenario (it bakes from the "
+                    "scenario's controller config).",
+                    file=sys.stderr,
+                )
+                return EXIT_USAGE
+            try:
+                sdir = _bake_on_demand(solver_name, spec, graph_dir, manifest)
+            except (ValueError, RuntimeError) as e:
+                print(f"BAKE FAILED: {e}", file=sys.stderr)
+                return EXIT_BUILD
+    elif solver_name:
         print(
-            "ERROR: graph contains a .solve_qp node but no solver_dir — set "
-            "[compile].solver_dir or pass --solver-dir (a graph must be built "
-            "against a matching OSQP bake).",
+            "ERROR: [compile].solver is set but the graph has no .solve_qp node "
+            "(the controller is not a QP/MPC controller).",
             file=sys.stderr,
         )
         return EXIT_USAGE
@@ -276,7 +341,8 @@ def main() -> int:
     parser.add_argument("--prefix", help="zig build prefix (default: graph_dir)")
     parser.add_argument("--optimize", choices=["debug", "release"], help="override [compile].optimize")
     parser.add_argument("--target", help="override [compile].target (zig triple, e.g. aarch64-linux-gnu)")
-    parser.add_argument("--solver-dir", help="override [compile].solver_dir (baked OSQP solver dir)")
+    parser.add_argument("--solver-dir", help="override [compile].solver_dir (pre-baked OSQP solver dir)")
+    parser.add_argument("--solver", help="override [compile].solver (bake on demand, e.g. emosqp)")
     parser.add_argument("--artifact-name", help="override [compile].artifact_name (kernel installs as lib/<name>.so)")
     parser.add_argument("--samples", type=int, default=20, help="random inputs for the oracle (default 20)")
     parser.add_argument("--seed", type=int, default=0, help="RNG seed for the oracle (default 0)")
@@ -288,6 +354,7 @@ def main() -> int:
         optimize=args.optimize,
         target=args.target,
         solver_dir=args.solver_dir,
+        solver=args.solver,
         artifact_name=args.artifact_name,
         samples=args.samples,
         seed=args.seed,
