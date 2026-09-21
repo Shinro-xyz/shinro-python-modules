@@ -15,20 +15,20 @@ input_limits = { min = [-5.0], max = [5.0] }
 
 [plant]
 type = "InvertedPendulum"
-config = "configs/plants/inverted_pendulum.toml"
+config = "samples/plants/inverted_pendulum.toml"
 initial_state = [0.30, 0.0]
 
 [controller]
 type = "LQR"
-config = "configs/controllers/lqr_inverted_pendulum.toml"
+config = "samples/controllers/lqr_inverted_pendulum.toml"
 
 [estimator]
 type = "KalmanFilter"
-config = "configs/estimators/kalman_inverted_pendulum.toml"
+config = "samples/estimators/kalman_inverted_pendulum.toml"
 
 [trajectory]
 type = "waypoints"
-config = "configs/trajectories/inverted_pendulum_upright.toml"
+config = "samples/trajectories/inverted_pendulum_upright.toml"
 
 [compile]
 n_x = 2

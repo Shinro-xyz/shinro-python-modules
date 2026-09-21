@@ -1,4 +1,4 @@
-# FILE: configs/plants/cartpole.toml
+# FILE: samples/plants/cartpole.toml
 # Config for the CartPole plant — 4D state [x, x_dot, theta, theta_dot],
 # 1D force control [F]. Consumed by CartPole.from_config().
 #

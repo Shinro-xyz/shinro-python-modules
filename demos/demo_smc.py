@@ -14,7 +14,7 @@ nonlinear control-affine plant:
 2. **Close the loop eagerly** — the controller drives ``s = c^T x`` to zero.
 3. **Model mismatch** — tell the controller the wrong ``a``; the switching
    gain ``k1`` is what absorbs the error (that is the point of SMC).
-4. **Config-driven** — the shipped ``configs/controllers/smc.toml``.
+4. **Config-driven** — the shipped ``samples/controllers/smc.toml``.
 5. **The controllability guard, both ways** — eager numpy raises
    ``RuntimeError``; the lowered graph cannot raise, so it emits ``u = 0`` and
    a ``healthy = 0`` flag the host acts on in the same tick.
@@ -158,11 +158,11 @@ def demo_model_mismatch() -> None:
 
 
 def demo_config_driven() -> None:
-    print("=== 4. Config-driven: the shipped configs/controllers/smc.toml ===")
+    print("=== 4. Config-driven: the shipped samples/controllers/smc.toml ===")
     from shinro.factories import ControllerFactory
     from shinro.utils.config_resolver import resolve_config_path
 
-    ctrl = ControllerFactory(str(resolve_config_path("configs/controllers/smc.toml"))).create()
+    ctrl = ControllerFactory(str(resolve_config_path("samples/controllers/smc.toml"))).create()
     u = ctrl.compute(np.array([1.0, 0.0]), np.array([0.0, 0.0]), np.array([[0.0], [1.0]]))
     print(f"  c = {ctrl.c.tolist()}, k1 = {ctrl.k1}, smoother = {ctrl._smoother_name}")
     print(f"  compute(x=[1, 0]) -> u = {np.asarray(u).ravel()[0].item():+.5f}")

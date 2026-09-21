@@ -1,4 +1,4 @@
-# FILE: configs/plants/quadrotor.toml
+# FILE: samples/plants/quadrotor.toml
 # Example config for the Quadrotor plant (placeholder).
 #
 # NOTE: The Quadrotor plant is NOT yet implemented — from_config raises

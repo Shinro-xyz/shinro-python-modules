@@ -169,7 +169,7 @@ class TestControllerFunctional:
         """Create an LQR from config file, compute, verify action."""
         resp = server("tools/call", {
             "name": "create_controller",
-            "arguments": {"name": "lqr1", "config_path": "configs/controllers/lqr_base.toml"},
+            "arguments": {"name": "lqr1", "config_path": "samples/controllers/lqr_base.toml"},
         })
         assert "Created" in resp["result"]["content"][0]["text"]
 
@@ -383,7 +383,7 @@ class TestTrajectoryFunctional:
         """Create a trajectory from a config file."""
         resp = server("tools/call", {
             "name": "create_trajectory",
-            "arguments": {"name": "t1", "config_path": "configs/trajectories/arm_extension.toml"},
+            "arguments": {"name": "t1", "config_path": "samples/trajectories/arm_extension.toml"},
         })
         assert "Created" in resp["result"]["content"][0]["text"]
 

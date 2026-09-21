@@ -80,9 +80,9 @@ class TestPlantDerivedDims:
     def _cartpole(tmp_path, compile_body):
         return _scenario(
             tmp_path,
-            '[plant]\ntype = "CartPole"\nconfig = "configs/plants/cartpole.toml"\n'
-            '[controller]\ntype = "LQR"\nconfig = "configs/controllers/lqr_cartpole.toml"\n'
-            '[estimator]\ntype = "KalmanFilter"\nconfig = "configs/estimators/kalman_cartpole.toml"\n'
+            '[plant]\ntype = "CartPole"\nconfig = "samples/plants/cartpole.toml"\n'
+            '[controller]\ntype = "LQR"\nconfig = "samples/controllers/lqr_cartpole.toml"\n'
+            '[estimator]\ntype = "KalmanFilter"\nconfig = "samples/estimators/kalman_cartpole.toml"\n'
             "[compile]\n" + compile_body,
         )
 
@@ -112,8 +112,8 @@ class TestRecipeSelection:
         """[compile].recipe is honoured even when [estimator] is present."""
         scenario = _scenario(
             tmp_path,
-            '[controller]\nconfig = "configs/controllers/lqr_base.toml"\n'
-            '[estimator]\nconfig = "configs/estimators/kalman_base.toml"\n'
+            '[controller]\nconfig = "samples/controllers/lqr_base.toml"\n'
+            '[estimator]\nconfig = "samples/estimators/kalman_base.toml"\n'
             '[compile]\nn_x = 3\nn_u = 3\nrecipe = "closed_loop_tracking"\n',
         )
         assert load_scenario(scenario)["compile"]["recipe"] == "closed_loop_tracking"
@@ -121,8 +121,8 @@ class TestRecipeSelection:
     def test_inferred_default_is_closed_loop(self, tmp_path):
         scenario = _scenario(
             tmp_path,
-            '[controller]\nconfig = "configs/controllers/lqr_base.toml"\n'
-            '[estimator]\nconfig = "configs/estimators/kalman_base.toml"\n'
+            '[controller]\nconfig = "samples/controllers/lqr_base.toml"\n'
+            '[estimator]\nconfig = "samples/estimators/kalman_base.toml"\n'
             '[compile]\nn_x = 3\nn_u = 3\n',
         )
         assert load_scenario(scenario)["compile"]["recipe"] == "closed_loop_tracking"
@@ -130,8 +130,8 @@ class TestRecipeSelection:
     def test_unknown_recipe_is_rejected(self, tmp_path):
         scenario = _scenario(
             tmp_path,
-            '[controller]\nconfig = "configs/controllers/lqr_base.toml"\n'
-            '[estimator]\nconfig = "configs/estimators/kalman_base.toml"\n'
+            '[controller]\nconfig = "samples/controllers/lqr_base.toml"\n'
+            '[estimator]\nconfig = "samples/estimators/kalman_base.toml"\n'
             '[compile]\nn_x = 3\nn_u = 3\nrecipe = "bogus"\n',
         )
         with pytest.raises(ValueError, match=r"unknown \[compile\]\.recipe"):
@@ -141,7 +141,7 @@ class TestRecipeSelection:
         """Inferring policy_only from a missing [estimator] must not admit an LQR."""
         scenario = _scenario(
             tmp_path,
-            '[controller]\nconfig = "configs/controllers/lqr_base.toml"\n'
+            '[controller]\nconfig = "samples/controllers/lqr_base.toml"\n'
             '[compile]\nn_x = 3\nn_u = 3\n',
         )
         with pytest.raises(ValueError, match=r"missing \[estimator\]"):

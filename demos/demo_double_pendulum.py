@@ -13,7 +13,7 @@ PLOT = "--plot" in sys.argv
 
 from shinro import ScenarioFactory
 
-SCENARIO = "configs/scenarios/double_pendulum_balance.toml"
+SCENARIO = "samples/scenarios/double_pendulum_balance.toml"
 
 scenario = ScenarioFactory(SCENARIO).build()
 print(f"Scenario: {scenario.config.get('scenario', {}).get('name', 'unnamed')}")
@@ -32,7 +32,7 @@ for r in result:
               f"ω1={r.true_state[2]:+.4f}  ω2={r.true_state[3]:+.4f}")
 
 final = result[-1]
-print(f"\nFinal state:")
+print("\nFinal state:")
 print(f"  θ1 = {final.true_state[0]:+.6f} rad")
 print(f"  θ2 = {final.true_state[1]:+.6f} rad")
 print(f"  |θ1| < 0.01: {abs(final.true_state[0]) < 0.01}")

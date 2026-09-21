@@ -16,7 +16,7 @@ import pytest
 from shinro.cli import _resolve_out, main
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-CONFIG = REPO_ROOT / "src" / "shinro" / "configs"
+CONFIG = REPO_ROOT / "samples"
 LQR = str(CONFIG / "controllers" / "lqr_base.toml")
 CARTPOLE = str(REPO_ROOT / "tests" / "integration" / "scenarios" / "cartpole_balance.toml")
 BASE = str(REPO_ROOT / "tests" / "integration" / "scenarios" / "base_tracking.toml")
@@ -128,6 +128,9 @@ class TestBuildVerifyE2E:
 
     def test_default_out_is_per_mode(self, tmp_path, monkeypatch, capsys):
         """With no --out, build and verify agree on build/<stem>/<optimize>-<target>."""
+        # Config resolution is CWD-relative and shinro ships no configs, so a
+        # scenario run from a different CWD needs its sample configs present there.
+        shutil.copytree(REPO_ROOT / "samples", tmp_path / "samples")
         monkeypatch.chdir(tmp_path)
         assert main(["build", BASE]) == 0
         out = Path("build") / "base_tracking" / "debug-native"
@@ -140,7 +143,7 @@ class TestBuildVerifyE2E:
         out = str(tmp_path / "out")
         assert main(["build", BASE, "--out", out]) == 0
         capsys.readouterr()
-        config = REPO_ROOT / "src" / "shinro" / "configs" / "controllers" / "lqr_base.toml"
+        config = REPO_ROOT / "samples" / "controllers" / "lqr_base.toml"
         original = config.read_bytes()
         try:
             config.write_bytes(original + b"\n# tamper\n")

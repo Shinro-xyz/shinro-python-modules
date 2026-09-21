@@ -233,9 +233,7 @@ class TestEstimatorConfigParity:
     drift guard fails loudly instead.
     """
 
-    ESTIMATOR_DIR = (
-        Path(__file__).resolve().parents[1] / "src" / "shinro" / "configs" / "estimators"
-    )
+    ESTIMATOR_DIR = Path(__file__).resolve().parents[1] / "samples" / "estimators"
 
     def test_every_kalman_config_has_luenberger_twin(self):
         """Each kalman_<X>.toml has a luenberger_<X>.toml with matching dt and dims."""

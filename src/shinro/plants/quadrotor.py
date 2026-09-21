@@ -9,7 +9,7 @@ class QuadrotorConfig:
     """Strict TOML schema for :class:`Quadrotor`.
 
     Placeholder schema documenting the intended 12D/4D parameter surface (see
-    ``configs/plants/quadrotor.toml``); construction raises NotImplementedError.
+    ``samples/plants/quadrotor.toml``); construction raises NotImplementedError.
     """
 
     mass: float = 0.5

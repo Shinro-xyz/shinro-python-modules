@@ -12,7 +12,7 @@
 
 [plant]
 type = "CartPole"
-config = "configs/plants/cartpole.toml"
+config = "samples/plants/cartpole.toml"
 
 [controller]
 type = "LQR"

@@ -17,14 +17,14 @@ implement `compute(current, target)` and `reset()`.
 
 | Registered name | Class | File | Config |
 | ----------------- | ------- | ------ | -------- |
-| `LQR` | `LQR` | `controllers/lqr.py` | `configs/controllers/lqr_base.toml` |
-| `PID` | `PIDController` | `controllers/pid.py` | `configs/controllers/pid_arm.toml` |
-| `MPC_LTI` | `MPC_LTI_Base` | `controllers/mpc_lti.py` | `configs/controllers/mpc_lti_base.toml` |
-| `MPC_DeltaU` | `MPC_LTI_DeltaU` | `controllers/mpc_lti.py` | `configs/controllers/mpc_base.toml` |
-| `MPPI` | `MPPIController` | `controllers/mppi.py` | `configs/controllers/mppi_base.toml`, `mppi.toml` |
-| `SMC` | `SlidingModeController` | `controllers/smc.py` | `configs/controllers/smc.toml` |
-| `onnx_rl` | `OnnxRLAdapter` | `controllers/onnx_rl_adapter.py` | `configs/controllers/onnx_rl.toml` |
-| `lerobot_diffusion` | `LeRobotDiffusionAdapter` | `controllers/lerobot_adapter.py` | `configs/controllers/lerobot_diffusion.toml` |
+| `LQR` | `LQR` | `controllers/lqr.py` | `samples/controllers/lqr_base.toml` |
+| `PID` | `PIDController` | `controllers/pid.py` | `samples/controllers/pid_arm.toml` |
+| `MPC_LTI` | `MPC_LTI_Base` | `controllers/mpc_lti.py` | `samples/controllers/mpc_lti_base.toml` |
+| `MPC_DeltaU` | `MPC_LTI_DeltaU` | `controllers/mpc_lti.py` | `samples/controllers/mpc_base.toml` |
+| `MPPI` | `MPPIController` | `controllers/mppi.py` | `samples/controllers/mppi_base.toml`, `mppi.toml` |
+| `SMC` | `SlidingModeController` | `controllers/smc.py` | `samples/controllers/smc.toml` |
+| `onnx_rl` | `OnnxRLAdapter` | `controllers/onnx_rl_adapter.py` | `samples/controllers/onnx_rl.toml` |
+| `lerobot_diffusion` | `LeRobotDiffusionAdapter` | `controllers/lerobot_adapter.py` | `samples/controllers/lerobot_diffusion.toml` |
 
 > `MPC_LTI` and `MPC_DeltaU` are both built on `MPC_LTI` in `mpc_lti.py`:
 > `MPC_DeltaU` adds Δu (control-rate) regularization. The two names are
@@ -44,12 +44,12 @@ linearization set `input_dim` and expose `dynamics(x, u)` (see
 
 | Registered name | Class | File | Config |
 | ----------------- | ------- | ------ | -------- |
-| `ArmRobot` | `ArmRobot` | `plants/armrobot.py` | `configs/plants/armrobot.toml` |
-| `HolonomicMobileRobot` | `HolonomicMobileRobot` | `plants/holonomicmobilerobot.py` | `configs/plants/holonomic_base.toml` |
-| `InvertedPendulum` | `InvertedPendulum` | `plants/inverted_pendulum.py` | `configs/plants/inverted_pendulum.toml` |
-| `CartPole` | `CartPole` | `plants/cartpole.py` | `configs/plants/cartpole.toml` |
-| `DoublePendulum` | `DoublePendulum` | `plants/double_pendulum.py` | `configs/plants/double_pendulum.toml` |
-| `Quadrotor` | `Quadrotor` | `plants/quadrotor.py` | `configs/plants/quadrotor.toml` (placeholder) |
+| `ArmRobot` | `ArmRobot` | `plants/armrobot.py` | `samples/plants/armrobot.toml` |
+| `HolonomicMobileRobot` | `HolonomicMobileRobot` | `plants/holonomicmobilerobot.py` | `samples/plants/holonomic_base.toml` |
+| `InvertedPendulum` | `InvertedPendulum` | `plants/inverted_pendulum.py` | `samples/plants/inverted_pendulum.toml` |
+| `CartPole` | `CartPole` | `plants/cartpole.py` | `samples/plants/cartpole.toml` |
+| `DoublePendulum` | `DoublePendulum` | `plants/double_pendulum.py` | `samples/plants/double_pendulum.toml` |
+| `Quadrotor` | `Quadrotor` | `plants/quadrotor.py` | `samples/plants/quadrotor.toml` (placeholder) |
 
 > `cartpole.toml` and `inverted_pendulum.toml` are parameter-only configs
 > (they carry physical constants like mass/length/gravity and no `type`
@@ -62,8 +62,8 @@ implement `estimate(measurement, control_input)` and `reset()`.
 
 | Registered name | Class | File | Config |
 |-----------------|-------|------|--------|
-| `KalmanFilter` | `KalmanFilter` | `estimators/kalman_filter.py` | `configs/estimators/kalman_base.toml`, `kalman_arm.toml`, `kalman_pendulum.toml`, `kalman_cartpole.toml` |
-| `LuenbergerObserver` | `LuenbergerObserver` | `estimators/luenberger_observer.py` | `configs/estimators/luenberger_base.toml`, `luenberger_arm.toml`, `luenberger_pendulum.toml`, `luenberger_cartpole.toml` |
+| `KalmanFilter` | `KalmanFilter` | `estimators/kalman_filter.py` | `samples/estimators/kalman_base.toml`, `kalman_arm.toml`, `kalman_pendulum.toml`, `kalman_cartpole.toml` |
+| `LuenbergerObserver` | `LuenbergerObserver` | `estimators/luenberger_observer.py` | `samples/estimators/luenberger_base.toml`, `luenberger_arm.toml`, `luenberger_pendulum.toml`, `luenberger_cartpole.toml` |
 
 ## Trajectories
 
@@ -72,10 +72,10 @@ implement `generate(...)` and `position_at(t)`.
 
 | Registered name | Class | File | Config |
 | ----------------- | ------- | ------ | -------- |
-| `cubic_segments` | `CubicPolynomial` | `trajectories/cubic_polynomial.py` | `configs/trajectories/arm_extension.toml` |
-| `quintic_segments` | `QuinticPolynomial` / `QuinticPolynomialConfigAdapter` | `trajectories/quintic_polynomial.py` | `configs/trajectories/arm_quintic.toml` |
-| `waypoints` | `WaypointSchedule` | `trajectories/quintic_polynomial.py` | `configs/trajectories/arm_lift.toml`, `base_straight.toml`, `base_triangle.toml` |
-| `phase_list` | `PhaseSchedule` | `trajectories/quintic_polynomial.py` | `configs/trajectories/pick_and_place.toml` |
+| `cubic_segments` | `CubicPolynomial` | `trajectories/cubic_polynomial.py` | `samples/trajectories/arm_extension.toml` |
+| `quintic_segments` | `QuinticPolynomial` / `QuinticPolynomialConfigAdapter` | `trajectories/quintic_polynomial.py` | `samples/trajectories/arm_quintic.toml` |
+| `waypoints` | `WaypointSchedule` | `trajectories/quintic_polynomial.py` | `samples/trajectories/arm_lift.toml`, `base_straight.toml`, `base_triangle.toml` |
+| `phase_list` | `PhaseSchedule` | `trajectories/quintic_polynomial.py` | `samples/trajectories/pick_and_place.toml` |
 
 ## Physics engines
 
@@ -97,7 +97,7 @@ Not registry-based; import directly from `shinro.utils`.
 | `BatchedDynamicsAdapter` | `utils/batched_adapter.py` | Batches N parallel trajectory rollouts for sampling-based controllers (MPPI) |
 | `linearize`, `linearize_plant` | `utils/linearization.py` | Numeric linearization of plant dynamics around an operating point |
 | `LTISystemsAnalyzer` | `utils/controllability_checker.py` | Controllability/observability, Gramians, balanced truncation |
-| `resolve_config_path`, `get_config_path` | `utils/config_resolver.py` | Resolve config paths inside or outside the installed package |
+| `resolve_config_path` | `utils/config_resolver.py` | Resolve a config path (absolute, or relative to the CWD) |
 
 ## Codegen
 

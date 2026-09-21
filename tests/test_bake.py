@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from shinro.codegen.bake import SOLVERS, bake_emosqp, bake_is_current
 
-CONFIG = "configs/controllers/mpc_lti_base.toml"
+CONFIG = "samples/controllers/mpc_lti_base.toml"
 
 
 def test_registry_has_emosqp():

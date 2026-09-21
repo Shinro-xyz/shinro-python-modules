@@ -85,7 +85,7 @@ def create_controller(
 
     Args:
         name: Unique name to store this controller instance.
-        config_path: Path to a TOML config file (e.g. configs/controllers/lqr_base.toml).
+        config_path: Path to a TOML config file (e.g. samples/controllers/lqr_base.toml).
         type: Controller type when using inline params (PID, LQR, MPC_DeltaU, MPC_LTI).
         params: Inline parameters (same keys as TOML config, e.g. dt, kp, ki, kd).
         backend: Array backend ('numpy' or 'torch'). Defaults to 'numpy'.
@@ -288,7 +288,7 @@ def create_estimator(
 
     Args:
         name: Unique name to store this estimator instance.
-        config_path: Path to a TOML config file (e.g. configs/estimators/luenberger_base.toml).
+        config_path: Path to a TOML config file (e.g. samples/estimators/luenberger_base.toml).
         type: Estimator type when using inline params (KalmanFilter, LuenbergerObserver).
         params: Inline parameters (same keys as TOML config, e.g. dt, process_noise, measurement_noise).
         backend: Array backend ('numpy' or 'torch'). Defaults to 'numpy'.
@@ -392,7 +392,7 @@ def create_trajectory(
 
     Args:
         name: Unique name to store this trajectory instance.
-        config_path: Path to a TOML config file (e.g. configs/trajectories/arm_extension.toml).
+        config_path: Path to a TOML config file (e.g. samples/trajectories/arm_extension.toml).
         type: Trajectory type when using inline params (cubic_segments, quintic_segments, waypoints, phase_list).
         params: Inline parameters (same keys as TOML config).
         backend: Array backend ('numpy' or 'torch'). Defaults to 'numpy'.

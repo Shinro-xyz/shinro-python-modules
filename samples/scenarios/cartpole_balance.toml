@@ -9,17 +9,17 @@ input_limits = { min = [-10.0], max = [10.0] }
 
 [plant]
 type = "CartPole"
-config = "configs/plants/cartpole.toml"
+config = "samples/plants/cartpole.toml"
 initial_state = [0.0, 0.0, 0.2, 0.0]
 
 [controller]
 type = "LQR"
-config = "configs/controllers/lqr_cartpole.toml"
+config = "samples/controllers/lqr_cartpole.toml"
 
 [estimator]
 type = "KalmanFilter"
-config = "configs/estimators/kalman_cartpole.toml"
+config = "samples/estimators/kalman_cartpole.toml"
 
 [trajectory]
 type = "waypoints"
-config = "configs/trajectories/cartpole_upright.toml"
+config = "samples/trajectories/cartpole_upright.toml"

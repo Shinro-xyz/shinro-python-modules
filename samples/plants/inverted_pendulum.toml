@@ -1,4 +1,4 @@
-# FILE: configs/plants/inverted_pendulum.toml
+# FILE: samples/plants/inverted_pendulum.toml
 # Config for the InvertedPendulum plant — 2D state [theta, theta_dot],
 # 1D torque control [tau]. Consumed by InvertedPendulum.from_config().
 #

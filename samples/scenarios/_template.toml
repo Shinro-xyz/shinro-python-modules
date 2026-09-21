@@ -18,13 +18,13 @@
 # (PID, LQR, MPC_LTI, MPC_DeltaU, ...); `config` is its TOML.
 [controller]
 type = "PID"
-config = "configs/controllers/<my_controller>.toml"
+config = "samples/controllers/<my_controller>.toml"
 
 # REQUIRED — the estimator. `type` is any registered estimator
 # (KalmanFilter, LuenbergerObserver, ...); `config` is its TOML.
 [estimator]
 type = "KalmanFilter"
-config = "configs/estimators/<my_estimator>.toml"
+config = "samples/estimators/<my_estimator>.toml"
 
 # OPTIONAL — input clipping applied to the controller output. Both pipelines
 # read this; omit the whole section for unconstrained control.
@@ -56,9 +56,9 @@ optimize = "debug"        # "debug" | "release" (release → -Doptimize=ReleaseF
 # [plant]
 # name = "base"
 # [sim]
-# config = "robot_config.toml"
+# config = "samples/robot_config.toml"
 # [trajectory]
 # type = "waypoints"
-# config = "configs/trajectories/<my_trajectory>.toml"
+# config = "samples/trajectories/<my_trajectory>.toml"
 # [noise.measurement]
 # std = [0.01]

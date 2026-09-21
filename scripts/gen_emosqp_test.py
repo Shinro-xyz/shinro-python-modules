@@ -24,7 +24,7 @@ n_vars is compiled into fixed-size C arrays, so after regenerating for a
 different MPC config, every graph containing a ``.solve_qp`` node from the
 previous config is shape-mismatched until the script is re-run for the
 original config. The shipped default bakes
-``src/shinro/configs/controllers/mpc_lti_base.toml`` (n_vars=30).
+``samples/controllers/mpc_lti_base.toml`` (n_vars=30).
 
 To bake a *second* problem without clobbering the shipped default, pass
 ``--out-dir`` (e.g. a tmp dir) and build the graph against it with
@@ -47,7 +47,7 @@ from scipy import sparse
 from shinro.codegen.bake import EPS, Bake, bake_emosqp
 from shinro.codegen.lower_zig import _zig_floats
 
-DEFAULT_CONFIG = "configs/controllers/mpc_lti_base.toml"
+DEFAULT_CONFIG = "samples/controllers/mpc_lti_base.toml"
 DEFAULT_OUT_DIR = "src/shinro/runtime/codegen/emosqp"
 DEFAULT_DATA_PATH = "src/shinro/runtime/tests/emosqp_data.zig"
 

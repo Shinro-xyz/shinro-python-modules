@@ -1,5 +1,3 @@
-recursive-include src/shinro/configs *.toml
-
 # License + third-party attribution must travel with the distribution.
 # Apache-2.0 §4(b) requires recipients of redistributed OSQP code to receive
 # the license text; see THIRD-PARTY.md.
@@ -7,6 +5,7 @@ include THIRD-PARTY.md
 include LICENSE
 recursive-include licenses *
 
+recursive-exclude samples *
 recursive-exclude demos *
 recursive-exclude tests *
 recursive-exclude lab-notes *

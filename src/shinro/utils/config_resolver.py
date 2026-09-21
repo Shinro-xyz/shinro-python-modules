@@ -1,48 +1,47 @@
-"""Config path resolution for the shinro package.
+"""Config path resolution for TOML configs.
 
-Factories load TOML configs by path string. This module resolves those
-paths so that relative names like ``configs/controllers/lqr_base.toml``
-work both from a source checkout (CWD = repo root) and from an installed
-wheel (where the packaged configs live inside ``shinro/configs/``).
+Factories load TOML configs by path string. This module resolves those paths
+against the filesystem so callers can pass either an absolute path or one
+relative to their project root.
+
+shinro ships **no** config files. The TOMLs under ``samples/`` in the
+repository are documentation — they show what a config looks like and how to
+write one — and are deliberately not installed. Your project owns its configs:
 
 Resolution order for a given ``path``:
 
 1. If it is an absolute path, use it as-is.
-2. If it starts with ``configs/``, resolve against the packaged
-   ``shinro/configs`` directory (falling back to a CWD-relative lookup
-   for source checkouts).
-3. If it names a file that exists relative to the CWD, use it.
-4. Otherwise resolve against the packaged ``shinro/configs`` directory.
+2. Otherwise resolve it relative to the current working directory.
+
+A path that resolves to neither raises a loud :class:`FileNotFoundError`.
+There is deliberately **no** fallback into the shinro package and no
+basename-based search. An earlier implementation fell back to a packaged
+``shinro/configs`` copy, which silently substituted shinro's own config for a
+caller's misspelled or wrong-CWD path — the exact drift this contract exists to
+prevent. Copy the sample you need into your project and run from your project
+root.
 """
 
 from __future__ import annotations
 
-from importlib import resources
 from pathlib import Path
-
-
-def _package_config_root() -> Path:
-    """Return the packaged ``shinro/configs`` directory on disk."""
-    root = resources.files("shinro").joinpath("configs")
-    if isinstance(root, Path):  # pragma: no cover - depends on importlib version
-        return root
-    # importlib.resources.Traversable without an on-disk path: materialize via as_file.
-    with resources.as_file(root) as p:  # pragma: no cover
-        return p
 
 
 def resolve_config_path(path: str) -> Path:
     """Resolve a TOML config path to an existing file.
 
     Args:
-        path: Absolute path, a ``configs/...`` package-relative name, or a
-            bare filename relative to the CWD / packaged configs.
+        path: Absolute path, or a path relative to the current working
+            directory (e.g. ``configs/controllers/lqr_base.toml`` for a
+            config in your own project).
 
     Returns:
         A :class:`pathlib.Path` pointing at an existing config file.
 
     Raises:
-        FileNotFoundError: If no candidate location exists.
+        FileNotFoundError: If the path does not exist. Resolution never falls
+            back to a packaged shinro config — a missing or wrong-CWD path is a
+            loud error, not a silent substitution.
     """
     path = str(path)
     p = Path(path)
@@ -50,33 +49,9 @@ def resolve_config_path(path: str) -> Path:
         if not p.exists():
             raise FileNotFoundError(f"Config not found: {path}")
         return p
-
-    candidates: list[Path] = []
-    if path.startswith("configs/"):
-        packaged = _package_config_root().parent.joinpath(path)
-        candidates.append(packaged)
-        candidates.append(p)
-    elif p.exists():
-        candidates.append(p)
-    else:
-        packaged = _package_config_root().joinpath(p.name)
-        candidates.append(packaged)
-        candidates.append(p)
-
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-
-    raise FileNotFoundError(f"Config not found: {path} (tried: {', '.join(str(c) for c in candidates)})")
-
-
-def get_config_path(name: str) -> Path:
-    """Public helper: resolve a config name (without the ``configs/`` prefix).
-
-    Args:
-        name: Package-relative config name, e.g. ``controllers/lqr_base.toml``.
-
-    Returns:
-        A :class:`pathlib.Path` pointing at the packaged config file.
-    """
-    return resolve_config_path(f"configs/{name.lstrip('/')}")
+    if p.exists():
+        return p
+    raise FileNotFoundError(
+        f"Config not found: {path} (resolved relative to CWD {Path.cwd()}; "
+        f"shinro ships no configs — copy the sample you need from the repo's samples/)"
+    )

@@ -30,7 +30,7 @@ Action spaces (baked at import time, mirroring the historical runtime):
 The host-side noise is drawn from a seeded generator; :meth:`reset` reseeds it,
 so a run is reproducible.
 
-Usage (configs/controllers/onnx_rl.toml)::
+Usage (samples/controllers/onnx_rl.toml)::
 
     #   type = "onnx_rl"
     #   model_path = "path/to/policy.onnx"     # eager mode

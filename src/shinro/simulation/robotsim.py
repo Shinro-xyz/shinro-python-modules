@@ -5,7 +5,7 @@ engine, plants, and wiring automatically.
 
 Usage:
     from shinro.simulation import RobotSim
-    sim = RobotSim("robot_config.toml")
+    sim = RobotSim("samples/robot_config.toml")
     sim.arm.step(twist)
     sim.base.step(velocity)
     sim.step()
@@ -26,7 +26,7 @@ class RobotSim:
     engine, plants, and wiring automatically.
 
     Usage:
-        sim = RobotSim("robot_config.toml")
+        sim = RobotSim("samples/robot_config.toml")
         sim.arm.step(twist)
         sim.base.step(velocity)
         sim.step()

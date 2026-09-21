@@ -79,7 +79,7 @@ class TestCartPoleEstimatorVariants:
 
                 [plant]
                 type = "CartPole"
-                config = "configs/plants/cartpole.toml"
+                config = "samples/plants/cartpole.toml"
                 initial_state = [0.0, 0.0, 0.2, 0.0]
 
                 [controller]

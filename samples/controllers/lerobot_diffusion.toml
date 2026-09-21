@@ -1,4 +1,4 @@
-# FILE: configs/controllers/lerobot_diffusion.toml
+# FILE: samples/controllers/lerobot_diffusion.toml
 # LeRobot diffusion policy adapter
 # Requires: pip install lerobot
 #

@@ -47,7 +47,7 @@ shinro-compile = "shinro.codegen.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-shinro = ["configs/**/*.toml", "runtime/**/*"]
+shinro = ["runtime/**/*"]
 
 [tool.setuptools_scm]
 write_to = "src/shinro/_version.py"

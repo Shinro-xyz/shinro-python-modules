@@ -414,7 +414,7 @@ exclusive. Unknown keys and invalid `optimize` values are loud errors. Component
 regenerated from scratch, and the C-ABI port layout (printed by the gen stage,
 recorded in the manifest) is the only thing the host must re-pack.
 
-Start from `src/shinro/configs/scenarios/_template.toml` — a commented
+Start from `samples/scenarios/_template.toml` — a commented
 scenario skeleton with placeholders for your robot's controller, estimator,
 and `[compile]` dims. Copy it, fill in the values, and run `make compile`.
 

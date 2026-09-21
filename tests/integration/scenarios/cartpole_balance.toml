@@ -10,7 +10,7 @@ input_limits = { min = [-10.0], max = [10.0] }
 
 [plant]
 type = "CartPole"
-config = "configs/plants/cartpole.toml"
+config = "samples/plants/cartpole.toml"
 initial_state = [0.0, 0.0, 0.2, 0.0]
 
 [controller]

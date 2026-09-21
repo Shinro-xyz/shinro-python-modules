@@ -159,7 +159,7 @@ class ScenarioFactory:
             ValueError: If component dimensions disagree with the plant.
         """
         plant_cfg = self.config["plant"]
-        sim_cfg = self.config.get("sim", {"config": "robot_config.toml"})
+        sim_cfg = self.config.get("sim", {"config": "samples/robot_config.toml"})
         physics_cfg = self.config.get("physics", {})
 
         if "sim" in self.config:

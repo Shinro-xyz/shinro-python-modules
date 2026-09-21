@@ -16,7 +16,7 @@ from scripts.trace_component import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-CONFIG = REPO_ROOT / "src" / "shinro" / "configs"
+CONFIG = REPO_ROOT / "samples"
 
 LQR = str(CONFIG / "controllers" / "lqr_base.toml")
 KF = str(CONFIG / "estimators" / "kalman_base.toml")

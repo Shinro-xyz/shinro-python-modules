@@ -247,8 +247,8 @@ def policy_only(spec: dict) -> ComposedGraph:
 #: The 3-DOF holonomic base's controller-output clip, shared by both shipped graphs.
 _BASE_LIMITS = (np.array([-0.5, -0.5, -1.0]), np.array([0.5, 0.5, 1.0]))
 
-LQR_CONFIGS = ("configs/estimators/kalman_base.toml", "configs/controllers/lqr_base.toml")
-DEFAULT_MPC_CONTROLLER = "configs/controllers/mpc_lti_base.toml"
+LQR_CONFIGS = ("samples/estimators/kalman_base.toml", "samples/controllers/lqr_base.toml")
+DEFAULT_MPC_CONTROLLER = "samples/controllers/mpc_lti_base.toml"
 
 
 def build_base_graph() -> ComposedGraph:

@@ -72,7 +72,7 @@ class TestPendulumEstimatorVariants:
 
                 [plant]
                 type = "InvertedPendulum"
-                config = "configs/plants/inverted_pendulum.toml"
+                config = "samples/plants/inverted_pendulum.toml"
                 initial_state = [0.2, 0.0]
 
                 [controller]

@@ -16,18 +16,18 @@ name = "base"
 
 [controller]
 type = "MPPI"
-config = "configs/controllers/mppi_base.toml"
+config = "samples/controllers/mppi_base.toml"
 
 [estimator]
 type = "KalmanFilter"
-config = "configs/estimators/kalman_base.toml"
+config = "samples/estimators/kalman_base.toml"
 
 [trajectory]
 type = "waypoints"
-config = "configs/trajectories/base_straight.toml"
+config = "samples/trajectories/base_straight.toml"
 
 [sim]
-config = "robot_config.toml"
+config = "samples/robot_config.toml"
 
 [noise.measurement]
 std = [0.01, 0.01, 0.02]

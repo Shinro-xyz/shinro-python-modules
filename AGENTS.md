@@ -23,7 +23,8 @@ For lab notes, read `lab-notes/daily/` directly (see below).
 
 A modular control suite built on five ABCs — **Controller**, **Plant**,
 **StateEstimator**, **TrajectoryGenerator**, **PhysicsEngine** — composed via a
-registry/factory pattern from TOML configs (`src/shinro/configs/`), with
+registry/factory pattern from TOML configs (example configs live in the
+repo's `samples/`; shinro ships none), with
 numpy/torch support through the `ArrayBackend` abstraction. The full component
 catalog (registered names, config files) lives in
 [`docs/components.md`](./docs/components.md); architecture narrative in

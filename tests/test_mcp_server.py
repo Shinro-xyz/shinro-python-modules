@@ -61,7 +61,7 @@ class TestCreateController:
     def test_create_lqr_from_config_creates_and_stores_instance(self):
         """LQR created from a TOML config file is stored."""
         result = create_controller(
-            name="lqr1", config_path="configs/controllers/lqr_base.toml"
+            name="lqr1", config_path="samples/controllers/lqr_base.toml"
         )
         assert "Created config-based controller 'lqr1'" in result
         assert "lqr1" in _store
@@ -69,7 +69,7 @@ class TestCreateController:
     def test_create_mpc_from_config_creates_and_stores_instance(self):
         """MPC_DeltaU created from a TOML config file is stored."""
         result = create_controller(
-            name="mpc1", config_path="configs/controllers/mpc_base.toml"
+            name="mpc1", config_path="samples/controllers/mpc_base.toml"
         )
         assert "Created config-based controller 'mpc1'" in result
         assert "mpc1" in _store
@@ -586,7 +586,7 @@ class TestCreateEstimator:
     def test_create_estimator_from_config_creates_and_stores_instance(self):
         """Estimator created from a TOML config file is stored."""
         result = create_estimator(
-            name="est1", config_path="configs/estimators/luenberger_base.toml"
+            name="est1", config_path="samples/estimators/luenberger_base.toml"
         )
         assert "Created config-based estimator 'est1'" in result
         assert "est1" in _store
@@ -738,7 +738,7 @@ class TestCreateTrajectory:
     def test_create_trajectory_from_config_creates_and_stores_instance(self):
         """Trajectory created from a TOML config file is stored."""
         result = create_trajectory(
-            name="t1", config_path="configs/trajectories/arm_extension.toml"
+            name="t1", config_path="samples/trajectories/arm_extension.toml"
         )
         assert "Created config-based trajectory 't1'" in result
         assert "t1" in _store
@@ -817,7 +817,7 @@ class TestTrajectoryGenerate:
 
     def test_generate_config_based_trajectory_returns_error(self):
         """Config-based trajectories (waypoints, phase_list) don't support generate()."""
-        create_trajectory(name="wp", config_path="configs/trajectories/base_straight.toml")
+        create_trajectory(name="wp", config_path="samples/trajectories/base_straight.toml")
         result = trajectory_generate(
             name="wp",
             start_position=[0.0], end_position=[1.0], duration=1.0,
@@ -916,7 +916,7 @@ class TestTrajectoryListTools:
     def test_list_trajectories_returns_all_created_instances(self):
         """list_trajectories returns name-to-type mapping for all stored instances."""
         create_trajectory(name="a", type="cubic_segments", params={"dt": 0.02})
-        create_trajectory(name="b", config_path="configs/trajectories/arm_extension.toml")
+        create_trajectory(name="b", config_path="samples/trajectories/arm_extension.toml")
         data = json.loads(list_trajectories())
         assert data["trajectories"]["a"] == "cubic_segments"
         assert data["trajectories"]["b"] == "ndarray"

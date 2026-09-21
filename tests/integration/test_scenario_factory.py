@@ -107,7 +107,7 @@ class TestDimensionValidation:
 
                 [controller]
                 type = "LQR"
-                config = "configs/controllers/lqr_base.toml"
+                config = "samples/controllers/lqr_base.toml"
 
                 [estimator]
                 type = "KalmanFilter"
@@ -115,10 +115,10 @@ class TestDimensionValidation:
 
                 [trajectory]
                 type = "waypoints"
-                config = "configs/trajectories/base_straight.toml"
+                config = "samples/trajectories/base_straight.toml"
 
                 [sim]
-                config = "robot_config.toml"
+                config = "samples/robot_config.toml"
                 """
             )
         )
@@ -146,18 +146,18 @@ class TestDimensionValidation:
 
                 [controller]
                 type = "LQR"
-                config = "configs/controllers/lqr_base.toml"
+                config = "samples/controllers/lqr_base.toml"
 
                 [estimator]
                 type = "KalmanFilter"
-                config = "configs/estimators/kalman_base.toml"
+                config = "samples/estimators/kalman_base.toml"
 
                 [trajectory]
                 type = "waypoints"
-                config = "configs/trajectories/base_straight.toml"
+                config = "samples/trajectories/base_straight.toml"
 
                 [sim]
-                config = "robot_config.toml"
+                config = "samples/robot_config.toml"
                 """
             )
         )
@@ -182,7 +182,7 @@ class TestPlantOnlyValidation:
                 dt = 0.01
 
                 [plant]
-                config = "configs/plants/inverted_pendulum.toml"
+                config = "samples/plants/inverted_pendulum.toml"
 
                 [trajectory]
                 type = "waypoints"
@@ -208,7 +208,7 @@ class TestPlantOnlyValidation:
 
                 [plant]
                 type = "Nonexistent"
-                config = "configs/plants/inverted_pendulum.toml"
+                config = "samples/plants/inverted_pendulum.toml"
 
                 [trajectory]
                 type = "waypoints"
@@ -234,7 +234,7 @@ class TestPlantOnlyValidation:
 
                 [plant]
                 type = "InvertedPendulum"
-                config = "configs/plants/inverted_pendulum.toml"
+                config = "samples/plants/inverted_pendulum.toml"
 
                 [trajectory]
                 type = "waypoints"
@@ -260,7 +260,7 @@ class TestPlantOnlyValidation:
 
                 [plant]
                 type = "InvertedPendulum"
-                config = "configs/plants/inverted_pendulum.toml"
+                config = "samples/plants/inverted_pendulum.toml"
                 initial_state = [0.2, 0.0, 0.0]
 
                 [trajectory]

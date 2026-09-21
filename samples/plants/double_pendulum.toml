@@ -1,4 +1,4 @@
-# FILE: configs/plants/double_pendulum.toml
+# FILE: samples/plants/double_pendulum.toml
 # Example config for the DoublePendulum plant — 4D state [theta1, theta2, w1, w2],
 # 2D torque control [tau1, tau2]. Consumed by DoublePendulum.from_config().
 #

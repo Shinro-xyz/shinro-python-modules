@@ -25,8 +25,8 @@ Run (also reachable as ``shinro check`` / ``shinro trace``; ``scripts/
 trace_component.py`` is a kept-for-compatibility shim)::
 
     python3 -m shinro.codegen.component_cli
-    python3 -m shinro.codegen.component_cli --list src/shinro/configs/estimators/kalman_base.toml
-    python3 -m shinro.codegen.component_cli src/shinro/configs/controllers/lqr_base.toml \\
+    python3 -m shinro.codegen.component_cli --list samples/estimators/kalman_base.toml
+    python3 -m shinro.codegen.component_cli samples/controllers/lqr_base.toml \\
         --shape current_state=3 --shape target_state=3
 """
 
@@ -56,10 +56,11 @@ from shinro.factories import (
 from shinro.utils.array_backend import NumpyBackend
 from shinro.utils.config_resolver import resolve_config_path
 
-# The package's own ``configs/`` directory. Resolved relative to this module so
-# it works from a checkout or an installed wheel (``configs/`` is packaged as
-# package data), not the repo's ``src/`` layout.
-CONFIG_DIR = Path(__file__).resolve().parents[1] / "configs"
+# The repo's ``samples/`` directory — documentation, deliberately not packaged.
+# Resolved from the repo layout (src/shinro/codegen -> repo root), so from an
+# installed wheel it does not exist and ``cmd_inventory`` degrades to a
+# registry-only listing (see the ``is_dir()`` guard below).
+CONFIG_DIR = Path(__file__).resolve().parents[3] / "samples"
 
 REGISTRIES: dict[str, dict[str, type]] = {
     "controller": _CONTROLLER_REGISTRY,

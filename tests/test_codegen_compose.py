@@ -36,15 +36,15 @@ from shinro.utils.array_backend import NumpyBackend
 
 
 def _load_kalman() -> KalmanFilter:
-    return EstimatorFactory("configs/estimators/kalman_base.toml").create(backend=NumpyBackend())
+    return EstimatorFactory("samples/estimators/kalman_base.toml").create(backend=NumpyBackend())
 
 
 def _load_luenberger() -> LuenbergerObserver:
-    return EstimatorFactory("configs/estimators/luenberger_base.toml").create(backend=NumpyBackend())
+    return EstimatorFactory("samples/estimators/luenberger_base.toml").create(backend=NumpyBackend())
 
 
 def _load_lqr() -> LQR:
-    return ControllerFactory("configs/controllers/lqr_base.toml").create(backend=NumpyBackend())
+    return ControllerFactory("samples/controllers/lqr_base.toml").create(backend=NumpyBackend())
 
 
 def _load_pid() -> PIDController:
@@ -483,7 +483,7 @@ class TestComposeControllerRoles:
     def test_mpc_lti_compose_error_state(self, rng):
         """KF + MPC_LTI: controller receives x_hat and x_ref, matches live."""
         kf = _load_kalman()
-        mpc = ControllerFactory("configs/controllers/mpc_lti_base.toml").create(backend=NumpyBackend())
+        mpc = ControllerFactory("samples/controllers/mpc_lti_base.toml").create(backend=NumpyBackend())
 
         est_ng = trace_node(
             kf,
@@ -533,7 +533,7 @@ class TestComposeControllerRoles:
     def test_mpc_deltau_compose_routes_u_prev(self, rng):
         """KF + MPC_DeltaU: the controller's u_prev is the shared recurrent port."""
         kf = _load_kalman()
-        mpc = ControllerFactory("configs/controllers/mpc_base.toml").create(backend=NumpyBackend())
+        mpc = ControllerFactory("samples/controllers/mpc_base.toml").create(backend=NumpyBackend())
 
         est_ng = trace_node(
             kf,

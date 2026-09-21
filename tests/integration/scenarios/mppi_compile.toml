@@ -15,15 +15,15 @@ input_limits = { min = [-0.5, -0.5, -1.0], max = [0.5, 0.5, 1.0] }
 
 [plant]
 type = "HolonomicMobileRobot"
-config = "configs/plants/holonomic_base.toml"
+config = "samples/plants/holonomic_base.toml"
 
 [controller]
 type = "MPPI"
-config = "configs/controllers/mppi_base.toml"
+config = "samples/controllers/mppi_base.toml"
 
 [estimator]
 type = "KalmanFilter"
-config = "configs/estimators/kalman_base.toml"
+config = "samples/estimators/kalman_base.toml"
 
 # Build spec: dims are baked into the graph at trace time. MPPI's N/K/D_u come
 # from the controller config (and the plant's control dim), not from here.

@@ -27,7 +27,7 @@ HERE = Path(__file__).parent.parent
 
 def phase_arm_trajectory(sim):
     print("=== Phase 1: Arm trajectory ===")
-    arm_schedule = TrajectoryFactory(str(resolve_config_path("configs/trajectories/arm_extension.toml"))).create()
+    arm_schedule = TrajectoryFactory(str(resolve_config_path("samples/trajectories/arm_extension.toml"))).create()
     arm_joints = sim.config["joint_groups"]["arm_joints"]
     ee_home = sim.arm.get_state()[:3].copy()
     for step, offset in enumerate(arm_schedule):
@@ -43,9 +43,9 @@ def phase_arm_trajectory(sim):
 
 def phase_base_tracking(sim):
     print("=== Phase 2: Base tracking with LQR + observer ===")
-    ctrl = ControllerFactory(str(resolve_config_path("configs/controllers/lqr_base.toml"))).create()
-    observer = EstimatorFactory(str(resolve_config_path("configs/estimators/luenberger_base.toml"))).create()
-    schedule = TrajectoryFactory(str(resolve_config_path("configs/trajectories/base_straight.toml"))).create()
+    ctrl = ControllerFactory(str(resolve_config_path("samples/controllers/lqr_base.toml"))).create()
+    observer = EstimatorFactory(str(resolve_config_path("samples/estimators/luenberger_base.toml"))).create()
+    schedule = TrajectoryFactory(str(resolve_config_path("samples/trajectories/base_straight.toml"))).create()
 
     base_vel = np.zeros(3)
     for step in range(len(schedule)):
@@ -89,7 +89,7 @@ def capture_gif(sim):
 
 
 if __name__ == "__main__":
-    sim = RobotSim(str(resolve_config_path("robot_config.toml")))
+    sim = RobotSim(str(resolve_config_path("samples/robot_config.toml")))
     sim.reset()
 
     phase_arm_trajectory(sim)

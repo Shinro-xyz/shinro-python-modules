@@ -50,18 +50,18 @@ class TestAdversarialNaN:
 
                 [controller]
                 type = "LQR"
-                config = "configs/controllers/lqr_base.toml"
+                config = "samples/controllers/lqr_base.toml"
 
                 [estimator]
                 type = "KalmanFilter"
-                config = "configs/estimators/kalman_base.toml"
+                config = "samples/estimators/kalman_base.toml"
 
                 [trajectory]
                 type = "waypoints"
-                config = "configs/trajectories/base_straight.toml"
+                config = "samples/trajectories/base_straight.toml"
 
                 [sim]
-                config = "robot_config.toml"
+                config = "samples/robot_config.toml"
                 """
             )
         )

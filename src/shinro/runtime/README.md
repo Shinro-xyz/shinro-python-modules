@@ -107,7 +107,7 @@ zig build --build-file src/shinro/runtime/build.zig --prefix build/ \
 
 This is how the MPC_DeltaU `.so` coexists with the shipped MPC_LTI one: bake
 DeltaU into a second directory (`scripts/gen_emosqp_test.py --config
-configs/controllers/mpc_base.toml --out-dir <dir>`), lower the KF+DeltaU
+samples/controllers/mpc_base.toml --out-dir <dir>`), lower the KF+DeltaU
 composed graph (`scripts/gen_mpc.py` with the DeltaU config), and build with
 `-Dgraph`/`-Dsolver_dir` pointing at the pair. The shipped default is never
 touched.
@@ -259,6 +259,6 @@ stage prints and the manifest records. A controller input name that doesn't
 map to a known role, an untraceable op, or a QP graph without a matching bake
 all fail loudly rather than silently mis-wiring.
 
-Start from `src/shinro/configs/scenarios/_template.toml` — a commented
+Start from `samples/scenarios/_template.toml` — a commented
 scenario skeleton with placeholders for your robot's controller, estimator,
 and `[compile]` dims. Copy it, fill in the values, and run `make compile`.

@@ -10,11 +10,11 @@ input_limits = { min = [-0.5, -0.5, -1.0], max = [0.5, 0.5, 1.0] }
 
 [controller]
 type = "MPC_LTI"
-config = "configs/controllers/mpc_lti_base.toml"
+config = "samples/controllers/mpc_lti_base.toml"
 
 [estimator]
 type = "KalmanFilter"
-config = "configs/estimators/kalman_base.toml"
+config = "samples/estimators/kalman_base.toml"
 
 [compile]
 n_x = 3

@@ -27,7 +27,7 @@ GEN = REPO_ROOT / "scripts" / "gen_scenario.py"
 BUILD = REPO_ROOT / "scripts" / "build_scenario.py"
 SCENARIO = REPO_ROOT / "tests" / "integration" / "scenarios" / "base_tracking.toml"
 MPC_SCENARIO = REPO_ROOT / "tests" / "integration" / "scenarios" / "mpc_compile.toml"
-TEMPLATE = REPO_ROOT / "src" / "shinro" / "configs" / "scenarios" / "_template.toml"
+TEMPLATE = REPO_ROOT / "samples" / "scenarios" / "_template.toml"
 
 
 def _run(script: Path, *args: str) -> subprocess.CompletedProcess:
@@ -45,8 +45,8 @@ def _run(script: Path, *args: str) -> subprocess.CompletedProcess:
 def _scenario_toml(tmp_path, compile_section: str) -> Path:
     cfg = tmp_path / "s.toml"
     cfg.write_text(
-        '[controller]\nconfig = "configs/controllers/lqr_base.toml"\n'
-        '[estimator]\nconfig = "configs/estimators/kalman_base.toml"\n' + compile_section
+        '[controller]\nconfig = "samples/controllers/lqr_base.toml"\n'
+        '[estimator]\nconfig = "samples/estimators/kalman_base.toml"\n' + compile_section
     )
     return cfg
 
@@ -265,7 +265,7 @@ def test_e2e_stale_graph_rejected(tmp_path):
     out = tmp_path / "scenario"
     assert _run(GEN, str(SCENARIO), "--out", str(out)).returncode == 0
 
-    lqr = REPO_ROOT / "src" / "shinro" / "configs" / "controllers" / "lqr_base.toml"
+    lqr = REPO_ROOT / "samples" / "controllers" / "lqr_base.toml"
     original = lqr.read_bytes()
     try:
         lqr.write_bytes(original + b"\n# tamper\n")
@@ -354,7 +354,7 @@ def test_non_policy_scenario_still_requires_estimator(tmp_path):
 
     scenario = _policy_scenario(
         tmp_path,
-        controller_config="configs/controllers/lqr_base.toml",
+        controller_config="samples/controllers/lqr_base.toml",
         compile_section="[compile]\nn_x = 3\nn_u = 3\n",
     )
     with pytest.raises(ValueError, match=r"missing \[estimator\]"):

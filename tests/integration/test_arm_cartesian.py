@@ -97,7 +97,7 @@ class TestArmEstimatorVariants:
                 config = "tests/fixtures/configs/trajectories/arm_lift.toml"
 
                 [sim]
-                config = "robot_config.toml"
+                config = "samples/robot_config.toml"
 
                 [noise.measurement]
                 std = [0.005, 0.005, 0.005, 0.01, 0.01, 0.01]

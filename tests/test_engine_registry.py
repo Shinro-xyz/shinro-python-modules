@@ -123,7 +123,7 @@ class TestEngineManifestEquivalence:
     def test_shipped_manifest_uses_engine_section(self):
         with warnings.catch_warnings():
             warnings.simplefilter("error", DeprecationWarning)  # no legacy fallback
-            sim = RobotSim(str(resolve_config_path("robot_config.toml")))
+            sim = RobotSim(str(resolve_config_path("samples/robot_config.toml")))
         assert isinstance(sim.engine, MuJoCoEngine)
         assert set(sim.plants) == {"arm", "base"}
 

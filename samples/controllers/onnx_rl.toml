@@ -1,4 +1,4 @@
-# FILE: configs/controllers/onnx_rl.toml
+# FILE: samples/controllers/onnx_rl.toml
 # ONNX RL policy adapter — run any ONNX-exported RL policy as a Controller.
 #
 # Requires: pip install "shinro[onnx-rl]"  (the `onnx` package, compile-time only;

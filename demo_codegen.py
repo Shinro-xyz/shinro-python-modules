@@ -73,9 +73,9 @@ def main() -> None:
 
     # ─── Load components from the base_tracking configs ─────────────────
     banner("Loading components from base_tracking configs")
-    kf = EstimatorFactory("configs/estimators/kalman_base.toml").create(backend=NumpyBackend())
-    luen = EstimatorFactory("configs/estimators/luenberger_base.toml").create(backend=NumpyBackend())
-    lqr = ControllerFactory("configs/controllers/lqr_base.toml").create(backend=NumpyBackend())
+    kf = EstimatorFactory("samples/estimators/kalman_base.toml").create(backend=NumpyBackend())
+    luen = EstimatorFactory("samples/estimators/luenberger_base.toml").create(backend=NumpyBackend())
+    lqr = ControllerFactory("samples/controllers/lqr_base.toml").create(backend=NumpyBackend())
     print(f"  KalmanFilter: A{kf.A.shape} B{kf.B.shape} C{kf.C.shape}")
     print(f"  Luenberger:   A{luen.A.shape} B{luen.B.shape} L{luen.L.shape}")
     print(f"  LQR:          K{lqr.K.shape}  (gain from DARE, baked at trace time)")

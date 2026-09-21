@@ -39,9 +39,9 @@ import matplotlib.pyplot as plt
 import mujoco
 import numpy as np
 
-from shinro.factories import ControllerFactory, EstimatorFactory, TrajectoryFactory
 from lekiwi_sim import HERE as LEKIWI_HOME
 from lekiwi_sim import MJCF_PATH
+from shinro.factories import ControllerFactory, EstimatorFactory, TrajectoryFactory
 from shinro.simulation import RobotSim
 from shinro.utils.config_resolver import resolve_config_path
 
@@ -98,7 +98,7 @@ def inject_free_joint(xml_string):
     return ET.tostring(root, encoding='unicode')
 
 # ── Build waypoint schedule ──────────────────────────────────────────────
-traj_config = f"configs/trajectories/base_{TRAJECTORY}.toml"
+traj_config = f"samples/trajectories/base_{TRAJECTORY}.toml"
 traj_path = str(resolve_config_path(traj_config))
 base_schedule = TrajectoryFactory(traj_path).create()
 total_steps = len(base_schedule)
@@ -127,17 +127,17 @@ for fname in mesh_dir.iterdir():
         assets[fname.name] = fname.read_bytes()
 
 xml = inject_free_joint(inject_waypoint_markers(base_xml, BASE_WAYPOINTS, BASE_WAYPOINT_STEPS))
-sim = RobotSim(str(resolve_config_path("robot_config.toml")), xml_string=xml, assets=assets)
+sim = RobotSim(str(resolve_config_path("samples/robot_config.toml")), xml_string=xml, assets=assets)
 sim.reset()
 
 # ── Controller ───────────────────────────────────────────────────────────
-ctrl_config = f"configs/controllers/{CONTROLLER}_base.toml"
+ctrl_config = f"samples/controllers/{CONTROLLER}_base.toml"
 ctrl_path = str(resolve_config_path(ctrl_config))
 base_ctrl = ControllerFactory(ctrl_path).create()
 CTRL_LABEL = CONTROLLER.upper()
 
 # ── Estimator ────────────────────────────────────────────────────────────
-base_observer = EstimatorFactory(str(resolve_config_path("configs/estimators/luenberger_base.toml"))).create()
+base_observer = EstimatorFactory(str(resolve_config_path("samples/estimators/luenberger_base.toml"))).create()
 
 # ── Noise ────────────────────────────────────────────────────────────────
 NOISE_BASE_POS = 0.02

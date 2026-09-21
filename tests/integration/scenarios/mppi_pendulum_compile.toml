@@ -18,15 +18,15 @@ input_limits = { min = [-0.5], max = [0.5] }
 
 [plant]
 type = "InvertedPendulum"
-config = "configs/plants/inverted_pendulum.toml"
+config = "samples/plants/inverted_pendulum.toml"
 
 [controller]
 type = "MPPI"
-config = "configs/controllers/mppi_inverted_pendulum.toml"
+config = "samples/controllers/mppi_inverted_pendulum.toml"
 
 [estimator]
 type = "KalmanFilter"
-config = "configs/estimators/kalman_inverted_pendulum.toml"
+config = "samples/estimators/kalman_inverted_pendulum.toml"
 
 # Build spec: dims are baked into the graph at trace time. MPPI's N/K/D_u come
 # from the controller config (and the plant's control dim), not from here.

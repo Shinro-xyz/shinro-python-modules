@@ -4,7 +4,7 @@ Allows swapping between classical control (LQR, MPC) and learned policies
 (diffusion, ACT, pi0, smolvla, etc.) with the same ``--controller`` flag.
 
 Usage:
-    # In configs/controllers/lerobot_diffusion.toml:
+    # In samples/controllers/lerobot_diffusion.toml:
     #   type = "lerobot_diffusion"
     #   policy_type = "diffusion"
     #   checkpoint = "huggingface/lerobot-diffusion-lekiwi"

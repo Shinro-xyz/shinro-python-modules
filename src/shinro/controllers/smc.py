@@ -26,7 +26,7 @@ Scope — a single sliding surface, for every plant shape:
     see the 2026-09-14 lab note for the full decision record.
 
 Usage:
-    # In configs/controllers/smc.toml:
+    # In samples/controllers/smc.toml:
     #   type = "SMC"
     #   c = [1.0, 2.0]
     #   k1 = 10.0

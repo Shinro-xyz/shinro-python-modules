@@ -51,10 +51,10 @@ class TestBaseTrackingConvergence:
 @pytest.mark.parametrize(
     ("controller_cfg", "estimator_cfg"),
     [
-        ("configs/controllers/lqr_base.toml", "configs/estimators/kalman_base.toml"),
-        ("configs/controllers/lqr_base.toml", "configs/estimators/luenberger_base.toml"),
-        ("configs/controllers/mpc_lti_base.toml", "configs/estimators/kalman_base.toml"),
-        ("configs/controllers/mpc_base.toml", "configs/estimators/kalman_base.toml"),
+        ("samples/controllers/lqr_base.toml", "samples/estimators/kalman_base.toml"),
+        ("samples/controllers/lqr_base.toml", "samples/estimators/luenberger_base.toml"),
+        ("samples/controllers/mpc_lti_base.toml", "samples/estimators/kalman_base.toml"),
+        ("samples/controllers/mpc_base.toml", "samples/estimators/kalman_base.toml"),
     ],
 )
 class TestBaseControllerVariants:
@@ -91,10 +91,10 @@ class TestBaseControllerVariants:
 
                 [trajectory]
                 type = "waypoints"
-                config = "configs/trajectories/base_straight.toml"
+                config = "samples/trajectories/base_straight.toml"
 
                 [sim]
-                config = "robot_config.toml"
+                config = "samples/robot_config.toml"
 
                 [noise.measurement]
                 std = [0.01, 0.01, 0.02]

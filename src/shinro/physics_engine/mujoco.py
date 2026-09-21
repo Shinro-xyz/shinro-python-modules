@@ -16,8 +16,8 @@ class MuJoCoEngineConfig:
     """Strict TOML schema for :class:`MuJoCoEngine` (the ``[engine]`` manifest section).
 
     Either ``model`` (path to an MJCF file) or ``xml_string`` is required.
-    ``model`` is resolved relative to the CWD / packaged configs like any
-    config path; ``xml_string`` takes precedence when both are given (used by
+    ``model`` is resolved relative to the CWD like any config path;
+    ``xml_string`` takes precedence when both are given (used by
     template-generated worlds, e.g. ``ScenarioFactory`` physics injection).
     """
 

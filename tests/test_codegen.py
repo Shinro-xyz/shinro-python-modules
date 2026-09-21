@@ -49,11 +49,11 @@ from shinro.utils.array_backend import NumpyBackend  # ─── helpers ──�
 
 
 def _load_kalman() -> KalmanFilter:
-    return EstimatorFactory("configs/estimators/kalman_base.toml").create(backend=NumpyBackend())
+    return EstimatorFactory("samples/estimators/kalman_base.toml").create(backend=NumpyBackend())
 
 
 def _load_lqr() -> LQR:
-    return ControllerFactory("configs/controllers/lqr_base.toml").create(backend=NumpyBackend())
+    return ControllerFactory("samples/controllers/lqr_base.toml").create(backend=NumpyBackend())
 
 
 # ─── Test 1: trace KalmanFilter alone ──────────────────────────────────────

@@ -164,7 +164,7 @@ def _build_mpc_graph():
     (src/shinro/runtime/codegen/emosqp/), whose problem must match the
     ``mpc_lti_base.toml`` bake (n_vars=30).
     """
-    ctrl = ControllerFactory(str(REPO_ROOT / "src/shinro/configs/controllers/mpc_lti_base.toml")).create(backend=NumpyBackend())
+    ctrl = ControllerFactory(str(REPO_ROOT / "samples/controllers/mpc_lti_base.toml")).create(backend=NumpyBackend())
     ng = trace_node(
         ctrl,
         input_shapes={"current_state": (3,), "target_state": (3,)},
@@ -186,7 +186,7 @@ def _build_pid_composed_graph():
     multiply-gated, and output_limits forces the branch-free anti-windup
     (ne mask + where back-calculation) into the graph.
     """
-    kf = EstimatorFactory("configs/estimators/kalman_base.toml").create(backend=NumpyBackend())
+    kf = EstimatorFactory("samples/estimators/kalman_base.toml").create(backend=NumpyBackend())
     pid = PIDController(
         kp=np.array([2.0, 2.0, 2.0]),
         ki=np.array([0.5, 0.5, 0.5]),
@@ -222,8 +222,8 @@ def _build_luenberger_composed_graph():
 
     limits = (np.array([-0.5, -0.5, -1.0]), np.array([0.5, 0.5, 1.0]))
     return build_composed_graph(
-        estimator_config="configs/estimators/luenberger_base.toml",
-        controller_config="configs/controllers/lqr_base.toml",
+        estimator_config="samples/estimators/luenberger_base.toml",
+        controller_config="samples/controllers/lqr_base.toml",
         n_x=3,
         n_u=3,
         input_limits=limits,
@@ -241,7 +241,7 @@ def _build_mpc_deltau_composed_graph():
     """
     from scripts.gen_mpc import build_mpc_composed_graph
 
-    return build_mpc_composed_graph("configs/controllers/mpc_base.toml")
+    return build_mpc_composed_graph("samples/controllers/mpc_base.toml")
 
 
 def _smc_controller(
@@ -252,7 +252,7 @@ def _smc_controller(
 ) -> SlidingModeController:
     """The live (numpy) SMC the lowered graph is compared against.
 
-    Same gains as the shipped ``configs/controllers/smc.toml`` (c=[1, 2],
+    Same gains as the shipped ``samples/controllers/smc.toml`` (c=[1, 2],
     k1=1, k2=0, sat, phi=0.1) so the fixture graph and the live component
     cannot drift apart silently.
     """
@@ -515,7 +515,7 @@ def deltau_bake(tmp_path_factory):
     from scripts.gen_emosqp_test import bake
 
     bake_dir = tmp_path_factory.mktemp("deltau-bake")
-    bake("configs/controllers/mpc_base.toml", str(bake_dir), str(bake_dir / "emosqp_data.zig"))
+    bake("samples/controllers/mpc_base.toml", str(bake_dir), str(bake_dir / "emosqp_data.zig"))
     return bake_dir
 
 
@@ -870,10 +870,10 @@ class TestSingleInputKfLqr:
 
 #: Standalone-instantiable packaged plants: (name, cfg, n_x, n_u, dt).
 PLANT_DIMS = [
-    ("CartPole", "configs/plants/cartpole.toml", 4, 1, 0.01),
-    ("InvertedPendulum", "configs/plants/inverted_pendulum.toml", 2, 1, 0.01),
-    ("DoublePendulum", "configs/plants/double_pendulum.toml", 4, 2, 0.01),
-    ("HolonomicMobileRobot", "configs/plants/holonomic_base.toml", 3, 3, 0.02),
+    ("CartPole", "samples/plants/cartpole.toml", 4, 1, 0.01),
+    ("InvertedPendulum", "samples/plants/inverted_pendulum.toml", 2, 1, 0.01),
+    ("DoublePendulum", "samples/plants/double_pendulum.toml", 4, 2, 0.01),
+    ("HolonomicMobileRobot", "samples/plants/holonomic_base.toml", 3, 3, 0.02),
 ]
 #: Controllers/estimators that trace without a solver bake. MPC stays at the
 #: base dims (existing suite) — every QP size needs its own baked solver.
@@ -1818,23 +1818,23 @@ class TestSolveQpOracle:
 
 
 def _make_kf():
-    return EstimatorFactory("configs/estimators/kalman_base.toml").create(backend=NumpyBackend())
+    return EstimatorFactory("samples/estimators/kalman_base.toml").create(backend=NumpyBackend())
 
 
 def _make_luenberger():
-    return EstimatorFactory("configs/estimators/luenberger_base.toml").create(backend=NumpyBackend())
+    return EstimatorFactory("samples/estimators/luenberger_base.toml").create(backend=NumpyBackend())
 
 
 def _make_lqr():
-    return ControllerFactory("configs/controllers/lqr_base.toml").create(backend=NumpyBackend())
+    return ControllerFactory("samples/controllers/lqr_base.toml").create(backend=NumpyBackend())
 
 
 def _make_mpc_lti():
-    return ControllerFactory("configs/controllers/mpc_lti_base.toml").create(backend=NumpyBackend())
+    return ControllerFactory("samples/controllers/mpc_lti_base.toml").create(backend=NumpyBackend())
 
 
 def _make_mpc_deltau():
-    return ControllerFactory("configs/controllers/mpc_base.toml").create(backend=NumpyBackend())
+    return ControllerFactory("samples/controllers/mpc_base.toml").create(backend=NumpyBackend())
 
 
 def _make_pid():
@@ -2338,8 +2338,8 @@ class TestDeploymentRecord:
             graph_path=graph_path,
             provenance={
                 "configs": {
-                    "configs/estimators/kalman_base.toml": self._sha256("configs/estimators/kalman_base.toml"),
-                    "configs/controllers/lqr_base.toml": self._sha256("configs/controllers/lqr_base.toml"),
+                    "samples/estimators/kalman_base.toml": self._sha256("samples/estimators/kalman_base.toml"),
+                    "samples/controllers/lqr_base.toml": self._sha256("samples/controllers/lqr_base.toml"),
                 },
             },
         )
@@ -2348,7 +2348,7 @@ class TestDeploymentRecord:
 
         assert verify(record, graph_path=graph_path) == 0
 
-        cfg = REPO_ROOT / "src/shinro/configs/controllers/lqr_base.toml"
+        cfg = REPO_ROOT / "samples/controllers/lqr_base.toml"
         original = cfg.read_bytes()
         try:
             cfg.write_bytes(original + b"\n# tamper\n")
@@ -2364,12 +2364,12 @@ class TestDeploymentRecord:
             cg,
             str(out),
             provenance={
-                "configs": {"configs/controllers/lqr_base.toml": "abc123"},
+                "configs": {"samples/controllers/lqr_base.toml": "abc123"},
                 "python_version": "3.12",
             },
         )
         manifest = json.loads((tmp_path / "graph_data_manifest.json").read_text())
-        assert manifest["provenance"]["configs"]["configs/controllers/lqr_base.toml"] == "abc123"
+        assert manifest["provenance"]["configs"]["samples/controllers/lqr_base.toml"] == "abc123"
         assert manifest["provenance"]["python_version"] == "3.12"
 
 

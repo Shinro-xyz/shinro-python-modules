@@ -53,7 +53,7 @@ same loop.
 
 You almost never construct components by hand. Instead, you write a small TOML
 file and let a **factory** build the component from it. For example
-`src/shinro/configs/controllers/lqr_base.toml`:
+`samples/controllers/lqr_base.toml`:
 
 ```toml
 type = "LQR"
@@ -68,7 +68,7 @@ And in code:
 ```python
 from shinro.factories.controller_factory import ControllerFactory
 
-lqr = ControllerFactory("src/shinro/configs/controllers/lqr_base.toml").create()
+lqr = ControllerFactory("samples/controllers/lqr_base.toml").create()
 ```
 
 How the factory works:
@@ -93,7 +93,7 @@ and the tracer — no wiring code anywhere.
 
 There is a factory per category (`ControllerFactory`, `EstimatorFactory`,
 `TrajectoryFactory`, `PlantFactory`), all with the same shape. Configs live in
-`src/shinro/configs/`, packaged with the library.
+your project; the repo's `samples/` holds example configs (shinro ships none).
 
 ## Layer 2: Simulation — putting the loop together
 

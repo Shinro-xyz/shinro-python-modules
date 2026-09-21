@@ -58,8 +58,8 @@ def test_generic_builder_matches_gen_base():
     from scripts.gen_base import build_base_graph
 
     generic = build_composed_graph(
-        "configs/estimators/kalman_base.toml",
-        "configs/controllers/lqr_base.toml",
+        "samples/estimators/kalman_base.toml",
+        "samples/controllers/lqr_base.toml",
         n_x=3,
         n_u=3,
         input_limits=_BASE_LIMITS,
@@ -81,7 +81,7 @@ def test_generic_builder_discovers_pid_state(tmp_path):
     )
 
     cg = build_composed_graph(
-        "configs/estimators/kalman_base.toml",
+        "samples/estimators/kalman_base.toml",
         str(pid_cfg),
         n_x=3,
         n_u=3,
@@ -109,7 +109,7 @@ def test_inject_model_derives_from_plant():
     from shinro.utils.config_resolver import resolve_config_path
     from shinro.utils.linearization import derive_model, inject_model
 
-    with open(resolve_config_path("configs/plants/cartpole.toml"), "rb") as f:
+    with open(resolve_config_path("samples/plants/cartpole.toml"), "rb") as f:
         plant = _PLANT_REGISTRY["CartPole"].from_config(tomllib.load(f), backend=NumpyBackend())
 
     # Omitted A/B → derived from the plant (4x4 A, 4x1 B — not the dt*I default).
@@ -133,7 +133,7 @@ def test_derive_model_falls_back_to_get_model():
     from shinro.utils.config_resolver import resolve_config_path
     from shinro.utils.linearization import derive_model
 
-    with open(resolve_config_path("configs/plants/holonomic_base.toml"), "rb") as f:
+    with open(resolve_config_path("samples/plants/holonomic_base.toml"), "rb") as f:
         plant = _PLANT_REGISTRY["HolonomicMobileRobot"].from_config(
             tomllib.load(f), backend=NumpyBackend()
         )
@@ -150,7 +150,7 @@ def test_derive_model_multi_input():
     from shinro.utils.config_resolver import resolve_config_path
     from shinro.utils.linearization import derive_model
 
-    with open(resolve_config_path("configs/plants/double_pendulum.toml"), "rb") as f:
+    with open(resolve_config_path("samples/plants/double_pendulum.toml"), "rb") as f:
         plant = _PLANT_REGISTRY["DoublePendulum"].from_config(
             tomllib.load(f), backend=NumpyBackend()
         )
@@ -168,7 +168,7 @@ class TestInjectPlantDerived:
         from shinro.utils.array_backend import NumpyBackend
         from shinro.utils.config_resolver import resolve_config_path
 
-        with open(resolve_config_path("configs/plants/cartpole.toml"), "rb") as f:
+        with open(resolve_config_path("samples/plants/cartpole.toml"), "rb") as f:
             return _PLANT_REGISTRY["CartPole"].from_config(tomllib.load(f), backend=NumpyBackend())
 
     def _lqr_cfg(self):
@@ -233,7 +233,7 @@ class TestLoadConfigPlantInjection:
         from shinro.utils.array_backend import NumpyBackend
         from shinro.utils.config_resolver import resolve_config_path
 
-        with open(resolve_config_path("configs/plants/cartpole.toml"), "rb") as f:
+        with open(resolve_config_path("samples/plants/cartpole.toml"), "rb") as f:
             return _PLANT_REGISTRY["CartPole"].from_config(tomllib.load(f), backend=NumpyBackend())
 
     def test_lqr_constructs_from_dtless_config_with_plant(self, cartpole):
@@ -274,7 +274,7 @@ def test_derived_plant_scenario_matches_explicit(tmp_path):
     )
 
     # 2. Explicit path: write configs with A/B from the plant, build directly.
-    with open(resolve_config_path("configs/plants/cartpole.toml"), "rb") as f:
+    with open(resolve_config_path("samples/plants/cartpole.toml"), "rb") as f:
         plant = _PLANT_REGISTRY["CartPole"].from_config(tomllib.load(f), backend=NumpyBackend())
     A_d, B_d = derive_model(plant)
     est = tmp_path / "est.toml"
@@ -313,8 +313,8 @@ def test_mppi_composes_with_a_host_filled_epsilon_port():
         num_wheels=3, radius_robots=0.1, gamma=0.0, radius_wheels=0.03, dt=0.02, backend=NumpyBackend()
     )
     cg = build_composed_graph(
-        "configs/estimators/kalman_base.toml",
-        "configs/controllers/mppi_base.toml",
+        "samples/estimators/kalman_base.toml",
+        "samples/controllers/mppi_base.toml",
         3,
         3,
         input_limits=_BASE_LIMITS,
@@ -402,7 +402,7 @@ def test_composes_with_a_hypothetical_third_estimator():
     est_cfg = {"type": "LeakyAverage", "n_x": 3, "alpha": 0.4}
     cg = build_composed_graph(
         est_cfg,
-        "configs/controllers/mppi_base.toml",
+        "samples/controllers/mppi_base.toml",
         3,
         3,
         input_limits=_BASE_LIMITS,
@@ -417,7 +417,7 @@ def test_composes_with_a_hypothetical_third_estimator():
 
     # Tick-for-tick against the live components (same order as the graph).
     est = _LeakyAverageEstimator.from_config(est_cfg, backend=NumpyBackend())
-    ctrl = ControllerFactory("configs/controllers/mppi_base.toml").create(backend=NumpyBackend())
+    ctrl = ControllerFactory("samples/controllers/mppi_base.toml").create(backend=NumpyBackend())
     ctrl.attach_plant(plant)
 
     rng = np.random.default_rng(5)

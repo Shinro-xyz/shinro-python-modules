@@ -1,4 +1,4 @@
-# FILE: configs/plants/armrobot.toml
+# FILE: samples/plants/armrobot.toml
 # Example config for the ArmRobot plant (SO-ARM100 / LeKiwi arm, 6-DOF).
 #
 # This is a RobotSim [[plants]] entry: when consumed by RobotSim the
@@ -7,7 +7,7 @@
 #
 # Usage:
 #   from shinro.simulation.robotsim import RobotSim
-#   sim = RobotSim("configs/plants/armrobot.toml")  # arm + base via robot_config.toml
+#   sim = RobotSim("samples/plants/armrobot.toml")  # arm + base via robot_config.toml
 #   sim.arm.step([dx, dy, dz, droll, dpitch, dyaw])
 type = "ArmRobot"
 name = "arm"
