@@ -47,6 +47,7 @@ optimize = "debug"        # "debug" | "release" (release → -Doptimize=ReleaseF
 # solver_dir = "src/shinro/runtime/codegen/emosqp"  # REQUIRED for MPC controllers only
 # oracle_tol = 1e-3             # override the numeric oracle tolerance (QP graphs default 1e-3)
 # artifact_name = "libbase"     # deployed artifact stem: lib/<name>.so (default libbase → libbase.so)
+# out = "build/myrobot/release-aarch64"  # explicit output dir (default: build/<scenario-stem>/<optimize>-<target>)
 
 # ── SIMULATION-ONLY — delete this block for a compile-only robot ─────────────
 # [physics]

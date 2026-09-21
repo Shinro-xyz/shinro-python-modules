@@ -2,10 +2,10 @@
 
 Reads a scenario TOML's ``[controller]`` / ``[estimator]`` config paths,
 ``[scenario].input_limits``, and the ``[compile]`` section (``n_x`` / ``n_u`` /
-``recipe``), dispatches to a registered :mod:`shinro.codegen.recipes` recipe to
-compose the step graph, and lowers it to an **isolated** path (``--out``) — the
-shipped ``src/shinro/runtime/graph_data.zig`` is never touched, so compiling a
-custom scenario never clobbers the shipped graph.
+``recipe`` / ``out``), dispatches to a registered :mod:`shinro.codegen.recipes`
+recipe to compose the step graph, and lowers it to an **isolated** path
+(``--out``) — the shipped ``src/shinro/runtime/graph_data.zig`` is never
+touched, so compiling a custom scenario never clobbers the shipped graph.
 
 An optional plant-only ``[plant]`` section (``type`` + ``config``) derives
 ``n_x``/``n_u`` and the ``A_dynamics``/``B_dynamics`` model from the plant (the
@@ -46,7 +46,7 @@ EXIT_OK = 0
 EXIT_UNTRACEABLE = 1
 EXIT_USAGE = 2
 
-_COMPILE_KEYS = {"n_x", "n_u", "optimize", "target", "solver_dir", "oracle_tol", "artifact_name", "recipe"}
+_COMPILE_KEYS = {"n_x", "n_u", "optimize", "target", "solver_dir", "oracle_tol", "artifact_name", "recipe", "out"}
 _ALLOWED_OPTIMIZE = {"debug", "release"}
 _DEFAULT_RECIPE = "closed_loop_tracking"
 _POLICY_RECIPE = "policy_only"
@@ -73,10 +73,10 @@ def _validate_compile(compile_cfg: dict | None, scenario_path: str) -> dict:
 
     Returns a dict with ``n_x`` / ``n_u`` (optional — derived from ``[plant]``
     when absent), ``recipe`` (optional — inferred from the sections when
-    absent), and ``optimize`` / ``target`` / ``solver_dir`` / ``artifact_name``
-    (optional, with defaults). Unknown keys and invalid ``optimize`` values are
-    loud errors — the section is the build spec, so a typo must not silently
-    change the build.
+    absent), and ``optimize`` / ``target`` / ``solver_dir`` / ``artifact_name`` /
+    ``out`` (optional, with defaults). Unknown keys and invalid ``optimize``
+    values are loud errors — the section is the build spec, so a typo must not
+    silently change the build.
 
     Raises:
         ValueError: On a missing section, unknown keys, or an invalid
@@ -105,6 +105,9 @@ def _validate_compile(compile_cfg: dict | None, scenario_path: str) -> dict:
     recipe = compile_cfg.get("recipe")
     if recipe is not None and not isinstance(recipe, str):
         raise ValueError(f"{scenario_path}: [compile].recipe must be a string (got {recipe!r})")
+    out = compile_cfg.get("out")
+    if out is not None and (not isinstance(out, str) or not out):
+        raise ValueError(f"{scenario_path}: [compile].out must be a non-empty path string (got {out!r})")
     return {
         "n_x": int(compile_cfg["n_x"]) if "n_x" in compile_cfg else None,
         "n_u": int(compile_cfg["n_u"]) if "n_u" in compile_cfg else None,
@@ -118,6 +121,9 @@ def _validate_compile(compile_cfg: dict | None, scenario_path: str) -> dict:
         # settling, which grows with n_vars and constraint activity).
         "oracle_tol": float(compile_cfg["oracle_tol"]) if "oracle_tol" in compile_cfg else None,
         "recipe": recipe,
+        # Optional explicit output dir (per-target). When absent the CLI
+        # defaults to build/<scenario-stem>/<optimize>-<target>.
+        "out": out,
     }
 
 
