@@ -129,6 +129,14 @@ def test_e2e_compile_verified(tmp_path):
     rec = json.loads(record.read_text())
     assert rec["master_hash"]
     assert rec["slots"]["binary"] == hashlib.sha256(so.read_bytes()).hexdigest()
+    # The oracle ran natively, and the record says so with its parameters.
+    assert rec["oracle"]["status"] == "passed"
+    assert rec["oracle"]["samples"] == 20
+    assert rec["oracle"]["max_abs_err"] < rec["oracle"]["tolerance"]
+    # Build provenance is copied from the manifest; [compile] omits optimize -> Debug.
+    assert rec["build"]["optimize"] == "Debug"
+    assert rec["build"]["target"]
+    assert rec["build"]["zig_version"]
 
 
 @pytest.mark.skipif(shutil.which("zig") is None, reason="zig not on PATH")
@@ -147,6 +155,12 @@ def test_e2e_cross_compile_skips_oracle(tmp_path):
     assert so.exists()
     record = out / "lib" / "libbase.deployment.json"
     assert record.exists()
+    # A cross-compiled build cannot dlopen its .so, so the record marks the
+    # oracle not-run and names the reason rather than silently implying a pass.
+    rec = json.loads(record.read_text())
+    assert rec["oracle"]["status"] == "not_run"
+    assert rec["oracle"]["reason"] == "cross-compiled"
+    assert "aarch64" in rec["build"]["target"]
 
 
 @pytest.mark.skipif(shutil.which("zig") is None, reason="zig not on PATH")

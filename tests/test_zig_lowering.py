@@ -2293,6 +2293,30 @@ class TestDeploymentRecord:
         base_dir, _ = manifests
         assert self._stamp(base_dir) == self._stamp(base_dir)
 
+    def test_record_captures_build_provenance(self, manifests):
+        """The record mirrors the build manifest's target/optimize/strip/zig version."""
+        base_dir, _ = manifests
+        record = self._stamp(base_dir)
+        manifest = json.loads((base_dir / "lib" / "libbase.manifest.json").read_text())
+        for key in ("target", "optimize", "stripped", "zig_version", "libc", "float_type"):
+            assert record["build"][key] == manifest.get(key)
+        assert record["build"]["optimize"] in ("Debug", "ReleaseFast", "ReleaseSafe", "ReleaseSmall")
+        assert isinstance(record["build"]["stripped"], bool)
+        assert record["build"]["zig_version"]
+
+    def test_record_oracle_block_is_metadata(self, manifests):
+        """Oracle status is recorded verbatim but excluded from the master hash."""
+        from scripts.stamp_deployment import stamp
+
+        base_dir, _ = manifests
+        default = self._stamp(base_dir)
+        assert default["oracle"]["status"] == "not_run"
+
+        passed = stamp(base_dir, RUNTIME, oracle={"status": "passed", "samples": 20, "max_abs_err": 1e-15})
+        assert passed["oracle"] == {"status": "passed", "samples": 20, "max_abs_err": 1e-15}
+        # A different oracle outcome must not change the build identity.
+        assert passed["master_hash"] == default["master_hash"]
+
     def test_archive_copy_timestamped(self, manifests):
         """The archive copy is timestamped in the filename only."""
         base_dir, _ = manifests
