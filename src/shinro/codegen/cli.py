@@ -22,21 +22,37 @@ from shinro.codegen.scenario_build import build_scenario
 from shinro.codegen.scenario_gen import EXIT_UNTRACEABLE, EXIT_USAGE, gen_scenario
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("scenario", help="scenario TOML path")
-    parser.add_argument("--out", default="build/scenario", help="output dir for the graph (default: build/scenario)")
-    parser.add_argument("--optimize", choices=["debug", "release"], help="override [compile].optimize")
-    parser.add_argument("--target", help="override [compile].target (zig triple, e.g. aarch64-linux-gnu)")
-    parser.add_argument("--solver-dir", help="override [compile].solver_dir (baked OSQP solver dir)")
-    parser.add_argument("--artifact-name", help="override [compile].artifact_name (kernel installs as lib/<name>.so)")
-    parser.add_argument("--samples", type=int, default=20, help="random inputs for the oracle (default 20)")
-    parser.add_argument("--seed", type=int, default=0, help="RNG seed for the oracle (default 0)")
-    args = parser.parse_args()
+def compile_scenario(
+    scenario: str,
+    out: str,
+    *,
+    optimize: str | None = None,
+    target: str | None = None,
+    solver_dir: str | None = None,
+    artifact_name: str | None = None,
+    samples: int = 20,
+    seed: int = 0,
+) -> int:
+    """Run the full e2e pipeline for a scenario: gen (zig-free) then build.
 
+    Args:
+        scenario: Scenario TOML path.
+        out: Output dir for the graph + artifact (the per-scenario default is
+            ``build/<scenario-stem>``; see :func:`shinro.cli.main`).
+        optimize: Override ``[compile].optimize`` (``debug``/``release``).
+        target: Override ``[compile].target`` (zig triple).
+        solver_dir: Override ``[compile].solver_dir`` (baked OSQP solver dir).
+        artifact_name: Override ``[compile].artifact_name``.
+        samples: Random inputs for the oracle (default 20).
+        seed: RNG seed for the oracle (default 0).
+
+    Returns:
+        An exit code: 0 ok · 1 untraceable · 2 usage/config · 3 oracle
+        mismatch · 4 build/verify failure · 5 zig missing.
+    """
     # Stage 1: gen (zig-free).
     try:
-        cg, graph_path = gen_scenario(args.scenario, args.out)
+        cg, graph_path = gen_scenario(scenario, out)
     except (ValueError, FileNotFoundError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return EXIT_USAGE
@@ -53,8 +69,31 @@ def main() -> int:
 
     # Stage 2: build + oracle + stamp + verify.
     return build_scenario(
+        out,
+        scenario=scenario,
+        optimize=optimize,
+        target=target,
+        solver_dir=solver_dir,
+        artifact_name=artifact_name,
+        samples=samples,
+        seed=seed,
+    )
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("scenario", help="scenario TOML path")
+    parser.add_argument("--out", default="build/scenario", help="output dir for the graph (default: build/scenario)")
+    parser.add_argument("--optimize", choices=["debug", "release"], help="override [compile].optimize")
+    parser.add_argument("--target", help="override [compile].target (zig triple, e.g. aarch64-linux-gnu)")
+    parser.add_argument("--solver-dir", help="override [compile].solver_dir (baked OSQP solver dir)")
+    parser.add_argument("--artifact-name", help="override [compile].artifact_name (kernel installs as lib/<name>.so)")
+    parser.add_argument("--samples", type=int, default=20, help="random inputs for the oracle (default 20)")
+    parser.add_argument("--seed", type=int, default=0, help="RNG seed for the oracle (default 0)")
+    args = parser.parse_args()
+    return compile_scenario(
+        args.scenario,
         args.out,
-        scenario=args.scenario,
         optimize=args.optimize,
         target=args.target,
         solver_dir=args.solver_dir,

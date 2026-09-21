@@ -67,7 +67,8 @@ The pipeline lives in `src/shinro/codegen/`; the Zig VM lives in `src/shinro/run
 | `demo_codegen.py` (repo root) | Runnable demo: traces KF+LQR for the base and cartpole plants, composes, and verifies each stage against a live numpy loop. |
 | `src/shinro/runtime/` (Zig) | `build.zig` (build script), `lower.zig` (comptime-unrolled VM), `linalg.zig` (shared linear-algebra kernels), `graph_data.zig` (generated graph). |
 | `scripts/gen_base.py` | Serializes the `base_tracking` composed graph to `src/shinro/runtime/graph_data.zig` (the `make zig-gen` target). |
-| `scripts/trace_component.py` | Standalone "does my component trace?" gate: inventory of registered components, inferred trace contract (`--list`), and trace + interpret-vs-live oracle check (bit-exact) for any config TOML. |
+| `codegen/component_cli.py` | The "does my component trace?" gate (`shinro check` / `shinro trace`, plus the kept `scripts/trace_component.py` shim): inventory of registered components, inferred trace contract (`--list`), and trace + interpret-vs-live oracle check (bit-exact) for any config TOML. |
+| `cli.py` | The unified `shinro` console script — dispatches `check` / `run` / `trace` / `build` / `verify` over the existing module APIs. |
 
 ## The tracing model
 
@@ -407,6 +408,24 @@ recorded in the manifest) is the only thing the host must re-pack.
 Start from `src/shinro/configs/scenarios/_template.toml` — a commented
 scenario skeleton with placeholders for your robot's controller, estimator,
 and `[compile]` dims. Copy it, fill in the values, and run `make compile`.
+
+### The unified `shinro` CLI
+
+The pipeline above is exposed as one console script, so the scenario TOML stays
+the single artifact you author. Each verb is a thin dispatcher over the module
+APIs, and each maps to one gate:
+
+| Verb | Gate |
+| --- | --- |
+| `shinro check <cfg.toml>` | constructs — a component config goes through its factory `create()` + the inferred trace contract; a scenario TOML goes through `ScenarioFactory.build()` and reports the composed roles |
+| `shinro run <scenario.toml>` | behavior — `Scenario.run()` then `SimResult.check()` against `[scenario.tolerance]`; non-zero exit when a tolerance is exceeded |
+| `shinro trace <cfg.toml>` | trace fidelity — `trace_node` op coverage + the `interpret()`-vs-live oracle (bit-exact) |
+| `shinro build <scenario.toml>` | lowering — trace → compose → lower → `zig build` → oracle → stamp → verify |
+| `shinro verify <scenario.toml>` | drift — re-hash the stamped artifacts against the deployment record |
+
+`build`/`verify` default `--out` to `build/<scenario-stem>` so different
+scenarios never clobber each other's graph and record; pass `--out` to
+override. `shinro-compile` remains as the `build`-only alias.
 
 ### Build manifest (audit trail)
 

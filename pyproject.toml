@@ -39,6 +39,7 @@ dev = [
 ]
 
 [project.scripts]
+shinro = "shinro.cli:main"
 shinro-mcp = "shinro.mcp.server:main"
 shinro-compile = "shinro.codegen.cli:main"
 
