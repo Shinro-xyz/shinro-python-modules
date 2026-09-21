@@ -1,0 +1,22 @@
+# MPC_LTI closed loop on the 3-DOF holonomic base, with the QP solver baked on
+# demand — [compile].solver = "emosqp" makes `shinro build` / build_scenario.py
+# generate the static OSQP solver into <out>/emosqp and link it, instead of
+# requiring a pre-baked [compile].solver_dir. Same estimator/controller pair as
+# the shipped KF + MPC_LTI graph (scripts/gen_mpc.py), n_vars = 30.
+[scenario]
+name = "mpc_base_tracking"
+description = "MPC_LTI + Kalman filter on the holonomic base, OSQP solver baked on demand"
+input_limits = { min = [-0.5, -0.5, -1.0], max = [0.5, 0.5, 1.0] }
+
+[controller]
+type = "MPC_LTI"
+config = "configs/controllers/mpc_lti_base.toml"
+
+[estimator]
+type = "KalmanFilter"
+config = "configs/estimators/kalman_base.toml"
+
+[compile]
+n_x = 3
+n_u = 3
+solver = "emosqp"

@@ -1,11 +1,11 @@
-"""Generate the OSQP codegen static solver + the test vectors for its Zig oracle test.
+"""Generate the OSQP codegen static solver + the Zig oracle test vectors.
 
-Builds the base MPC_LTI from ``mpc_lti_base.toml``, runs OSQP's codegen to
-emit a statically-allocated solver into ``src/shinro/runtime/codegen/emosqp/``
-(no malloc, no libosqp dependency), and writes
-``src/shinro/runtime/tests/emosqp_data.zig`` — the *data* (sample q and the
-expected solution) consumed by the handwritten oracle test
-``src/shinro/runtime/tests/emosqp.zig``.
+Wraps :func:`shinro.codegen.bake.bake_emosqp` — which emits the
+statically-allocated solver into ``<out-dir>/`` (no malloc, no libosqp
+dependency) and the ``<out-dir>/solver_meta.zig`` the VM comptime-checks
+against — and additionally writes ``src/shinro/runtime/tests/emosqp_data.zig``,
+the *data* (sample q and the expected solution) consumed by the handwritten
+oracle test ``src/shinro/runtime/tests/emosqp.zig``.
 
 Following the lowerer's doctrine ("Python emits data only, never code"): the
 Zig test program is handwritten once and never regenerated; only the two float
@@ -16,10 +16,6 @@ The codegen solver bakes in the problem data (P, A, l, u) and the settings.
 For MPC only the linear cost q changes per tick, so ``parameters="vectors"``
 (embedded_mode=1) is used. Both the codegen and the oracle use eps=1e-6 so
 they converge to the same point.
-
-Also emits ``<out-dir>/solver_meta.zig`` (``pub const n_vars``) — the bake's
-variable count, which the Zig VM comptime-checks against any graph containing
-a ``.solve_qp`` node at build time.
 
 Warning — shared path, last build wins: by default this script overwrites the
 ENTIRE ``src/shinro/runtime/codegen/emosqp/`` tree (and
@@ -33,7 +29,8 @@ original config. The shipped default bakes
 To bake a *second* problem without clobbering the shipped default, pass
 ``--out-dir`` (e.g. a tmp dir) and build the graph against it with
 ``zig build -Dgraph=<path> -Dsolver_dir=<dir>`` — see
-``src/shinro/runtime/README.md``.
+``src/shinro/runtime/README.md``. ``shinro build`` does this automatically for
+a scenario declaring ``[compile].solver = "emosqp"``.
 
 Run: ``python3 scripts/gen_emosqp_test.py [--config ...] [--out-dir ...]``
 """
@@ -41,70 +38,42 @@ Run: ``python3 scripts/gen_emosqp_test.py [--config ...] [--out-dir ...]``
 from __future__ import annotations
 
 import argparse
-import hashlib
 import os
-import sys
-from importlib.metadata import version
 
 import numpy as np
 import osqp
 from scipy import sparse
 
+from shinro.codegen.bake import EPS, Bake, bake_emosqp
 from shinro.codegen.lower_zig import _zig_floats
-from shinro.factories.controller_factory import ControllerFactory
-from shinro.utils.array_backend import NumpyBackend
-from shinro.utils.config_resolver import resolve_config_path
 
 DEFAULT_CONFIG = "configs/controllers/mpc_lti_base.toml"
 DEFAULT_OUT_DIR = "src/shinro/runtime/codegen/emosqp"
 DEFAULT_DATA_PATH = "src/shinro/runtime/tests/emosqp_data.zig"
-EPS = 1e-6
-
-
-def _config_sha256(config_path: str) -> str:
-    """Return the sha256 of a config file's raw bytes (hermetic: no preprocessing).
-
-    Resolves the path the same way the factories do, so the hash covers
-    exactly the file the controller was built from.
-    """
-    with open(resolve_config_path(config_path), "rb") as f:
-        return hashlib.sha256(f.read()).hexdigest()
 
 
 def bake(config: str, out_dir: str, data_out: str) -> int:
-    """Bake the OSQP codegen static solver for one MPC problem.
+    """Bake the solver (via :func:`bake_emosqp`) and write the oracle vectors.
 
     Args:
         config: MPC controller TOML config path.
-        out_dir: Directory to write the codegen solver tree (also receives
+        out_dir: Directory for the codegen solver tree (also receives
             ``solver_meta.zig``).
         data_out: Path for the oracle test vectors.
 
     Returns:
         The baked problem's n_vars.
     """
-    ctrl = ControllerFactory(config).create(backend=NumpyBackend())
-    H = np.asarray(ctrl.H, dtype=np.float64)
-    A = ctrl.A_constraints.tocsc()
-    lb = np.asarray(ctrl.lcons, dtype=np.float64)
-    ub = np.asarray(ctrl.ucons, dtype=np.float64)
+    b: Bake = bake_emosqp(config, out_dir)
 
-    # Sample state for the oracle: sized to the controller's input dimension
+    # Python oracle for a sample state (same settings): the Zig test vectors.
+    # The sample state is sized to the controller's input dimension
     # (MPC_LTI: n_x; MPC_DeltaU: n_x + n_u, the augmented state). F is
     # (n_in, n_vars), so q = Fᵀ x₀ is (n_vars,).
-    n_in = ctrl.F.shape[0]
-    sample_x0 = np.linspace(0.1, -0.2, n_in)
-
-    # 1. Generate the static solver (baked with q=0; q is updated per tick).
-    prob = osqp.OSQP()
-    prob.setup(sparse.csc_matrix(H), np.zeros(H.shape[0]), A, lb, ub, warm_starting=True, verbose=False)
-    prob.update_settings(eps_abs=EPS, eps_rel=EPS)
-    prob.codegen(out_dir, parameters="vectors", force_rewrite=True, printing_enable=False)
-
-    # 2. Python oracle for the sample state (same settings).
-    q = np.asarray(ctrl.F, dtype=np.float64).T @ sample_x0
+    sample_x0 = np.linspace(0.1, -0.2, b.F.shape[0])
+    q = np.asarray(b.F, dtype=np.float64).T @ sample_x0
     oracle = osqp.OSQP()
-    oracle.setup(sparse.csc_matrix(H), q.flatten(), A, lb, ub, warm_starting=True, verbose=False)
+    oracle.setup(sparse.csc_matrix(b.H), q.flatten(), b.A, b.lb, b.ub, warm_starting=True, verbose=False)
     oracle.update_settings(eps_abs=EPS, eps_rel=EPS)
     u_opt = oracle.solve().x
 
@@ -126,31 +95,10 @@ pub const u_expected = [_]f64{{
     with open(data_out, "w") as f:
         f.write(data)
 
-    # 3. The bake's n_vars, consumed by the VM's comptime graph↔bake check,
-    #    plus provenance (config, n_cons, eps) surfaced in the build manifest.
-    meta = f"""// {out_dir}/solver_meta.zig — Generated by scripts/gen_emosqp_test.py — DO NOT EDIT.
-// The baked solver's variable count. src/shinro/runtime/lower.zig comptime-checks that
-// any graph containing a .solve_qp node matches this n_vars at build time.
-// The remaining consts are provenance surfaced in the build manifest.
-
-pub const n_vars: usize = {H.shape[0]};
-pub const n_cons: usize = {A.shape[0]};
-pub const eps: f64 = {EPS};
-pub const config = "{config}";
-pub const config_sha256 = "{_config_sha256(config)}";
-pub const python_version = "{sys.version.split()[0]}";
-pub const numpy_version = "{version('numpy')}";
-pub const scipy_version = "{version('scipy')}";
-pub const osqp_version = "{version('osqp')}";
-"""
-    meta_path = os.path.join(out_dir, "solver_meta.zig")
-    with open(meta_path, "w") as f:
-        f.write(meta)
-
-    print(f"wrote {data_out} (n_vars={H.shape[0]}, n_cons={A.shape[0]})")
+    print(f"wrote {data_out} (n_vars={b.n_vars}, n_cons={b.n_cons})")
     print(f"codegen regenerated in {out_dir}/")
-    print(f"wrote {meta_path}")
-    return H.shape[0]
+    print(f"wrote {os.path.join(out_dir, 'solver_meta.zig')}")
+    return b.n_vars
 
 
 def main() -> None:

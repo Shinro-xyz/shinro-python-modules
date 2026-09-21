@@ -26,6 +26,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 GEN = REPO_ROOT / "scripts" / "gen_scenario.py"
 BUILD = REPO_ROOT / "scripts" / "build_scenario.py"
 SCENARIO = REPO_ROOT / "tests" / "integration" / "scenarios" / "base_tracking.toml"
+MPC_SCENARIO = REPO_ROOT / "tests" / "integration" / "scenarios" / "mpc_compile.toml"
 TEMPLATE = REPO_ROOT / "src" / "shinro" / "configs" / "scenarios" / "_template.toml"
 
 
@@ -73,6 +74,17 @@ def test_load_scenario_parses_out(tmp_path):
 def test_load_scenario_rejects_empty_out(tmp_path):
     with pytest.raises(ValueError, match="out"):
         load_scenario(str(_scenario_toml(tmp_path, '[compile]\nn_x = 3\nn_u = 3\nout = ""\n')))
+
+
+def test_load_scenario_rejects_solver_and_solver_dir(tmp_path):
+    """[compile].solver (bake) and solver_dir (pre-baked) are mutually exclusive."""
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        load_scenario(str(_scenario_toml(tmp_path, '[compile]\nn_x = 3\nn_u = 3\nsolver = "emosqp"\nsolver_dir = "x"\n')))
+
+
+def test_load_scenario_rejects_unknown_solver(tmp_path):
+    with pytest.raises(ValueError, match="unknown .*solver"):
+        load_scenario(str(_scenario_toml(tmp_path, '[compile]\nn_x = 3\nn_u = 3\nsolver = "bogus"\n')))
 
 
 def test_gen_scenario_matches_shipped_graph(tmp_path):
@@ -171,6 +183,29 @@ def test_e2e_cross_compile_skips_oracle(tmp_path):
     assert rec["oracle"]["status"] == "not_run"
     assert rec["oracle"]["reason"] == "cross-compiled"
     assert "aarch64" in rec["build"]["target"]
+
+
+@pytest.mark.skipif(shutil.which("zig") is None, reason="zig not on PATH")
+def test_e2e_mpc_bakes_solver_on_demand(tmp_path):
+    """[compile].solver = emosqp bakes the QP solver into <out>/emosqp, then builds."""
+    out = tmp_path / "scenario"
+    assert _run(GEN, str(MPC_SCENARIO), "--out", str(out)).returncode == 0
+
+    build = _run(BUILD, str(out), "--scenario", str(MPC_SCENARIO))
+    assert build.returncode == 0, build.stderr
+    assert "baking emosqp" in build.stdout
+    assert "oracle B" in build.stdout
+
+    assert (out / "lib" / "libbase.so").exists()
+    assert (out / "emosqp" / "solver_meta.zig").exists()
+    rec = json.loads((out / "lib" / "libbase.deployment.json").read_text())
+    assert rec["solver"]["n_vars"] == 30
+    assert rec["oracle"]["status"] == "passed"
+
+    # A second build reuses the existing bake rather than regenerating it.
+    build2 = _run(BUILD, str(out), "--scenario", str(MPC_SCENARIO))
+    assert build2.returncode == 0, build2.stderr
+    assert "reusing current emosqp bake" in build2.stdout
 
 
 @pytest.mark.skipif(shutil.which("zig") is None, reason="zig not on PATH")

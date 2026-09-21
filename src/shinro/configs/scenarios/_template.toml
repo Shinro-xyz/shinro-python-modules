@@ -44,7 +44,8 @@ n_u = 2                 # <fill in: plant input dimension>
 optimize = "debug"        # "debug" | "release" (release → -Doptimize=ReleaseFast)
 # recipe = "closed_loop_tracking"  # compose wiring: closed_loop_tracking (default) | policy_only
 # target = "aarch64-linux-gnu"   # cross-compile for the robot board; omit = native
-# solver_dir = "src/shinro/runtime/codegen/emosqp"  # REQUIRED for MPC controllers only
+# solver = "emosqp"             # MPC/QP only: bake the QP solver on demand (mutually exclusive with solver_dir)
+# solver_dir = "src/shinro/runtime/codegen/emosqp"  # MPC/QP only: reuse a pre-baked solver dir (mutually exclusive with solver)
 # oracle_tol = 1e-3             # override the numeric oracle tolerance (QP graphs default 1e-3)
 # artifact_name = "libbase"     # deployed artifact stem: lib/<name>.so (default libbase → libbase.so)
 # out = "build/myrobot/release-aarch64"  # explicit output dir (default: build/<scenario-stem>/<optimize>-<target>)

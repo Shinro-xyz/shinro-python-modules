@@ -39,6 +39,7 @@ from pathlib import Path
 import numpy as np
 
 from shinro.codegen import lower_zig
+from shinro.codegen.bake import SOLVERS
 from shinro.codegen.recipes import available_graphs, build_recipe, tool_versions, type_from_component_config
 from shinro.utils.config_resolver import resolve_config_path
 
@@ -46,7 +47,7 @@ EXIT_OK = 0
 EXIT_UNTRACEABLE = 1
 EXIT_USAGE = 2
 
-_COMPILE_KEYS = {"n_x", "n_u", "optimize", "target", "solver_dir", "oracle_tol", "artifact_name", "recipe", "out"}
+_COMPILE_KEYS = {"n_x", "n_u", "optimize", "target", "solver_dir", "oracle_tol", "artifact_name", "recipe", "out", "solver"}
 _ALLOWED_OPTIMIZE = {"debug", "release"}
 _DEFAULT_RECIPE = "closed_loop_tracking"
 _POLICY_RECIPE = "policy_only"
@@ -74,9 +75,9 @@ def _validate_compile(compile_cfg: dict | None, scenario_path: str) -> dict:
     Returns a dict with ``n_x`` / ``n_u`` (optional — derived from ``[plant]``
     when absent), ``recipe`` (optional — inferred from the sections when
     absent), and ``optimize`` / ``target`` / ``solver_dir`` / ``artifact_name`` /
-    ``out`` (optional, with defaults). Unknown keys and invalid ``optimize``
-    values are loud errors — the section is the build spec, so a typo must not
-    silently change the build.
+    ``out`` / ``solver`` (optional, with defaults). Unknown keys and invalid
+    ``optimize`` values are loud errors — the section is the build spec, so a
+    typo must not silently change the build.
 
     Raises:
         ValueError: On a missing section, unknown keys, or an invalid
@@ -108,6 +109,14 @@ def _validate_compile(compile_cfg: dict | None, scenario_path: str) -> dict:
     out = compile_cfg.get("out")
     if out is not None and (not isinstance(out, str) or not out):
         raise ValueError(f"{scenario_path}: [compile].out must be a non-empty path string (got {out!r})")
+    solver = compile_cfg.get("solver")
+    if solver is not None:
+        if not isinstance(solver, str):
+            raise ValueError(f"{scenario_path}: [compile].solver must be a string (got {solver!r})")
+        if solver not in SOLVERS:
+            raise ValueError(f"{scenario_path}: unknown [compile].solver '{solver}' (registered: {sorted(SOLVERS)})")
+        if compile_cfg.get("solver_dir") is not None:
+            raise ValueError(f"{scenario_path}: [compile].solver and [compile].solver_dir are mutually exclusive")
     return {
         "n_x": int(compile_cfg["n_x"]) if "n_x" in compile_cfg else None,
         "n_u": int(compile_cfg["n_u"]) if "n_u" in compile_cfg else None,
@@ -124,6 +133,9 @@ def _validate_compile(compile_cfg: dict | None, scenario_path: str) -> dict:
         # Optional explicit output dir (per-target). When absent the CLI
         # defaults to build/<scenario-stem>/<optimize>-<target>.
         "out": out,
+        # Optional solver name: bake the QP solver on demand (into <out>/emosqp)
+        # rather than consuming a pre-baked solver_dir.
+        "solver": solver,
     }
 
 

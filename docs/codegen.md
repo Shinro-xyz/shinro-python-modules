@@ -401,9 +401,11 @@ make compile SCENARIO=tests/integration/scenarios/base_tracking.toml
 
 The `[compile]` section is the build spec: `n_x`/`n_u` (baked at trace time;
 optional when a plant-only `[plant]` derives them), `optimize`
-(`debug`/`release` → ReleaseFast only), `target` (cross-compile), `solver_dir`
-(required for QP graphs), `out` (explicit output dir). Unknown keys and invalid
-`optimize` values are loud errors. Component swaps are TOML edits: change
+(`debug`/`release` → ReleaseFast only), `target` (cross-compile), `out`
+(explicit output dir), and — for a QP (MPC) graph — a solver: `solver =
+"emosqp"` bakes the static OSQP solver on demand into `<out>/emosqp` (reused
+when current), while `solver_dir` reuses a pre-baked tree; the two are mutually
+exclusive. Unknown keys and invalid `optimize` values are loud errors. Component swaps are TOML edits: change
 `[controller]`/`[estimator]` and re-run `make compile` — the graph is
 regenerated from scratch, and the C-ABI port layout (printed by the gen stage,
 recorded in the manifest) is the only thing the host must re-pack.
