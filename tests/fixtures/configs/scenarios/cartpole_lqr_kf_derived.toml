@@ -6,8 +6,9 @@
 # weights — no hand-computed model. This is the same derivation the simulation
 # path (ScenarioFactory) uses, so sim and compile agree on the model.
 #
-# Explicit [compile] n_x/n_u or config A_dynamics/B_dynamics would win over the
-# derived values; here neither is written.
+# Neither [compile] n_x/n_u nor config A_dynamics/B_dynamics is written: the
+# plant is authoritative and derives both. A declared n_x/n_u that disagrees
+# with the plant is now an error (the plant wins).
 
 [plant]
 type = "CartPole"
