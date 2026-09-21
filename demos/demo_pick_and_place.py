@@ -21,7 +21,7 @@ from shinro.simulation import RobotSim
 from shinro.utils.config_resolver import resolve_config_path
 
 HERE = Path(__file__).parent.parent
-OUTPUT_PATH = str(HERE / "lekiwi_demo.gif")
+OUTPUT_PATH = str(HERE / "build" / "demos" / "lekiwi_demo.gif")
 
 # ── XML injection ────────────────────────────────────────────────────────
 import xml.etree.ElementTree as ET
@@ -95,6 +95,7 @@ for step in range(total_steps):
 
 renderer.close()
 
+Path(OUTPUT_PATH).parent.mkdir(parents=True, exist_ok=True)
 iio.imwrite(
     OUTPUT_PATH, frames,
     fps=50 // capture_every, loop=0,

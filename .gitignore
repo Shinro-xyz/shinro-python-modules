@@ -4,6 +4,18 @@ __pycache__/
 *$py.class
 run_ci_local.txt
 
+# Repo-local junk (removed 2026-09-21): editor session file + the retired
+# codebase index. Neither is ever a build input.
+:memory:.ses
+.codebase/
+
+# Demo media is written to build/demos/ (already ignored). These are the four
+# legacy repo-root outputs; ignore them if a stale run recreates them.
+/lekiwi_demo.gif
+/lekiwi_arm_demo.gif
+/simple_demo.gif
+/double_pendulum_demo.png
+
 # setuptools-scm generated version module
 src/shinro/_version.py
 

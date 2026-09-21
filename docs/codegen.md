@@ -64,7 +64,7 @@ The pipeline lives in `src/shinro/codegen/`; the Zig VM lives in `src/shinro/run
 | `codegen/interpreter.py` | `interpret` / `interpret_step` — replay a graph on real numpy inputs. |
 | `codegen/compose.py` | `compose` — merge per-component graphs into one closed-loop step graph, auto-inserting `reshape`/`clip`. |
 | `codegen/lower_zig.py` | Emit `src/shinro/runtime/graph_data.zig` (the graph as Zig constants) from a composed graph. |
-| `demo_codegen.py` (repo root) | Runnable demo: traces KF+LQR for the base and cartpole plants, composes, and verifies each stage against a live numpy loop. |
+| `demos/demo_codegen.py` | Runnable demo: traces KF+LQR for the base and cartpole plants, composes, and verifies each stage against a live numpy loop. |
 | `src/shinro/runtime/` (Zig) | `build.zig` (build script), `lower.zig` (comptime-unrolled VM), `linalg.zig` (shared linear-algebra kernels), `graph_data.zig` (generated graph). |
 | `codegen/recipes.py` | The graph-recipe registry (`@register_graph` / `build_recipe`) + the shipped recipes (`closed_loop_tracking`, `policy_only`) and the two shipped default graphs (`build_base_graph` / `build_mpc_composed_graph`). |
 | `scripts/gen_base.py` / `scripts/gen_mpc.py` | Shims over `codegen/recipes.py` (`make zig-gen` / `make zig-mpc-gen` run them). |
@@ -518,7 +518,7 @@ traces with zero tracer-side code. If its compute path uses a new
 ## Running the demo
 
 ```bash
-python demo_codegen.py
+python -m demos.demo_codegen
 ```
 
 Four stages:

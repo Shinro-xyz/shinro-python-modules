@@ -56,7 +56,7 @@ if PLOT:
         ax.tick_params(colors='white', labelsize=7)
         ax.spines['bottom'].set_color('#555')
         ax.spines['top'].set_color('#555')
-        ax.spines['left'].actualset_color('#555')
+        ax.spines['left'].set_color('#555')
         ax.spines['right'].set_color('#555')
 
     ax = axes[0]
@@ -84,7 +84,11 @@ if PLOT:
     ax.legend(loc='upper right', fontsize=6, labelcolor='white', framealpha=0.3)
 
     plt.tight_layout()
-    plt.savefig('double_pendulum_demo.png', dpi=150, facecolor=fig.get_facecolor())
-    print("Plot saved: double_pendulum_demo.png")
+    from pathlib import Path
+
+    out = Path(__file__).resolve().parent.parent / "build" / "demos" / "double_pendulum_demo.png"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(str(out), dpi=150, facecolor=fig.get_facecolor())
+    print(f"Plot saved: {out}")
 
 print("Done.")

@@ -46,7 +46,7 @@ from shinro.simulation import RobotSim
 from shinro.utils.config_resolver import resolve_config_path
 
 HERE = Path(__file__).parent.parent
-OUTPUT_PATH = str(HERE / "lekiwi_demo.gif")
+OUTPUT_PATH = str(HERE / "build" / "demos" / "lekiwi_demo.gif")
 
 # ── XML injection helpers ────────────────────────────────────────────────
 def inject_waypoint_markers(xml_string, base_wps, base_steps):

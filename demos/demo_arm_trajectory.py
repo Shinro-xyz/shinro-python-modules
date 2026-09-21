@@ -33,7 +33,7 @@ from shinro.simulation import RobotSim
 from shinro.utils.config_resolver import resolve_config_path
 
 HERE = Path(__file__).parent.parent
-OUTPUT_PATH = str(HERE / "lekiwi_arm_demo.gif")
+OUTPUT_PATH = str(HERE / "build" / "demos" / "lekiwi_arm_demo.gif")
 CONFIG_PATH = str(resolve_config_path("samples/robot_config.toml"))
 
 sim = RobotSim(CONFIG_PATH)

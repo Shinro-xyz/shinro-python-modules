@@ -88,8 +88,12 @@ def setup_live_viewer(engine, distance=2.0, azimuth=90, elevation=-30, lookat=(0
 
 
 def save_gif(frames, path, fps=12):
-    """Save frames as a GIF."""
+    """Save frames as a GIF (creating the parent directory if needed)."""
+    from pathlib import Path
+
     import imageio
+
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
     imageio.mimsave(path, frames, fps=fps, loop=0)
     print(f"✅ GIF saved: {path} ({len(frames)} frames, {fps} fps)")
 

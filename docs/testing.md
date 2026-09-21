@@ -12,7 +12,7 @@ The suite is built on **pytest**. Configuration lives in [`pyproject.toml`](../p
 - `addopts = "-m 'not integration and not mcp'"` — integration and MCP-functional tests (marked `@pytest.mark.integration` / `@pytest.mark.mcp`) are excluded by default; run them with `make test-integration` / `make test-functional` (see below).
 
 All test files live in `tests/`, with one file per component group. Integration tests live in
-`tests/integration/`. There is also a standalone demo script, `demo_codegen.py`, at the repo root.
+`tests/integration/`. There is also a standalone demo script, `demos/demo_codegen.py`.
 
 ## Entry Points
 

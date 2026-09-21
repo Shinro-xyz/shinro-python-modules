@@ -83,7 +83,7 @@ def capture_gif(sim):
 
     renderer.close()
     import imageio
-    path = str(HERE / "simple_demo.gif")
+    path = str(HERE / "build" / "demos" / "simple_demo.gif")
     imageio.mimsave(path, frames, fps=15, loop=0)
     print(f"  GIF saved: simple_demo.gif ({len(frames)} frames)")
 

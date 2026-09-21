@@ -11,6 +11,5 @@ recursive-exclude tests *
 recursive-exclude lab-notes *
 recursive-exclude deprecated *
 recursive-exclude lekiwi-sim *
-recursive-exclude models *
 global-exclude *.gif
 global-exclude __pycache__
