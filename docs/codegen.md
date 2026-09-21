@@ -399,7 +399,9 @@ make compile SCENARIO=tests/integration/scenarios/base_tracking.toml
    `interpret()`, tol 1e-12 / 1e-3 for QP), then `stamp_deployment` +
    `verify_deployment`. The oracle outcome is recorded in the deployment
    record — a cross-compiled build records `not_run`, since it cannot be
-   `dlopen`'d on the host.
+   `dlopen`'d on the host, and points at the oracle-verified native record via
+   a `native_ref` block (native master hash + whether the config/graph/solver
+   slots agree — only the binary slot legitimately differs).
 
 The `[compile]` section is the build spec: `n_x`/`n_u` (baked at trace time;
 optional when a plant-only `[plant]` derives them), `optimize`

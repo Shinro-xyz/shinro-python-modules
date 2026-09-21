@@ -187,6 +187,7 @@ def _cmd_build(args: argparse.Namespace) -> int:
         target=args.target,
         solver_dir=args.solver_dir,
         solver=args.solver,
+        native_record=args.native_record,
         artifact_name=args.artifact_name,
         samples=args.samples,
         seed=args.seed,
@@ -245,6 +246,7 @@ def _build_parser() -> argparse.ArgumentParser:
     b.add_argument("--target", help="override [compile].target (zig triple)")
     b.add_argument("--solver-dir", help="override [compile].solver_dir (pre-baked OSQP solver dir)")
     b.add_argument("--solver", help="override [compile].solver (bake on demand, e.g. emosqp)")
+    b.add_argument("--native-record", help="cross build: path to the oracle-verified native record to reference")
     b.add_argument("--artifact-name", help="override [compile].artifact_name")
     b.add_argument("--samples", type=int, default=20, help="random inputs for the oracle (default 20)")
     b.add_argument("--seed", type=int, default=0, help="RNG seed for the oracle (default 0)")
