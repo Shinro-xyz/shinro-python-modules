@@ -66,7 +66,8 @@ The pipeline lives in `src/shinro/codegen/`; the Zig VM lives in `src/shinro/run
 | `codegen/lower_zig.py` | Emit `src/shinro/runtime/graph_data.zig` (the graph as Zig constants) from a composed graph. |
 | `demo_codegen.py` (repo root) | Runnable demo: traces KF+LQR for the base and cartpole plants, composes, and verifies each stage against a live numpy loop. |
 | `src/shinro/runtime/` (Zig) | `build.zig` (build script), `lower.zig` (comptime-unrolled VM), `linalg.zig` (shared linear-algebra kernels), `graph_data.zig` (generated graph). |
-| `scripts/gen_base.py` | Serializes the `base_tracking` composed graph to `src/shinro/runtime/graph_data.zig` (the `make zig-gen` target). |
+| `codegen/recipes.py` | The graph-recipe registry (`@register_graph` / `build_recipe`) + the shipped recipes (`closed_loop_tracking`, `policy_only`) and the two shipped default graphs (`build_base_graph` / `build_mpc_composed_graph`). |
+| `scripts/gen_base.py` / `scripts/gen_mpc.py` | Shims over `codegen/recipes.py` (`make zig-gen` / `make zig-mpc-gen` run them). |
 | `codegen/component_cli.py` | The "does my component trace?" gate (`shinro check` / `shinro trace`, plus the kept `scripts/trace_component.py` shim): inventory of registered components, inferred trace contract (`--list`), and trace + interpret-vs-live oracle check (bit-exact) for any config TOML. |
 | `cli.py` | The unified `shinro` console script — dispatches `check` / `run` / `trace` / `build` / `verify` over the existing module APIs. |
 
@@ -383,8 +384,9 @@ make compile SCENARIO=tests/integration/scenarios/base_tracking.toml
 
 1. **`scripts/gen_scenario.py`** (zig-free) — reads the scenario TOML's
    `[controller]`/`[estimator]` configs, `[scenario].input_limits`, and the
-   `[compile]` section; traces + composes via the generic
-   `shinro.codegen.build_composed_graph`; lowers to an isolated
+   `[compile]` section; dispatches to the registered graph recipe
+   (`[compile].recipe`, default `closed_loop_tracking`) which composes via the
+   generic `shinro.codegen.build_composed_graph`; lowers to an isolated
    `build/<name>/graph_data.zig` + manifest. The two-pass trace discovers
    recurrent state by attr-diff, so a new controller's integral or a new
    estimator's observer state compose with zero per-component declaration.
@@ -408,6 +410,17 @@ recorded in the manifest) is the only thing the host must re-pack.
 Start from `src/shinro/configs/scenarios/_template.toml` — a commented
 scenario skeleton with placeholders for your robot's controller, estimator,
 and `[compile]` dims. Copy it, fill in the values, and run `make compile`.
+
+### Graph recipes
+
+The compose wiring is a named, registered *recipe* (`shinro.codegen.recipes`),
+selected by the scenario's optional `[compile].recipe`. Two ship:
+`closed_loop_tracking` (the default — estimator + controller into the fixed ABC
+dataflow) and `policy_only` (a standalone ONNX policy, inferred when
+`[estimator]` is absent). A non-policy controller with no `[estimator]` is
+rejected — only an `onnx_rl` policy stands alone. Adding a wiring is one
+`@register_graph` function; the shipped default graphs live here too, so their
+config set (and therefore the manifest provenance) is declared once.
 
 ### The unified `shinro` CLI
 

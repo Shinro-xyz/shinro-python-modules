@@ -33,13 +33,16 @@ name = "<my_robot>"
 input_limits = { min = [-1.0, -1.0], max = [1.0, 1.0] }
 
 # REQUIRED for compilation — the build spec for `make compile`.
-# n_x / n_u are your plant's state / input dimensions. They are BAKED into
-# the graph at trace time ("fixed as compiled"): change them → re-run
-# `make compile`. The estimator/controller configs must agree with these dims.
+# n_x / n_u are your plant's state / input dimensions. They are BAKED into the
+# graph at trace time ("fixed as compiled"): change them → re-run `make compile`.
+# OMIT them when the scenario has a plant-only [plant] section (type + config):
+# the dims are then derived from that plant, which is authoritative — a declared
+# n_x/n_u that disagrees with the plant is an error.
 [compile]
 n_x = 2                 # <fill in: plant state dimension>
 n_u = 2                 # <fill in: plant input dimension>
 optimize = "debug"        # "debug" | "release" (release → -Doptimize=ReleaseFast)
+# recipe = "closed_loop_tracking"  # compose wiring: closed_loop_tracking (default) | policy_only
 # target = "aarch64-linux-gnu"   # cross-compile for the robot board; omit = native
 # solver_dir = "src/shinro/runtime/codegen/emosqp"  # REQUIRED for MPC controllers only
 # oracle_tol = 1e-3             # override the numeric oracle tolerance (QP graphs default 1e-3)
