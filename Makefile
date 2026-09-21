@@ -4,7 +4,8 @@
 	test-controllers test-estimators test-plants test-trajectories test-armrobot \
 	test-components test-array-backend test-batched-adapter test-controllability test-factories \
 	test-linearization test-adversarial test-mcp-server test-mcp-functional \
-	compile measure-kernels
+	compile measure-kernels \
+	zig-gen zig-mpc-gen zig-build zig-build-mpc test-zig
 
 # Install the package in editable mode
 install:
@@ -98,13 +99,33 @@ test-integration:
 # Graphs without .solve_qp (LQR, PID, ...) omit the OSQP solver from
 # libbase.so entirely.
 # ───────────────────────────────────────────────────────────────────────────
+ZIG_GRAPH = src/shinro/runtime/graph_data.zig
+ZIG_BUILD = zig build --build-file src/shinro/runtime/build.zig --prefix build/
+# Post-build tail: stamp the deployment record, then independently re-hash it
+# against the artifacts (producer/verifier separation) — a drifted config,
+# graph, or binary fails the build instead of shipping silently.
+ZIG_STAMP_VERIFY = python3 scripts/stamp_deployment.py --prefix build/ && \
+	python3 scripts/verify_deployment.py --record build/lib/libbase.deployment.json --graph $(ZIG_GRAPH)
+
 zig-gen:
 	mkdir -p build
 	python3 scripts/gen_base.py
 
+# Alternative shipped graph: KF + MPC_LTI instead of KF + LQR. The default
+# emosqp bake (runtime/codegen/emosqp/, n_vars=30) matches mpc_lti_base.toml,
+# so no solver regeneration is needed. Writes the same shared $(ZIG_GRAPH) —
+# re-run `make zig-build` to restore the shipped KF + LQR graph.
+zig-mpc-gen:
+	mkdir -p build
+	python3 scripts/gen_mpc.py
+
 zig-build: zig-gen
-	zig build --build-file src/shinro/runtime/build.zig --prefix build/
-	python3 scripts/stamp_deployment.py --prefix build/
+	$(ZIG_BUILD)
+	$(ZIG_STAMP_VERIFY)
+
+zig-build-mpc: zig-mpc-gen
+	$(ZIG_BUILD)
+	$(ZIG_STAMP_VERIFY)
 
 test-zig: zig-build
 	zig build test --build-file src/shinro/runtime/build.zig
