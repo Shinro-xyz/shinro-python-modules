@@ -24,7 +24,8 @@ and — when ``--scenario`` is given — verifies the result before stamping:
    architecture (``native`` or an explicit host triple); the integrity
    check still runs either way.
 6. **Stamp + verify** — writes the deployment record (master hash over
-   config/graph/solver/binary) and re-hashes the artifacts against it.
+   config/graph/solver/binary, plus the build provenance and the oracle
+   outcome) and re-hashes the artifacts against it.
 
 Without ``--scenario`` the build is stamped only — no oracle, no integrity
 check — and prints a loud warning that the artifact is unverified.
@@ -210,6 +211,7 @@ def build_scenario(
         print(f"BUILD FAILED: {e}", file=sys.stderr)
         return EXIT_BUILD
 
+    oracle: dict | None = None
     if scenario:
         try:
             fresh_cg = _check_graph_integrity(scenario, graph_dir)
@@ -232,20 +234,34 @@ def build_scenario(
                 )
                 return EXIT_ORACLE
             print(f"oracle B (.so vs interpret): {samples} random inputs, max abs err {max_err:.3e} ✓")
+            oracle = {
+                "status": "passed",
+                "method": ".so shinro_step vs interpret()",
+                "samples": samples,
+                "seed": seed,
+                "max_abs_err": max_err,
+                "tolerance": tol,
+            }
         else:
             print(
                 f"NOTE: target '{tgt}' is not native — skipping host oracle "
                 f"(cannot dlopen a cross-compiled .so); integrity check passed.",
                 file=sys.stderr,
             )
+            oracle = {
+                "status": "not_run",
+                "reason": "cross-compiled",
+                "note": "cannot dlopen a cross-compiled .so; oracle-verify the native build",
+            }
     else:
         print(
             "WARNING: --scenario omitted — skipping oracle + integrity checks; "
             "the artifact is built and stamped but NOT verified against the interpreter.",
             file=sys.stderr,
         )
+        oracle = {"status": "not_run", "reason": "unverified build (--scenario omitted)"}
 
-    stamp(prefix_path, RUNTIME, name)
+    stamp(prefix_path, RUNTIME, name, oracle=oracle)
     record = prefix_path / "lib" / f"{name}.deployment.json"
     if verify(record, graph_path=graph_path) != 0:
         print("VERIFY FAILED: deployment record does not match artifacts", file=sys.stderr)

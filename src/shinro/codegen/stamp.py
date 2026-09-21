@@ -11,6 +11,13 @@ record; the timestamp lives only in the archive filename), so identical
 inputs produce byte-identical records — the diffable audit record for
 "which estimator/controller pair is deployed".
 
+The record also carries **build provenance** (``target`` / ``optimize`` /
+``stripped`` / ``zig_version``, copied verbatim from the build manifest) and an
+**oracle** block (whether the .so was checked against the interpreter, with the
+sample count / tolerance / max error). Neither is folded into the master hash:
+the binary slot already distinguishes a Debug from a ReleaseFast build, so
+those fields explain *why* the hash changed rather than defining it.
+
 Run: ``python3 -m shinro.codegen.stamp --prefix build/``
 (wired into ``make zig-build``).
 """
@@ -29,6 +36,11 @@ from shinro.codegen.runtime_paths import runtime_root
 # config provenance). Keeps the master-hash format uniform so LQR/PID and MPC
 # deployments stay structurally comparable.
 SENTINEL = hashlib.sha256(b"").hexdigest()
+
+#: Oracle block written when ``stamp()`` is called without oracle results
+#: (e.g. the Makefile's shipped-graph build, which does not run the ctypes
+#: oracle). Copied per record so callers can never mutate the shared default.
+_ORACLE_NOT_RUN = {"status": "not_run", "reason": "stamp invoked without oracle results"}
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -62,7 +74,7 @@ def _master(config_slot: str, graph_slot: str, solver_slot: str, binary_slot: st
     )
 
 
-def stamp(prefix: Path, build_root: Path, name: str = "libbase") -> dict:
+def stamp(prefix: Path, build_root: Path, name: str = "libbase", oracle: dict | None = None) -> dict:
     """Compute and write the deployment record for a built prefix dir.
 
     Args:
@@ -72,6 +84,10 @@ def stamp(prefix: Path, build_root: Path, name: str = "libbase") -> dict:
             ``src/shinro/runtime/``).
         name: Artifact stem — ``<name>.so`` / ``<name>.manifest.json``
             (default ``libbase``). Must match the ``-Dname`` the build used.
+        oracle: Oracle outcome to record under ``"oracle"`` — e.g.
+            ``{"status": "passed", "samples": 20, ...}`` or
+            ``{"status": "not_run", "reason": "cross-compiled"}``. When
+            ``None`` the record notes the oracle was not run.
 
     Returns:
         The deployment record dict (also written to disk).
@@ -118,6 +134,15 @@ def stamp(prefix: Path, build_root: Path, name: str = "libbase") -> dict:
             "python_version": graph_prov.get("python_version"),
             "numpy_version": graph_prov.get("numpy_version"),
         },
+        "build": {
+            "target": manifest.get("target"),
+            "optimize": manifest.get("optimize"),
+            "stripped": manifest.get("stripped"),
+            "zig_version": manifest.get("zig_version"),
+            "libc": manifest.get("libc"),
+            "float_type": manifest.get("float_type"),
+        },
+        "oracle": dict(oracle) if oracle is not None else dict(_ORACLE_NOT_RUN),
         "graph": {
             "sha256": graph_sha,
             "has_solve_qp": graph_block.get("has_solve_qp"),

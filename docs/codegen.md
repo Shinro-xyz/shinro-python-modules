@@ -392,7 +392,9 @@ make compile SCENARIO=tests/integration/scenarios/base_tracking.toml
    **verifies before stamping**: re-gens the graph in-process and byte-compares
    manifests (integrity), runs the ctypes oracle (`shinro_step` vs
    `interpret()`, tol 1e-12 / 1e-3 for QP), then `stamp_deployment` +
-   `verify_deployment`.
+   `verify_deployment`. The oracle outcome is recorded in the deployment
+   record — a cross-compiled build records `not_run`, since it cannot be
+   `dlopen`'d on the host.
 
 The `[compile]` section is the build spec: `n_x`/`n_u` (baked at trace time),
 `optimize` (`debug`/`release` → ReleaseFast only), `target` (cross-compile),
@@ -421,6 +423,23 @@ content comes from a `<graph>_manifest.json` emitted by `lower_zig` next to
 `graph_data.zig`. No timestamps in the report, so identical inputs produce
 byte-identical reports — diffing two reports shows exactly what changed
 op-wise, and the archive records when each combination was built.
+
+### Deployment record (identity + provenance)
+
+`stamp()` writes `<prefix>/lib/libbase.deployment.json` — the record an
+operator re-hashes against a deployed artifact. Its **master hash** commits to
+the whole chain (`config` → `graph` → `solver` → `binary` slots) and is a pure
+function of those inputs, so identical builds produce byte-identical records
+(the timestamp lives only in the archive filename under `<prefix>/deployments/`).
+
+Two blocks are recorded but deliberately **excluded** from the master hash:
+`build` (target triple, optimize mode, stripped, zig version, libc, float type —
+copied verbatim from the build manifest) explains *why* the binary slot differs
+between otherwise-identical configs (a Debug vs ReleaseFast build); `oracle`
+records whether the compiled `.so` was checked against the interpreter
+(`status`, plus `samples`/`seed`/`max_abs_err`/`tolerance` on a pass). When the
+oracle did not run the reason is named — `not_run` for a cross-compiled or
+`--scenario`-less build — rather than silently implying verification.
 
 ### Zig coverage of the op set
 

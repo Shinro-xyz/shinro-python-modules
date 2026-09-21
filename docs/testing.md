@@ -53,7 +53,8 @@ The [`Makefile`](../Makefile) provides short named targets. `make test-<name>` r
 | `make test-mcp-functional` | `tests/test_mcp_server_functional.py` (subprocess protocol tests; opt-in via the `mcp` marker) |
 | `make test-zig` | Generate `src/shinro/runtime/graph_data.zig`, build the Zig VM, run `tests/test_zig_lowering.py` (requires `zig` on PATH) |
 | `make zig-gen` | Serialize the `base_tracking` composed graph to `src/shinro/runtime/graph_data.zig` only |
-| `make zig-build` | Compile the Zig VM to `build/lib/libbase.so` and stamp the deployment record (`build/lib/libbase.deployment.json`) via `scripts/stamp_deployment.py` (implies `zig-gen`) |
+| `make zig-build` | Compile the Zig VM to `build/lib/libbase.so` (shipped KF+LQR graph), stamp the deployment record (`build/lib/libbase.deployment.json`) via `scripts/stamp_deployment.py`, then re-hash it with `verify_deployment.py` (implies `zig-gen`) |
+| `make zig-build-mpc` | Same, but builds the KF+MPC_LTI graph (`scripts/gen_mpc.py`; implies `zig-mpc-gen`). Overwrites the shared `runtime/graph_data.zig` — re-run `make zig-build` to restore the shipped graph |
 | `make measure-kernels` | Kernel size metrics for a sweep of MPPI rollout shapes: the C-ABI host buffers, the VM stack buffer, and (with `BUILD=1`) the artifact bytes + compile cost. Static by default (no compiler); `DIMS=3x3x6x3,...` where each entry is `D_x x D_u x N x K`; `JSON=<path>` writes the document |
 | `make lint` | `ruff check .` + `pyrefly` on source dirs |
 
