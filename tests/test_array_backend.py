@@ -412,3 +412,19 @@ def test_sigmoid_saturates_without_nan(bk):
     with np.errstate(over="ignore", invalid="ignore"):
         got = bk.to_numpy(bk.sigmoid(bk.array([-1000.0, 1000.0])))
     np.testing.assert_allclose(got, [0.0, 1.0], atol=1e-12)
+
+
+def test_softmax_2d_is_last_axis(bk):
+    """Both eager backends do per-row softmax over the last axis."""
+    x = np.array([[1.0, 2.0, 3.0], [0.0, 0.0, 0.0]])
+    got = bk.to_numpy(bk.softmax(bk.array(x)))
+    e = np.exp(x - x.max(axis=-1, keepdims=True))
+    expected = e / e.sum(axis=-1, keepdims=True)
+    np.testing.assert_allclose(got, expected, rtol=1e-12, atol=1e-12)
+    np.testing.assert_allclose(got.sum(axis=-1), [1.0, 1.0], rtol=1e-12)
+
+
+def test_softmax_1d_is_stable(bk):
+    """1-D softmax is a single row; large values stay finite via the max-shift."""
+    got = bk.to_numpy(bk.softmax(bk.array([1000.0, 999.0])))
+    np.testing.assert_allclose(got, [0.7310585786300049, 0.2689414213699951], rtol=1e-12)

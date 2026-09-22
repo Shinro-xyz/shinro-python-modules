@@ -261,6 +261,61 @@ class TestActivations:
         x = np.array([-1.0, 0.0, 2.0])
         np.testing.assert_allclose(_run(cg, x), 1.0 / (1.0 + np.exp(-x)), rtol=1e-12)
 
+    def test_softmax_last_axis(self, tmp_path):
+        from onnx import helper
+
+        path = _save(
+            [helper.make_node("Softmax", ["state"], ["y"])],
+            [_vi("state", [None, 3])],
+            [_vi("y", [None, 3])],
+            [],
+            tmp_path,
+        )
+        cg = import_onnx_policy(path)
+        assert "softmax" in _op_names(cg)
+        x = np.array([-1.0, 0.0, 2.0])
+        e = np.exp(x - x.max())
+        np.testing.assert_allclose(_run(cg, x), e / e.sum(), rtol=1e-12)
+
+    def test_softmax_rank2_is_per_row(self, tmp_path):
+        from onnx import helper
+
+        w = np.array([[1.0, 2.0, 3.0], [0.0, 0.0, 0.0]], dtype=np.float32)
+        path = _save(
+            [
+                helper.make_node("Softmax", ["w"], ["s"]),
+                helper.make_node("MatMul", ["s", "state"], ["y"]),
+            ],
+            [_vi("state", [None, 3])],
+            [_vi("y", [None, 2])],
+            [_init("w", w)],
+            tmp_path,
+        )
+        cg = import_onnx_policy(path)
+        assert "softmax" in _op_names(cg)
+        x = np.array([1.0, 1.0, 1.0])
+        w64 = w.astype(np.float64)  # initializers are float32; the graph stores them as f64
+        e = np.exp(w64 - w64.max(axis=-1, keepdims=True))
+        expected = (e / e.sum(axis=-1, keepdims=True)) @ x
+        np.testing.assert_allclose(_run(cg, x), expected, rtol=1e-12)
+
+    def test_softmax_rejects_non_last_axis(self, tmp_path):
+        from onnx import helper
+
+        w = np.ones((2, 3), dtype=np.float32)
+        path = _save(
+            [
+                helper.make_node("Softmax", ["w"], ["s"], axis=0),
+                helper.make_node("MatMul", ["s", "state"], ["y"]),
+            ],
+            [_vi("state", [None, 3])],
+            [_vi("y", [None, 2])],
+            [_init("w", w)],
+            tmp_path,
+        )
+        with pytest.raises(NotImplementedError, match="last axis"):
+            import_onnx_policy(path)
+
 
 class TestPointwiseGraphs:
     def test_matmul_add(self, tmp_path):
@@ -394,13 +449,13 @@ class TestRejections:
         from onnx import helper
 
         path = _save(
-            [helper.make_node("Softmax", ["state"], ["y"])],
+            [helper.make_node("Sqrt", ["state"], ["y"])],
             [_vi("state", [None, 3])],
             [_vi("y", [None, 3])],
             [],
             tmp_path,
         )
-        with pytest.raises(NotImplementedError, match="Softmax"):
+        with pytest.raises(NotImplementedError, match="Sqrt"):
             import_onnx_policy(path)
 
     def test_unreachable_unsupported_node_ignored(self, tmp_path):
@@ -408,7 +463,7 @@ class TestRejections:
 
         path = _save(
             [
-                helper.make_node("Softmax", ["state"], ["junk"]),
+                helper.make_node("Sqrt", ["state"], ["junk"]),
                 helper.make_node("MatMul", ["state", "w"], ["y"]),
             ],
             [_vi("state", [None, 2])],
@@ -417,7 +472,7 @@ class TestRejections:
             tmp_path,
         )
         cg = import_onnx_policy(path)
-        assert "Softmax" not in _op_names(cg)
+        assert "sqrt" not in _op_names(cg)
         np.testing.assert_allclose(_run(cg, [1.0, 2.0]), [1.0, 2.0], rtol=1e-6)
 
     def test_multi_input_policy_rejected(self, tmp_path):

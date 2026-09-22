@@ -28,6 +28,8 @@ Supported ONNX surface — everything else raises ``NotImplementedError``:
 - ``MatMul``, ``Add``
 - ``Relu``, ``Tanh``, ``Sigmoid`` — lowered to the fused ``relu`` / ``tanh`` /
   ``sigmoid`` VM ops (no composition needed)
+- ``Softmax`` — lowered to the fused ``softmax`` op (last-axis only; any other
+  ``axis`` is rejected loudly)
 
 Nodes that do not contribute to the declared output are ignored, so an
 exporter's stray logging/cast node does not fail the import.
@@ -78,7 +80,7 @@ _ACTION_SPACES = frozenset({"continuous", "discrete", "stochastic"})
 #: typo (``obs_means``) cannot silently drop normalization or clipping.
 _OBS_KEYS = frozenset({"input_name", "state_keys", "normalize", "obs_mean", "obs_std", "clip", "add_batch_dim"})
 #: ONNX ops the importer can translate. Everything else is rejected loudly.
-_SUPPORTED_OPS = frozenset({"Gemm", "MatMul", "Add", "Relu", "Tanh", "Sigmoid"})
+_SUPPORTED_OPS = frozenset({"Gemm", "MatMul", "Add", "Relu", "Tanh", "Sigmoid", "Softmax"})
 #: ONNX ops translated straight to a same-named shinro op.
 _UNARY_OPS = {"Relu": "relu", "Tanh": "tanh", "Sigmoid": "sigmoid"}
 #: Attributes Gemm may carry; any other attribute is rejected.
@@ -359,7 +361,7 @@ class _OnnxImporter:
         if op_type not in _SUPPORTED_OPS:
             raise NotImplementedError(
                 f"ONNX op {op_type!r} is not supported by the policy importer. Supported ops: "
-                f"{sorted(_SUPPORTED_OPS)}. Decompose the policy to Gemm/MatMul/Add + Relu/Tanh/Sigmoid, "
+                f"{sorted(_SUPPORTED_OPS)}. Decompose the policy to Gemm/MatMul/Add + Relu/Tanh/Sigmoid/Softmax, "
                 f"or extend shinro.codegen.onnx_import."
             )
         if len(outputs) != 1:
@@ -376,6 +378,8 @@ class _OnnxImporter:
         elif op_type in _UNARY_OPS:
             _require_no_attrs(op_type, attrs)
             result = self.emit(_UNARY_OPS[op_type], [self.tensor(inputs[0])])
+        elif op_type == "Softmax":
+            result = self.emit_softmax(self.tensor(inputs[0]), attrs)
         else:  # pragma: no cover — _SUPPORTED_OPS is disjoint from the above
             raise NotImplementedError(f"ONNX op {op_type!r} has no importer branch")
 
@@ -418,6 +422,37 @@ class _OnnxImporter:
             beta=float(attrs.get("beta", 1.0)),
             transB=bool(int(attrs.get("transB", 0))),
         )
+
+    def emit_softmax(self, x_id: int, attrs: dict[str, Any]) -> int:
+        """Emit a last-axis softmax for ONNX ``Softmax``.
+
+        The VM op is softmax over the last axis (numpy ``axis=-1``), so the only
+        accepted axis is the rank-1 one: ``axis=-1`` or ``axis=rank-1``. ONNX
+        opset < 13 defaults ``axis`` to 1 (which for the rank-1/2 tensors the
+        importer supports is also the last axis); opset >= 13 defaults to -1.
+        Any other axis (e.g. per-column softmax on a 2-D input) is rejected
+        loudly rather than silently reinterpreted.
+
+        Raises:
+            NotImplementedError: On unknown attributes, a rank-0 input, or an
+                axis that is not the last axis.
+        """
+        unknown = set(attrs) - {"axis"}
+        if unknown:
+            raise NotImplementedError(f"ONNX Softmax carries unsupported attribute(s): {sorted(unknown)}")
+        rank = self.value_of(x_id).ndim
+        axis = int(attrs.get("axis", -1))
+        # The accepted axis is the last one. For a rank-1 vector the softmax axis
+        # is the only axis, so opset<13's coerced default (axis=1), opset>=13's
+        # -1, and 0 all name it. For rank-2 the last axis is 1/-1; a per-column
+        # softmax (axis=0) is rejected rather than silently reinterpreted.
+        ok = axis in (-1, 0, 1) if rank <= 1 else axis in (-1, rank - 1)
+        if not ok:
+            raise NotImplementedError(
+                f"ONNX Softmax axis={axis} on a rank-{rank} input is not the last axis; "
+                "only last-axis softmax is supported"
+            )
+        return self.emit("softmax", [x_id])
 
     def flatten_output(self, node_id: int) -> int:
         """Reduce a batch-1 output to a 1-D action vector.

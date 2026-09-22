@@ -515,6 +515,13 @@ class TestTraceBackend:
         assert ts.shape == (4,)
         assert bk.g.nodes[ts.node].op == "sigmoid"
 
+    def test_softmax_emits_softmax_op(self):
+        bk = self._bk()
+        ta = _lift(bk.g, np.ones((2, 3)))
+        ts = bk.softmax(ta)
+        assert ts.shape == (2, 3)
+        assert bk.g.nodes[ts.node].op == "softmax"
+
     def test_inv_emits_inv_op(self):
         bk = self._bk()
         ta = _lift(bk.g, np.eye(3))

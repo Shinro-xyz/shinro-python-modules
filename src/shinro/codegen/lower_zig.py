@@ -159,7 +159,7 @@ def lower_zig(
     lines.append("    transpose, inv, reshape, clip, where_op, any,")
     lines.append("    copy, tanh, relu, exp, argmax, one_hot, slice,")
     lines.append("    sin, cos, stack, solve_qp,")
-    lines.append("    abs, sign, pow, lt, min, gemm, sigmoid,")
+    lines.append("    abs, sign, pow, lt, min, gemm, sigmoid, softmax,")
     lines.append("};")
     lines.append("")
     lines.append("pub const Node = struct {")
