@@ -255,6 +255,14 @@ def _gelu(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarra
     return 0.5 * x * (1.0 + np.tanh(np.sqrt(2.0 / np.pi) * (x + 0.044715 * x * x * x)))
 
 
+@register_op("elu")
+def _elu(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
+    """ELU: ``x if x > 0 else alpha * (exp(x) - 1)``; ``alpha`` defaults to 1.0."""
+    x = values[node.inputs[0]]
+    alpha = float(node.attrs.get("alpha", 1.0))
+    return np.where(x > 0.0, x, alpha * (np.exp(x) - 1.0))
+
+
 @register_op("sin")
 def _sin(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     return np.sin(values[node.inputs[0]])

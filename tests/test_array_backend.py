@@ -436,3 +436,13 @@ def test_gelu_tanh_matches_formula(bk):
     got = bk.to_numpy(bk.gelu(bk.array(x)))
     expected = 0.5 * x * (1.0 + np.tanh(np.sqrt(2.0 / np.pi) * (x + 0.044715 * x * x * x)))
     np.testing.assert_allclose(got, expected, rtol=1e-12, atol=1e-12)
+
+
+def test_elu_matches_formula(bk):
+    """Both eager backends expose ELU, and the alpha parameter is honored."""
+    x = np.array([-2.0, -0.5, 0.0, 0.5, 2.0])
+    got = bk.to_numpy(bk.elu(bk.array(x)))
+    expected = np.where(x > 0.0, x, np.exp(x) - 1.0)
+    np.testing.assert_allclose(got, expected, rtol=1e-12, atol=1e-12)
+    got_half = bk.to_numpy(bk.elu(bk.array([-1.0, 1.0]), alpha=0.5))
+    np.testing.assert_allclose(got_half, [0.5 * (np.exp(-1.0) - 1.0), 1.0], rtol=1e-12, atol=1e-12)

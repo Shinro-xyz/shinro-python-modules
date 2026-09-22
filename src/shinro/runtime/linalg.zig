@@ -388,3 +388,16 @@ pub fn gelu(comptime m: usize, a: []const f64) [m]f64 {
     }
     return out;
 }
+
+/// Elementwise ELU: `out[i] = a[i]` if `a[i] > 0` else `alpha *
+/// (exp(a[i]) - 1)`. `alpha` comes from the ONNX op's attribute (default
+/// 1.0) and is comptime-baked per node by the lowerer, so it folds into the
+/// node's switch arm. Shape-preserving.
+pub fn elu(comptime m: usize, comptime alpha: f64, a: []const f64) [m]f64 {
+    var out: [m]f64 = undefined;
+    for (0..m) |i| {
+        const x = a[i];
+        out[i] = if (x > 0.0) x else alpha * (std.math.exp(x) - 1.0);
+    }
+    return out;
+}

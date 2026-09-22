@@ -136,6 +136,16 @@ def lower_zig(
             gemm_alpha.append(float(node.attrs.get("alpha", 1.0)))
             gemm_beta.append(float(node.attrs.get("beta", 1.0)))
 
+    # --- baked elu alpha (default 1.0) ---
+    # elu's `alpha` is an f64 scalar the `aux: usize` field cannot hold; bake it
+    # into a parallel array (the gemm_alpha pattern) with the table index in aux.
+    elu_alpha: list[float] = []
+    elu_aux: dict[int, int] = {}
+    for i, node in enumerate(g.nodes):
+        if node.op == "elu":
+            elu_aux[i] = len(elu_alpha)
+            elu_alpha.append(float(node.attrs.get("alpha", 1.0)))
+
     # --- output port packing: separate zero-indexed offsets per buffer ---
     # `outputs` and `state_out` are separate C-ABI buffers, so each needs its
     # own cumulative offset table starting at 0.
@@ -159,7 +169,7 @@ def lower_zig(
     lines.append("    transpose, inv, reshape, clip, where_op, any,")
     lines.append("    copy, tanh, relu, exp, argmax, one_hot, slice,")
     lines.append("    sin, cos, stack, solve_qp,")
-    lines.append("    abs, sign, pow, lt, min, gemm, sigmoid, softmax, gelu,")
+    lines.append("    abs, sign, pow, lt, min, gemm, sigmoid, softmax, gelu, elu,")
     lines.append("};")
     lines.append("")
     lines.append("pub const Node = struct {")
@@ -182,7 +192,7 @@ def lower_zig(
     lines.append("")
     lines.append("pub const nodes = [_]Node{")
     for i, node in enumerate(g.nodes):
-        rendered = _node_line(g, i, node, const_offsets, clip_offsets, gemm_aux, input_offsets, cg.outputs, cg.state_outputs)
+        rendered = _node_line(g, i, node, const_offsets, clip_offsets, gemm_aux, elu_aux, input_offsets, cg.outputs, cg.state_outputs)
         lines.append("    " + rendered + ",")
     lines.append("};")
     lines.append("")
@@ -195,6 +205,7 @@ def lower_zig(
     lines.append("pub const clip_hi = [_]f64{" + _zig_floats(clip_hi) + "};")
     lines.append("pub const gemm_alpha = [_]f64{" + _zig_floats(gemm_alpha) + "};")
     lines.append("pub const gemm_beta = [_]f64{" + _zig_floats(gemm_beta) + "};")
+    lines.append("pub const elu_alpha = [_]f64{" + _zig_floats(elu_alpha) + "};")
     lines.append("")
     lines.append("pub const output_offsets = [_]usize{" + ", ".join(str(o) for o in output_offsets) + "};")
     lines.append("pub const state_offsets = [_]usize{" + ", ".join(str(o) for o in state_offsets) + "};")
@@ -211,6 +222,7 @@ def lower_zig(
         const_offsets,
         clip_offsets,
         gemm_aux,
+        elu_aux,
         input_offsets,
     )
     if provenance:
@@ -229,6 +241,7 @@ def _graph_manifest(
     const_offsets: dict[int, int],
     clip_offsets: dict[int, int],
     gemm_aux: dict[int, int],
+    elu_aux: dict[int, int],
     input_offsets: dict[str, int],
 ) -> dict:
     """Build the deterministic graph manifest for a composed graph.
@@ -250,6 +263,7 @@ def _graph_manifest(
         const_offsets: Maps const node index → offset into ``const_blob``.
         clip_offsets: Maps clip node index → offset into ``clip_lo``/``hi``.
         gemm_aux: Maps gemm node index → packed aux (``(table_index << 1) | transB``).
+        elu_aux: Maps elu node index → index into ``elu_alpha``.
         input_offsets: Maps input port name → offset into the packed input
             buffer.
 
@@ -275,7 +289,7 @@ def _graph_manifest(
 
     nodes = []
     for i, node in enumerate(g.nodes):
-        vm_op, aux = _node_vm_info(g, i, node, const_offsets, clip_offsets, gemm_aux, input_offsets, cg.outputs, cg.state_outputs)
+        vm_op, aux = _node_vm_info(g, i, node, const_offsets, clip_offsets, gemm_aux, elu_aux, input_offsets, cg.outputs, cg.state_outputs)
         rows, cols = _rows_cols(node.shape)
         nodes.append(
             {
@@ -345,6 +359,7 @@ def _node_line(
     const_offsets: dict[int, int],
     clip_offsets: dict[int, int],
     gemm_aux: dict[int, int],
+    elu_aux: dict[int, int],
     input_offsets: dict[str, int],
     outputs: list[str],
     state_outputs: list[str],
@@ -364,6 +379,8 @@ def _node_line(
         node: The Python node to render.
         const_offsets: Maps const node index → offset into ``const_blob``.
         clip_offsets: Maps clip node index → offset into ``clip_lo``/``hi``.
+        gemm_aux: Maps gemm node index → packed aux.
+        elu_aux: Maps elu node index → index into ``elu_alpha``.
         input_offsets: Maps input port name → offset into the packed input
             buffer.
         outputs: Names of the graph's non-state output ports.
@@ -374,7 +391,7 @@ def _node_line(
     """
     rows, cols = _rows_cols(node.shape)
     inputs = "&.{" + ", ".join(str(x) for x in node.inputs) + "}"
-    op, aux = _node_vm_info(g, i, node, const_offsets, clip_offsets, gemm_aux, input_offsets, outputs, state_outputs)
+    op, aux = _node_vm_info(g, i, node, const_offsets, clip_offsets, gemm_aux, elu_aux, input_offsets, outputs, state_outputs)
     vec = str(len(node.shape) == 1).lower()
 
     return f".{{ .op = .{op}, .inputs = {inputs}, .rows = {rows}, .cols = {cols}, .aux = {aux}, .vec = {vec} }}"
@@ -387,6 +404,7 @@ def _node_vm_info(
     const_offsets: dict[int, int],
     clip_offsets: dict[int, int],
     gemm_aux: dict[int, int],
+    elu_aux: dict[int, int],
     input_offsets: dict[str, int],
     outputs: list[str],
     state_outputs: list[str],
@@ -409,6 +427,8 @@ def _node_vm_info(
         node: The Python node to translate.
         const_offsets: Maps const node index → offset into ``const_blob``.
         clip_offsets: Maps clip node index → offset into ``clip_lo``/``hi``.
+        gemm_aux: Maps gemm node index → packed aux (``(table_index << 1) | transB``).
+        elu_aux: Maps elu node index → index into ``elu_alpha``.
         input_offsets: Maps input port name → offset into the packed input
             buffer.
         outputs: Names of the graph's non-state output ports.
@@ -445,6 +465,10 @@ def _node_vm_info(
         # bit 0 is the transB flag — one aux word carries both. The VM reads
         # g.gemm_alpha[node.aux / 2] etc. (comptime-folded).
         return "gemm", gemm_aux[i]
+    if node.op == "elu":
+        # alpha is baked into elu_alpha; the VM reads g.elu_alpha[node.aux]
+        # (comptime-folded inside the unrolled node loop).
+        return "elu", elu_aux[i]
     return node.op, 0
 
 

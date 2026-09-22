@@ -219,6 +219,10 @@ class TraceBackend:
         # GELU, tanh approximation (GPT gelu_new); shape-preserving.
         return self._emit("gelu", [x], x.shape)
 
+    def elu(self, x: Tracer, *, alpha: float = 1.0) -> Tracer:
+        # ELU; alpha is baked per node by the lowerer.
+        return self._emit("elu", [x], x.shape, alpha=alpha)
+
     def sin(self, x: Tracer) -> Tracer:
         return self._emit("sin", [x], x.shape)
 
