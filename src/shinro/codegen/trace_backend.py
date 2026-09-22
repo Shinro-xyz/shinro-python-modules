@@ -215,6 +215,10 @@ class TraceBackend:
         # Softmax over the last axis (numpy axis=-1); shape-preserving.
         return self._emit("softmax", [x], x.shape)
 
+    def gelu(self, x: Tracer) -> Tracer:
+        # GELU, tanh approximation (GPT gelu_new); shape-preserving.
+        return self._emit("gelu", [x], x.shape)
+
     def sin(self, x: Tracer) -> Tracer:
         return self._emit("sin", [x], x.shape)
 

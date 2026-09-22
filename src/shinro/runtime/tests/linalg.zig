@@ -111,6 +111,18 @@ test "softmax_rows is stable on large values" {
     try std.testing.expectApproxEqAbs(0.2689414213699951, r[1], 1e-12);
 }
 
+test "gelu tanh approximation matches known values" {
+    // 0.5x(1+tanh(sqrt(2/pi)(x + 0.044715 x^3))).
+    const a = [_]f64{ 0, 1, -1, 4, 8 };
+    const r = la.gelu(5, &a);
+    try std.testing.expectApproxEqAbs(0.0, r[0], 1e-12);
+    try std.testing.expectApproxEqAbs(0.8411919906082768, r[1], 1e-12);
+    try std.testing.expectApproxEqAbs(-0.1588080093917233, r[2], 1e-12);
+    try std.testing.expectApproxEqAbs(3.9999297540518075, r[3], 1e-12);
+    // Large positive input saturates to identity.
+    try std.testing.expectApproxEqAbs(8.0, r[4], 1e-12);
+}
+
 test "argmax returns index of max" {
     const a = [_]f64{ 0.2, 0.7, 0.1 };
     try std.testing.expectEqual(@as(usize, 1), la.argmax(3, &a));

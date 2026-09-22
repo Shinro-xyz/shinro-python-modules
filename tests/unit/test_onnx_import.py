@@ -31,12 +31,12 @@ def _init(name, array):
     return helper.make_tensor(name, TensorProto.FLOAT, a.shape, a.flatten().tolist())
 
 
-def _save(nodes, inputs, outputs, initializers, tmp_path, name="policy.onnx"):
+def _save(nodes, inputs, outputs, initializers, tmp_path, name="policy.onnx", opset=13):
     """Serialize an ONNX graph to a temp file and return its path."""
     from onnx import helper
 
     graph = helper.make_graph(nodes, "g", inputs, outputs, initializers)
-    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 13)])
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", opset)])
     model.ir_version = 8
     path = tmp_path / name
     onnx.save(model, str(path))
@@ -314,6 +314,38 @@ class TestActivations:
             tmp_path,
         )
         with pytest.raises(NotImplementedError, match="last axis"):
+            import_onnx_policy(path)
+
+    def test_gelu_tanh(self, tmp_path):
+        from onnx import helper
+
+        path = _save(
+            [helper.make_node("Gelu", ["state"], ["y"], approximate="tanh")],
+            [_vi("state", [None, 3])],
+            [_vi("y", [None, 3])],
+            [],
+            tmp_path,
+            opset=20,
+        )
+        cg = import_onnx_policy(path)
+        assert "gelu" in _op_names(cg)
+        x = np.array([-2.0, 0.5, 2.0])
+        expected = 0.5 * x * (1.0 + np.tanh(np.sqrt(2.0 / np.pi) * (x + 0.044715 * x * x * x)))
+        np.testing.assert_allclose(_run(cg, x), expected, rtol=1e-12)
+
+    def test_gelu_exact_default_rejected(self, tmp_path):
+        from onnx import helper
+
+        # No approximate attr -> ONNX default "none" = exact erf, unsupported.
+        path = _save(
+            [helper.make_node("Gelu", ["state"], ["y"])],
+            [_vi("state", [None, 3])],
+            [_vi("y", [None, 3])],
+            [],
+            tmp_path,
+            opset=20,
+        )
+        with pytest.raises(NotImplementedError, match="tanh"):
             import_onnx_policy(path)
 
 

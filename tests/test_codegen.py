@@ -522,6 +522,13 @@ class TestTraceBackend:
         assert ts.shape == (2, 3)
         assert bk.g.nodes[ts.node].op == "softmax"
 
+    def test_gelu_emits_gelu_op(self):
+        bk = self._bk()
+        ta = _lift(bk.g, np.ones((4,)))
+        tg = bk.gelu(ta)
+        assert tg.shape == (4,)
+        assert bk.g.nodes[tg.node].op == "gelu"
+
     def test_inv_emits_inv_op(self):
         bk = self._bk()
         ta = _lift(bk.g, np.eye(3))

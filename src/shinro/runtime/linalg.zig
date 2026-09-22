@@ -161,8 +161,7 @@ pub fn inv(comptime n: usize, a: []const f64) [n * n]f64 {
 }
 
 
-// sine for an array of values
-
+/// Elementwise sine: `out[i] = sin(a[i])`. 1-D input, same-length flat output.
 pub fn sin_vec (comptime m: usize, a:[]const f64) [m]f64{
     var out: [m]f64= undefined;
     for (0..m) |i| {
@@ -171,8 +170,7 @@ pub fn sin_vec (comptime m: usize, a:[]const f64) [m]f64{
     return out;
 }
 
-///cosine for an array of values
-
+/// Elementwise cosine: `out[i] = cos(a[i])`. 1-D input, same-length flat output.
 pub fn cos_vec(comptime m: usize, a:[]const f64) [m]f64{
     var out: [m]f64 = undefined;
     for (0..m) |i| {
@@ -181,8 +179,7 @@ pub fn cos_vec(comptime m: usize, a:[]const f64) [m]f64{
     return out;
 }
 
-/// ReLU
-
+/// Elementwise ReLU: `out[i] = max(a[i], 0)`. Shape-preserving.
 pub fn relu(comptime m:usize, a:[]const f64) [m]f64{
     var out: [m]f64=undefined;
     for (0..m) |i| {
@@ -191,7 +188,7 @@ pub fn relu(comptime m:usize, a:[]const f64) [m]f64{
     return out;
 }
 
-/// elementwise exponential
+/// Elementwise exponential: `out[i] = exp(a[i])`. Shape-preserving.
 pub fn elementwise_exponential (comptime m:usize,a:[]const f64) [m]f64{
     var out: [m]f64=undefined;
 
@@ -201,7 +198,8 @@ pub fn elementwise_exponential (comptime m:usize,a:[]const f64) [m]f64{
     return out;
 }
 
-/// matrix exponential-> only allows for nxn square matrices
+/// Integer matrix power `A^p` for an `n`x`n` row-major matrix: repeated
+/// `matmul` starting from the identity (`p = 0` yields the identity).
 pub fn matrix_power (comptime n:usize, a:[]const f64, comptime p: usize) [n*n]f64{
     var result: [n*n]f64 = undefined;
 
@@ -224,6 +222,7 @@ pub fn matrix_power (comptime n:usize, a:[]const f64, comptime p: usize) [n*n]f6
     return result;
 }
 
+/// Elementwise hyperbolic tangent: `out[i] = tanh(a[i])`. Shape-preserving.
 pub fn tanh (comptime m: usize, a: []const f64) [m]f64 {
     var result: [m]f64= undefined;
 
@@ -233,8 +232,8 @@ pub fn tanh (comptime m: usize, a: []const f64) [m]f64 {
     return result;
 }
 
-//argmax--> what arg is the highest value
-
+/// Index of the maximum element (`np.argmax` semantics: ties resolve to the
+/// first/lowest index).
 pub fn argmax (comptime m: usize, a:[]const f64) usize {
     var best: usize = 0;
     for (0..m) |i| {
@@ -288,7 +287,8 @@ pub fn min_axis1 (comptime rows: usize, comptime cols: usize, a: []const f64) [r
     return out;
 }
 
-//one hot
+/// One-hot vector of length `depth`: 1.0 at `idx`, 0.0 elsewhere. If
+/// `idx >= depth` every entry is 0.0 (no bounds check).
 pub fn onehot (comptime depth: usize, idx:usize) [depth]f64{
      var out: [depth]f64= undefined;
 
@@ -302,12 +302,12 @@ pub fn onehot (comptime depth: usize, idx:usize) [depth]f64{
      return out;
  }
 
- // fused gemm operation,
- // alpha, beta are scalars
- // consistent with row major convention
- // Y= alpha*(A@B')+beta*(C)
- // a-> (m,k) b->(k,n), b.T->(n,k)
-
+/// Fused dense layer: `out = alpha * (A @ B') + beta * C`, flat row-major.
+///
+/// `A` is `(m, k)`; `B` is `(n, k)` when `transB` (torch `nn.Linear` weight
+/// layout, read by striding) and `(k, n)` otherwise. `C` broadcasts like
+/// numpy: `c_len == 1` a scalar, `c_len == n` a row, else a full `(m, n)`
+/// bias. `alpha`, `beta`, and `transB` are comptime and constant-fold.
 pub fn gemm (
      comptime m: usize,comptime k: usize,comptime n: usize,comptime alpha:f64,comptime beta:f64,comptime transB: bool,
      a:[]const f64,
@@ -368,6 +368,23 @@ pub fn softmax_rows(comptime rows: usize, comptime cols: usize, a: []const f64) 
             sum += e;
         }
         for (0..cols) |j| out[base + j] /= sum;
+    }
+    return out;
+}
+
+/// GELU, tanh approximation (the GPT-style ``gelu_new``):
+/// ``f(x) = 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))``.
+///
+/// The exact erf-based GELU is not implemented; this approximation deviates
+/// from it by at most ~4.7e-4 absolute (worst near |x| ~ 2.7) and the same
+/// formula is used by ``numpy``/``torch`` (``approximate="tanh"``), so oracle
+/// parity is exact.
+pub fn gelu(comptime m: usize, a: []const f64) [m]f64 {
+    const c: f64 = std.math.sqrt(2.0 / std.math.pi); // sqrt(2/pi)
+    var out: [m]f64 = undefined;
+    for (0..m) |i| {
+        const x = a[i];
+        out[i] = 0.5 * x * (1.0 + std.math.tanh(c * (x + 0.044715 * std.math.pow(f64, x, 3.0))));
     }
     return out;
 }
