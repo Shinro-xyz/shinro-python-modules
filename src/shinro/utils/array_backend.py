@@ -153,6 +153,9 @@ class ArrayBackend(ABC):
     def tanh(self, x) -> Any: ...
 
     @abstractmethod
+    def sigmoid(self, x) -> Any: ...
+
+    @abstractmethod
     def relu(self, x) -> Any: ...
 
     @abstractmethod
@@ -358,6 +361,9 @@ class NumpyBackend(ArrayBackend):
     def tanh(self, x):
         return np.tanh(x)
 
+    def sigmoid(self, x):
+        return 1.0 / (1.0 + np.exp(-x))
+
     def relu(self, x):
         return np.maximum(x, 0.0)
 
@@ -372,6 +378,7 @@ class NumpyBackend(ArrayBackend):
 
     def one_hot(self, idx, depth):
         out = np.zeros(depth, dtype=np.float64)
+        # pi-lens-ignore: unchecked-throwing-call-python
         out[int(idx)] = 1.0
         return out
 
@@ -607,6 +614,9 @@ class TorchBackend(ArrayBackend):
     def tanh(self, x):
         return self.torch.tanh(x)
 
+    def sigmoid(self, x):
+        return self.torch.sigmoid(x)
+
     def relu(self, x):
         return self.torch.nn.functional.relu(x)
 
@@ -621,6 +631,7 @@ class TorchBackend(ArrayBackend):
 
     def one_hot(self, idx, depth):
         out = self.torch.zeros(depth, dtype=self.torch.float64, device=self.device)
+        # pi-lens-ignore: unchecked-throwing-call-python
         out[int(idx)] = 1.0
         return out
 

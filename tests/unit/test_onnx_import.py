@@ -243,7 +243,7 @@ class TestActivations:
         np.testing.assert_allclose(_run(cg, [3.0, -4.0]), [3.0, 0.0])
         assert "relu" in _op_names(cg)
 
-    def test_sigmoid_composed_from_existing_ops(self, tmp_path):
+    def test_sigmoid_lowered_to_fused_op(self, tmp_path):
         from onnx import helper
 
         path = _save(
@@ -254,8 +254,10 @@ class TestActivations:
             tmp_path,
         )
         cg = import_onnx_policy(path)
-        # No sigmoid op exists in the VM; the importer composes it.
-        assert {"neg", "exp", "add", "div"} <= set(_op_names(cg))
+        # Sigmoid is a single fused VM op — not the old exp/neg/add/div chain.
+        # (`add`/`mul` remain from the action-space scale/bias baking.)
+        assert "sigmoid" in _op_names(cg)
+        assert not {"neg", "exp", "div"} & set(_op_names(cg)), _op_names(cg)
         x = np.array([-1.0, 0.0, 2.0])
         np.testing.assert_allclose(_run(cg, x), 1.0 / (1.0 + np.exp(-x)), rtol=1e-12)
 

@@ -208,6 +208,9 @@ class TraceBackend:
     def tanh(self, x: Tracer) -> Tracer:
         return self._emit("tanh", [x], x.shape)
 
+    def sigmoid(self, x: Tracer) -> Tracer:
+        return self._emit("sigmoid", [x], x.shape)
+
     def sin(self, x: Tracer) -> Tracer:
         return self._emit("sin", [x], x.shape)
 

@@ -329,3 +329,16 @@ pub fn gemm (
      }
      return out;
  }
+
+/// Elementwise logistic sigmoid, ``f(x) = 1 / (1 + exp(-x))``.
+///
+/// This is the ONNX ``Sigmoid`` activation. The negation folds into the exp
+/// argument, so the kernel needs no intermediate buffer and stays a
+/// fixed-size stack array like every other linalg kernel.
+pub fn sigmoid(comptime m: usize, a: []const f64) [m]f64 {
+    var out: [m]f64 = undefined;
+    for (0..m) |i| {
+        out[i] = 1.0 / (1.0 + std.math.exp(-a[i]));
+    }
+    return out;
+}

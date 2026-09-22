@@ -26,8 +26,8 @@ Supported ONNX surface — everything else raises ``NotImplementedError``:
   lowered to the fused ``gemm`` op: one node does the contraction, the
   alpha/beta scales, the transposed-weight read, and the bias add
 - ``MatMul``, ``Add``
-- ``Relu``, ``Tanh``, ``Sigmoid`` (composed from ``exp`` / ``neg`` / ``add`` /
-  ``div`` so no new VM op is needed)
+- ``Relu``, ``Tanh``, ``Sigmoid`` — lowered to the fused ``relu`` / ``tanh`` /
+  ``sigmoid`` VM ops (no composition needed)
 
 Nodes that do not contribute to the declared output are ignored, so an
 exporter's stray logging/cast node does not fail the import.
@@ -80,7 +80,7 @@ _OBS_KEYS = frozenset({"input_name", "state_keys", "normalize", "obs_mean", "obs
 #: ONNX ops the importer can translate. Everything else is rejected loudly.
 _SUPPORTED_OPS = frozenset({"Gemm", "MatMul", "Add", "Relu", "Tanh", "Sigmoid"})
 #: ONNX ops translated straight to a same-named shinro op.
-_UNARY_OPS = {"Relu": "relu", "Tanh": "tanh"}
+_UNARY_OPS = {"Relu": "relu", "Tanh": "tanh", "Sigmoid": "sigmoid"}
 #: Attributes Gemm may carry; any other attribute is rejected.
 _GEMM_ATTRS = frozenset({"alpha", "beta", "transA", "transB"})
 
@@ -376,9 +376,8 @@ class _OnnxImporter:
         elif op_type in _UNARY_OPS:
             _require_no_attrs(op_type, attrs)
             result = self.emit(_UNARY_OPS[op_type], [self.tensor(inputs[0])])
-        else:  # Sigmoid
-            _require_no_attrs(op_type, attrs)
-            result = self.emit_sigmoid(self.tensor(inputs[0]))
+        else:  # pragma: no cover — _SUPPORTED_OPS is disjoint from the above
+            raise NotImplementedError(f"ONNX op {op_type!r} has no importer branch")
 
         self.bind(outputs[0], result)
 
@@ -419,11 +418,6 @@ class _OnnxImporter:
             beta=float(attrs.get("beta", 1.0)),
             transB=bool(int(attrs.get("transB", 0))),
         )
-
-    def emit_sigmoid(self, x_id: int) -> int:
-        """Emit ``sigmoid(x) = 1 / (1 + exp(-x))`` from existing VM ops."""
-        exp_neg = self.emit("exp", [self.emit("neg", [x_id])])
-        return self.emit("div", [self.const(1.0), self.emit("add", [self.const(1.0), exp_neg])])
 
     def flatten_output(self, node_id: int) -> int:
         """Reduce a batch-1 output to a 1-D action vector.

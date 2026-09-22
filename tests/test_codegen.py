@@ -508,6 +508,13 @@ class TestTraceBackend:
         assert tc.shape == (2, 2)
         assert bk.g.nodes[tc.node].op == "copy"
 
+    def test_sigmoid_emits_sigmoid_op(self):
+        bk = self._bk()
+        ta = _lift(bk.g, np.ones((4,)))
+        ts = bk.sigmoid(ta)
+        assert ts.shape == (4,)
+        assert bk.g.nodes[ts.node].op == "sigmoid"
+
     def test_inv_emits_inv_op(self):
         bk = self._bk()
         ta = _lift(bk.g, np.eye(3))
