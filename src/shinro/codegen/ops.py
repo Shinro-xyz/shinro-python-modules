@@ -242,6 +242,19 @@ def _softmax(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.nda
     return e / np.sum(e, axis=-1, keepdims=True)
 
 
+@register_op("gelu")
+def _gelu(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
+    """GELU, tanh approximation: 0.5x(1+tanh(sqrt(2/pi)(x+0.044715x^3))).
+
+    The exact erf form is deliberately not implemented — this is the tanh
+    approximation (GPT ``gelu_new``), which deviates from exact GELU by at most
+    ~4.7e-4 absolute. The Zig mirror is ``linalg.gelu`` and must use the same
+    expression so kernel/oracle agree bit-for-bit.
+    """
+    x = values[node.inputs[0]]
+    return 0.5 * x * (1.0 + np.tanh(np.sqrt(2.0 / np.pi) * (x + 0.044715 * x * x * x)))
+
+
 @register_op("sin")
 def _sin(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     return np.sin(values[node.inputs[0]])

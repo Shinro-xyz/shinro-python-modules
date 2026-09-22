@@ -30,6 +30,8 @@ Supported ONNX surface — everything else raises ``NotImplementedError``:
   ``sigmoid`` VM ops (no composition needed)
 - ``Softmax`` — lowered to the fused ``softmax`` op (last-axis only; any other
   ``axis`` is rejected loudly)
+- ``Gelu`` — lowered to the fused tanh-approx ``gelu`` op; ``approximate``
+  must be ``"tanh"`` (the exact erf default is rejected loudly)
 
 Nodes that do not contribute to the declared output are ignored, so an
 exporter's stray logging/cast node does not fail the import.
@@ -80,7 +82,7 @@ _ACTION_SPACES = frozenset({"continuous", "discrete", "stochastic"})
 #: typo (``obs_means``) cannot silently drop normalization or clipping.
 _OBS_KEYS = frozenset({"input_name", "state_keys", "normalize", "obs_mean", "obs_std", "clip", "add_batch_dim"})
 #: ONNX ops the importer can translate. Everything else is rejected loudly.
-_SUPPORTED_OPS = frozenset({"Gemm", "MatMul", "Add", "Relu", "Tanh", "Sigmoid", "Softmax"})
+_SUPPORTED_OPS = frozenset({"Gemm", "MatMul", "Add", "Relu", "Tanh", "Sigmoid", "Softmax", "Gelu"})
 #: ONNX ops translated straight to a same-named shinro op.
 _UNARY_OPS = {"Relu": "relu", "Tanh": "tanh", "Sigmoid": "sigmoid"}
 #: Attributes Gemm may carry; any other attribute is rejected.
@@ -361,7 +363,7 @@ class _OnnxImporter:
         if op_type not in _SUPPORTED_OPS:
             raise NotImplementedError(
                 f"ONNX op {op_type!r} is not supported by the policy importer. Supported ops: "
-                f"{sorted(_SUPPORTED_OPS)}. Decompose the policy to Gemm/MatMul/Add + Relu/Tanh/Sigmoid/Softmax, "
+                f"{sorted(_SUPPORTED_OPS)}. Decompose the policy to Gemm/MatMul/Add + Relu/Tanh/Sigmoid/Softmax/Gelu, "
                 f"or extend shinro.codegen.onnx_import."
             )
         if len(outputs) != 1:
@@ -380,6 +382,8 @@ class _OnnxImporter:
             result = self.emit(_UNARY_OPS[op_type], [self.tensor(inputs[0])])
         elif op_type == "Softmax":
             result = self.emit_softmax(self.tensor(inputs[0]), attrs)
+        elif op_type == "Gelu":
+            result = self.emit_gelu(self.tensor(inputs[0]), attrs)
         else:  # pragma: no cover — _SUPPORTED_OPS is disjoint from the above
             raise NotImplementedError(f"ONNX op {op_type!r} has no importer branch")
 
@@ -453,6 +457,32 @@ class _OnnxImporter:
                 "only last-axis softmax is supported"
             )
         return self.emit("softmax", [x_id])
+
+    def emit_gelu(self, x_id: int, attrs: dict[str, Any]) -> int:
+        """Emit the fused tanh-approx ``gelu`` op for ONNX ``Gelu``.
+
+        Only the tanh approximation is implemented (the GPT ``gelu_new``
+        formula). ONNX's default ``approximate="none"`` is the exact erf form,
+        which this importer deliberately does not support — it is rejected
+        loudly rather than silently substituted (the two differ by up to
+        ~4.7e-4 absolute).
+
+        Raises:
+            NotImplementedError: On unknown attributes, or any approximate mode
+                other than ``"tanh"``.
+        """
+        unknown = set(attrs) - {"approximate"}
+        if unknown:
+            raise NotImplementedError(f"ONNX Gelu carries unsupported attribute(s): {sorted(unknown)}")
+        approx = attrs.get("approximate", "none")
+        if isinstance(approx, bytes):
+            approx = approx.decode()
+        if approx != "tanh":
+            raise NotImplementedError(
+                f"ONNX Gelu approximate={approx!r} is not supported; only the tanh "
+                f"approximation (approximate='tanh') is implemented"
+            )
+        return self.emit("gelu", [x_id])
 
     def flatten_output(self, node_id: int) -> int:
         """Reduce a batch-1 output to a 1-D action vector.

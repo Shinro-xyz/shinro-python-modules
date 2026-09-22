@@ -108,6 +108,7 @@ def _build_lowered_ops_graph():
     tanh_id = g.emit("tanh", [x], (4,))
     sigmoid_id = g.emit("sigmoid", [x], (4,))
     softmax_id = g.emit("softmax", [x], (4,))
+    gelu_id = g.emit("gelu", [x], (4,))
     relu_id = g.emit("relu", [x], (4,))
     exp_id = g.emit("exp", [x], (4,))
     copy_id = g.emit("copy", [x], (4,))
@@ -124,6 +125,7 @@ def _build_lowered_ops_graph():
         ("tanh", tanh_id),
         ("sigmoid", sigmoid_id),
         ("softmax", softmax_id),
+        ("gelu", gelu_id),
         ("relu", relu_id),
         ("exp", exp_id),
         ("copy", copy_id),
@@ -144,6 +146,7 @@ def _build_lowered_ops_graph():
             "tanh",
             "sigmoid",
             "softmax",
+            "gelu",
             "relu",
             "exp",
             "copy",
@@ -1263,7 +1266,7 @@ class TestLoweredOpsOracle:
         assert n_state == 0
 
         exact_ops = {"copy", "slice", "relu", "argmax", "one_hot", "stack", "ne_zero", "ne_one"}
-        transcendental = {"exp", "tanh", "sigmoid", "softmax", "sin", "cos"}
+        transcendental = {"exp", "tanh", "sigmoid", "softmax", "gelu", "sin", "cos"}
 
         for _ in range(20):
             x = rng.normal(0.0, 1.0, (4,))

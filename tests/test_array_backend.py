@@ -428,3 +428,11 @@ def test_softmax_1d_is_stable(bk):
     """1-D softmax is a single row; large values stay finite via the max-shift."""
     got = bk.to_numpy(bk.softmax(bk.array([1000.0, 999.0])))
     np.testing.assert_allclose(got, [0.7310585786300049, 0.2689414213699951], rtol=1e-12)
+
+
+def test_gelu_tanh_matches_formula(bk):
+    """Both eager backends expose the tanh-approximation GELU."""
+    x = np.array([-2.0, -0.5, 0.0, 0.5, 2.0])
+    got = bk.to_numpy(bk.gelu(bk.array(x)))
+    expected = 0.5 * x * (1.0 + np.tanh(np.sqrt(2.0 / np.pi) * (x + 0.044715 * x * x * x)))
+    np.testing.assert_allclose(got, expected, rtol=1e-12, atol=1e-12)

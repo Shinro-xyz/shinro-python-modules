@@ -159,6 +159,9 @@ class ArrayBackend(ABC):
     def softmax(self, x) -> Any: ...
 
     @abstractmethod
+    def gelu(self, x) -> Any: ...
+
+    @abstractmethod
     def relu(self, x) -> Any: ...
 
     @abstractmethod
@@ -370,6 +373,10 @@ class NumpyBackend(ArrayBackend):
     def softmax(self, x):
         e = np.exp(x - np.max(x, axis=-1, keepdims=True))
         return e / np.sum(e, axis=-1, keepdims=True)
+
+    def gelu(self, x):
+        # tanh approximation (GPT gelu_new), matching linalg.gelu / the oracle.
+        return 0.5 * x * (1.0 + np.tanh(np.sqrt(2.0 / np.pi) * (x + 0.044715 * x * x * x)))
 
     def relu(self, x):
         return np.maximum(x, 0.0)
@@ -626,6 +633,9 @@ class TorchBackend(ArrayBackend):
 
     def softmax(self, x):
         return self.torch.softmax(x, dim=-1)
+
+    def gelu(self, x):
+        return self.torch.nn.functional.gelu(x, approximate="tanh")
 
     def relu(self, x):
         return self.torch.nn.functional.relu(x)
