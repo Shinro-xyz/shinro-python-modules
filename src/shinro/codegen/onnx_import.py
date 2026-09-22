@@ -22,8 +22,10 @@ no runtime dependency at all.
 
 Supported ONNX surface — everything else raises ``NotImplementedError``:
 
-- ``Gemm`` (``alpha`` / ``beta`` / ``transB``; ``transA=1`` is rejected),
-  ``MatMul``, ``Add``
+- ``Gemm`` (``alpha`` / ``beta`` / ``transB``; ``transA=1`` is rejected) —
+  lowered to the fused ``gemm`` op: one node does the contraction, the
+  alpha/beta scales, the transposed-weight read, and the bias add
+- ``MatMul``, ``Add``
 - ``Relu``, ``Tanh``, ``Sigmoid`` (composed from ``exp`` / ``neg`` / ``add`` /
   ``div`` so no new VM op is needed)
 
@@ -381,14 +383,20 @@ class _OnnxImporter:
         self.bind(outputs[0], result)
 
     def emit_gemm(self, inputs: list[str], attrs: dict[str, Any]) -> int:
-        """Emit ``Y = alpha * A' * B' + beta * C`` from matmul/transpose/mul/add.
+        """Emit one fused ``gemm`` node for ``Y = alpha * A' * B' + beta * C``.
 
-        ``B'`` is realized as a ``transpose`` node rather than by baking a
-        pre-transposed constant, so the non-square transpose path in the VM is
-        exercised by every torch-style export (``transB=1``). The ``alpha`` /
-        ``beta`` multipliers are emitted unconditionally, including the default
-        ``1.0``: a ``mul`` by one is cheap and keeps the Gemm lowering uniform
-        rather than branching on attribute values.
+        The fused kernel (``linalg.gemm``) does the contraction, the
+        ``alpha``/``beta`` scales, the ``transB`` read, and the bias add in a
+        single pass, so a torch-style Gemm costs one node and one output-sized
+        buffer slot instead of the old transpose + matmul + mul (+ mul + add)
+        chain — ``transB`` is realized by striding the baked weight, never by
+        moving data. The attributes ride on the node; the lowerer bakes
+        ``alpha``/``beta`` into ``gemm_alpha``/``gemm_beta`` and packs the
+        table index plus the ``transB`` flag into the node's ``aux``.
+
+        A missing bias (2 inputs) is emitted as an explicit ``const(0.0)``
+        scalar so the kernel's three-operand contract stays uniform; the zero
+        broadcasts and annihilates the ``beta * C`` term.
 
         Raises:
             NotImplementedError: On unknown attributes, wrong arity, or ``transA=1``.
@@ -401,18 +409,16 @@ class _OnnxImporter:
         if int(attrs.get("transA", 0)):
             raise NotImplementedError("ONNX Gemm transA=1 is not supported (transpose the activation upstream)")
 
-        alpha = float(attrs.get("alpha", 1.0))
-        beta = float(attrs.get("beta", 1.0))
+        a = self.tensor(inputs[0])
         b = self.tensor(inputs[1])
-        if int(attrs.get("transB", 0)):
-            b = self.emit("transpose", [b])
-        y = self.emit("matmul", [self.tensor(inputs[0]), b])
-        y = self.emit("mul", [y, self.const(alpha)])
-        if len(inputs) == 3:
-            c = self.tensor(inputs[2])
-            c = self.emit("mul", [c, self.const(beta)])
-            y = self.emit("add", [y, c])
-        return y
+        c = self.tensor(inputs[2]) if len(inputs) == 3 else self.const(0.0)
+        return self.emit(
+            "gemm",
+            [a, b, c],
+            alpha=float(attrs.get("alpha", 1.0)),
+            beta=float(attrs.get("beta", 1.0)),
+            transB=bool(int(attrs.get("transB", 0))),
+        )
 
     def emit_sigmoid(self, x_id: int) -> int:
         """Emit ``sigmoid(x) = 1 / (1 + exp(-x))`` from existing VM ops."""

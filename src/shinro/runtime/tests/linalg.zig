@@ -115,3 +115,48 @@ test "cos_vec matches cos of known angles" {
     try std.testing.expectApproxEqAbs(0.0, r[1], 1e-12);
     try std.testing.expectApproxEqAbs(-1.0, r[2], 1e-12);
 }
+
+// gemm: Y = alpha*(A@B') + beta*C. A is (m,k); B is (k,n), or (n,k) with
+// transB (torch nn.Linear layout, read by striding). C broadcasts per c_len:
+// 1 = scalar, n = (n,) row, otherwise full (m,n). Values below are exact in
+// f64, so expectEqual is safe.
+
+test "gemm transB=1 with (n,) bias" {
+    const a = [_]f64{ 1, 2, 3 }; // (m=1, k=3)
+    const w = [_]f64{ 1, 2, 3, 4, 5, 6 }; // (n=2, k=3)
+    const c = [_]f64{ 0.5, -0.5 };
+    const r = la.gemm(1, 3, 2, 1.0, 1.0, true, &a, &w, &c, 2);
+    try std.testing.expectEqual([_]f64{ 14.5, 31.5 }, r);
+}
+
+test "gemm transB=0 with scalar (zero) bias" {
+    const a = [_]f64{ 1, 2, 3 };
+    const w = [_]f64{ 1, 2, 3, 4, 5, 6 }; // (k=3, n=2)
+    const c = [_]f64{0.0};
+    const r = la.gemm(1, 3, 2, 1.0, 1.0, false, &a, &w, &c, 1);
+    try std.testing.expectEqual([_]f64{ 22, 28 }, r);
+}
+
+test "gemm applies alpha and beta" {
+    const a = [_]f64{ 1, 2, 3 };
+    const w = [_]f64{ 1, 2, 3, 4, 5, 6 };
+    const c = [_]f64{ 0.5, -0.5 };
+    const r = la.gemm(1, 3, 2, 0.5, 2.0, true, &a, &w, &c, 2);
+    try std.testing.expectEqual([_]f64{ 8, 15 }, r);
+}
+
+test "gemm 2-D activation (m,k) @ (n,k)'.T" {
+    const a = [_]f64{ 1, 2, 3, 4, 5, 6 }; // (m=2, k=3)
+    const w = [_]f64{ 1, 2, 3, 4, 5, 6 }; // (n=2, k=3)
+    const c = [_]f64{0.0};
+    const r = la.gemm(2, 3, 2, 1.0, 1.0, true, &a, &w, &c, 1);
+    try std.testing.expectEqual([_]f64{ 14, 32, 32, 77 }, r);
+}
+
+test "gemm broadcasts a full (m,n) bias" {
+    const a = [_]f64{ 1, 2, 3, 4, 5, 6 }; // (m=2, k=3)
+    const w = [_]f64{ 1, 2, 3, 4, 5, 6 }; // (n=2, k=3)
+    const c = [_]f64{ 1, 1, 2, 2 }; // (m=2, n=2)
+    const r = la.gemm(2, 3, 2, 1.0, 1.0, true, &a, &w, &c, 4);
+    try std.testing.expectEqual([_]f64{ 15, 33, 34, 79 }, r);
+}

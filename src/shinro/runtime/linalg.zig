@@ -301,3 +301,31 @@ pub fn onehot (comptime depth: usize, idx:usize) [depth]f64{
      }
      return out;
  }
+
+ // fused gemm operation,
+ // alpha, beta are scalars
+ // consistent with row major convention
+ // Y= alpha*(A@B')+beta*(C)
+ // a-> (m,k) b->(k,n), b.T->(n,k)
+
+pub fn gemm (
+     comptime m: usize,comptime k: usize,comptime n: usize,comptime alpha:f64,comptime beta:f64,comptime transB: bool,
+     a:[]const f64,
+     b:[]const f64,
+     c:[]const f64,
+     comptime c_len:usize
+ ) [m*n]f64 {
+     var out: [m*n]f64 = undefined;
+     for (0..m) |i| {
+         for (0..n) |j| {
+             var s:f64=0.0;
+             for (0..k) |p| {
+                 const bv= if (transB) b[j*k+p] else b[p*n+j];
+                 s+=a[i*k+p]*bv;
+             }
+             const cj= if (c_len==1) c[0] else if (c_len==n) c[j] else c[i*n+j];
+             out[i*n+j]= alpha*s+beta*cj;
+         }
+     }
+     return out;
+ }

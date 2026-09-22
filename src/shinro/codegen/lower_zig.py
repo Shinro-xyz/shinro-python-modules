@@ -122,6 +122,20 @@ def lower_zig(
                     ) from exc
                 blob.extend(vals.tolist())
 
+    # --- baked gemm parameters (alpha/beta) and the transB flag ---
+    # gemm carries two f64 scalars (alpha, beta) that the ``aux: usize`` node
+    # field cannot hold. Bake them into parallel arrays (the clip_lo/clip_hi
+    # pattern) and pack the table index plus the transB flag into one aux word:
+    # aux = (index << 1) | transB.
+    gemm_alpha: list[float] = []
+    gemm_beta: list[float] = []
+    gemm_aux: dict[int, int] = {}
+    for i, node in enumerate(g.nodes):
+        if node.op == "gemm":
+            gemm_aux[i] = 2 * len(gemm_alpha) + (1 if bool(node.attrs.get("transB", False)) else 0)
+            gemm_alpha.append(float(node.attrs.get("alpha", 1.0)))
+            gemm_beta.append(float(node.attrs.get("beta", 1.0)))
+
     # --- output port packing: separate zero-indexed offsets per buffer ---
     # `outputs` and `state_out` are separate C-ABI buffers, so each needs its
     # own cumulative offset table starting at 0.
@@ -145,7 +159,7 @@ def lower_zig(
     lines.append("    transpose, inv, reshape, clip, where_op, any,")
     lines.append("    copy, tanh, relu, exp, argmax, one_hot, slice,")
     lines.append("    sin, cos, stack, solve_qp,")
-    lines.append("    abs, sign, pow, lt, min,")
+    lines.append("    abs, sign, pow, lt, min, gemm,")
     lines.append("};")
     lines.append("")
     lines.append("pub const Node = struct {")
@@ -168,7 +182,8 @@ def lower_zig(
     lines.append("")
     lines.append("pub const nodes = [_]Node{")
     for i, node in enumerate(g.nodes):
-        lines.append("    " + _node_line(g, i, node, const_offsets, clip_offsets, input_offsets, cg.outputs, cg.state_outputs) + ",")
+        rendered = _node_line(g, i, node, const_offsets, clip_offsets, gemm_aux, input_offsets, cg.outputs, cg.state_outputs)
+        lines.append("    " + rendered + ",")
     lines.append("};")
     lines.append("")
     lines.append("pub const const_blob = [_]f64{")
@@ -178,6 +193,8 @@ def lower_zig(
     lines.append("")
     lines.append("pub const clip_lo = [_]f64{" + _zig_floats(clip_lo) + "};")
     lines.append("pub const clip_hi = [_]f64{" + _zig_floats(clip_hi) + "};")
+    lines.append("pub const gemm_alpha = [_]f64{" + _zig_floats(gemm_alpha) + "};")
+    lines.append("pub const gemm_beta = [_]f64{" + _zig_floats(gemm_beta) + "};")
     lines.append("")
     lines.append("pub const output_offsets = [_]usize{" + ", ".join(str(o) for o in output_offsets) + "};")
     lines.append("pub const state_offsets = [_]usize{" + ", ".join(str(o) for o in state_offsets) + "};")
@@ -193,6 +210,7 @@ def lower_zig(
         offsets,
         const_offsets,
         clip_offsets,
+        gemm_aux,
         input_offsets,
     )
     if provenance:
@@ -210,6 +228,7 @@ def _graph_manifest(
     offsets: list[int],
     const_offsets: dict[int, int],
     clip_offsets: dict[int, int],
+    gemm_aux: dict[int, int],
     input_offsets: dict[str, int],
 ) -> dict:
     """Build the deterministic graph manifest for a composed graph.
@@ -230,6 +249,7 @@ def _graph_manifest(
             ``buf[offsets[i]..]``).
         const_offsets: Maps const node index → offset into ``const_blob``.
         clip_offsets: Maps clip node index → offset into ``clip_lo``/``hi``.
+        gemm_aux: Maps gemm node index → packed aux (``(table_index << 1) | transB``).
         input_offsets: Maps input port name → offset into the packed input
             buffer.
 
@@ -255,7 +275,7 @@ def _graph_manifest(
 
     nodes = []
     for i, node in enumerate(g.nodes):
-        vm_op, aux = _node_vm_info(g, i, node, const_offsets, clip_offsets, input_offsets, cg.outputs, cg.state_outputs)
+        vm_op, aux = _node_vm_info(g, i, node, const_offsets, clip_offsets, gemm_aux, input_offsets, cg.outputs, cg.state_outputs)
         rows, cols = _rows_cols(node.shape)
         nodes.append(
             {
@@ -324,6 +344,7 @@ def _node_line(
     node: Node,
     const_offsets: dict[int, int],
     clip_offsets: dict[int, int],
+    gemm_aux: dict[int, int],
     input_offsets: dict[str, int],
     outputs: list[str],
     state_outputs: list[str],
@@ -353,7 +374,7 @@ def _node_line(
     """
     rows, cols = _rows_cols(node.shape)
     inputs = "&.{" + ", ".join(str(x) for x in node.inputs) + "}"
-    op, aux = _node_vm_info(g, i, node, const_offsets, clip_offsets, input_offsets, outputs, state_outputs)
+    op, aux = _node_vm_info(g, i, node, const_offsets, clip_offsets, gemm_aux, input_offsets, outputs, state_outputs)
     vec = str(len(node.shape) == 1).lower()
 
     return f".{{ .op = .{op}, .inputs = {inputs}, .rows = {rows}, .cols = {cols}, .aux = {aux}, .vec = {vec} }}"
@@ -365,6 +386,7 @@ def _node_vm_info(
     node: Node,
     const_offsets: dict[int, int],
     clip_offsets: dict[int, int],
+    gemm_aux: dict[int, int],
     input_offsets: dict[str, int],
     outputs: list[str],
     state_outputs: list[str],
@@ -418,6 +440,11 @@ def _node_vm_info(
         # right reduction loop without an extra node field.
         axis = node.attrs.get("axis")
         return "min", 0 if axis is None else axis + 1
+    if node.op == "gemm":
+        # alpha/beta are baked into gemm_alpha/gemm_beta (index = aux >> 1);
+        # bit 0 is the transB flag — one aux word carries both. The VM reads
+        # g.gemm_alpha[node.aux / 2] etc. (comptime-folded).
+        return "gemm", gemm_aux[i]
     return node.op, 0
 
 

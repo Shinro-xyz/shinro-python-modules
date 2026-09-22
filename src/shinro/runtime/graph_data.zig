@@ -6,7 +6,7 @@ pub const Op = enum {
     transpose, inv, reshape, clip, where_op, any,
     copy, tanh, relu, exp, argmax, one_hot, slice,
     sin, cos, stack, solve_qp,
-    abs, sign, pow, lt, min,
+    abs, sign, pow, lt, min, gemm,
 };
 
 pub const Node = struct {
@@ -85,6 +85,8 @@ pub const const_blob = [_]f64{
 
 pub const clip_lo = [_]f64{-0x1.0000000000000p-1, -0x1.0000000000000p-1, -0x1.0000000000000p+0};
 pub const clip_hi = [_]f64{0x1.0000000000000p-1, 0x1.0000000000000p-1, 0x1.0000000000000p+0};
+pub const gemm_alpha = [_]f64{};
+pub const gemm_beta = [_]f64{};
 
 pub const output_offsets = [_]usize{0};
 pub const state_offsets = [_]usize{0, 3, 12};

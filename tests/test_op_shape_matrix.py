@@ -48,7 +48,8 @@ N_FEEDS = 10
 
 
 def _linalg_graph(g: Graph):
-    """matmul dispatch classes, transpose square/non-square, inv sizes, reshape."""
+    """matmul dispatch classes, transpose square/non-square, inv sizes, reshape,
+    fused gemm (both weight layouts + epilogue + bias classes)."""
     outs = {}
 
     a22 = g.input("a22", (2, 2))
@@ -87,6 +88,20 @@ def _linalg_graph(g: Graph):
     # the shape contract below would catch.
     outs["reshape_1d_to_2d"] = g.emit("reshape", [r6], (2, 3), target_shape=(2, 3))
     outs["reshape_2d_to_1d"] = g.emit("reshape", [r23], (6,), target_shape=(6,))
+
+    # gemm: the fused dense layer. Covers vec vs 2-D activation, transB 0/1
+    # (torch nn.Linear vs default layout), the alpha/beta epilogue, and all
+    # three bias broadcast classes (scalar 1 / (n,) / full (m,n)).
+    w_nk = g.emit("const", [], (3, 2), value=np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]))
+    w_kn = g.emit("const", [], (2, 3), value=np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]))
+    bias3 = g.emit("const", [], (3,), value=np.array([0.5, -0.5, 1.0]))
+    zero = g.emit("const", [], (), value=np.float64(0.0))
+    full_bias = g.emit("const", [], (2, 3), value=np.array([[1.0, 1.0, 1.0], [2.0, 2.0, 2.0]]))
+    outs["gemm_vec_transB"] = g.emit("gemm", [v2, w_nk, bias3], (3,), transB=True)
+    outs["gemm_vec_default"] = g.emit("gemm", [v2, w_kn, zero], (3,), transB=False)
+    outs["gemm_2d_transB"] = g.emit("gemm", [a22, w_nk, bias3], (2, 3), transB=True)
+    outs["gemm_alpha_beta"] = g.emit("gemm", [v2, w_nk, bias3], (3,), transB=True, alpha=0.5, beta=2.0)
+    outs["gemm_full_bias"] = g.emit("gemm", [a22, w_nk, full_bias], (2, 3), transB=True)
 
     specs = {
         "a22": ((2, 2), "free"),

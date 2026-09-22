@@ -118,9 +118,11 @@ class TestGemm:
         cg = import_onnx_policy(path)
         x = np.array([1.0, 2.0, 3.0])
         np.testing.assert_allclose(_run(cg, x), x @ w.T + b, rtol=1e-6)
-        # transB is realized with a real transpose node, not a baked transposed const.
-        assert {"transpose", "matmul", "add"} <= set(_op_names(cg))
-        assert _op_names(cg).count("add") == 2  # Gemm bias + the action bias
+        # The fused gemm op: one node, no materialized transpose / matmul / mul.
+        assert _op_names(cg).count("gemm") == 1
+        assert "transpose" not in _op_names(cg)
+        assert "matmul" not in _op_names(cg)
+        assert _op_names(cg).count("add") == 1  # the action bias; the Gemm bias is fused
 
     def test_default_layout_transB_off(self, tmp_path):
         from onnx import helper
@@ -136,6 +138,7 @@ class TestGemm:
         cg = import_onnx_policy(path)
         x = np.array([1.0, 1.0, 1.0])
         np.testing.assert_allclose(_run(cg, x), x @ w, rtol=1e-6)
+        assert "gemm" in _op_names(cg)
         assert "transpose" not in _op_names(cg)
 
     def test_alpha_beta(self, tmp_path):
@@ -153,8 +156,9 @@ class TestGemm:
         cg = import_onnx_policy(path)
         x = np.array([2.0, 3.0, 0.0])
         np.testing.assert_allclose(_run(cg, x), 0.5 * (x @ w.T) + 2.0 * c, rtol=1e-6)
-        # Gemm's alpha + beta multipliers, plus the action-surface scale.
-        assert _op_names(cg).count("mul") == 3
+        # alpha/beta are baked into the fused gemm node (aux-indexed tables),
+        # so the only remaining mul is the action-surface scale.
+        assert _op_names(cg).count("mul") == 1
 
     def test_no_bias(self, tmp_path):
         from onnx import helper

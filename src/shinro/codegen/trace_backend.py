@@ -182,6 +182,29 @@ class TraceBackend:
 
     # --- deterministic-policy ops (NN controllers in deterministic mode) ---
 
+    def gemm(
+        self,
+        a: Tracer,
+        b: Tracer,
+        c: Tracer,
+        *,
+        alpha: float = 1.0,
+        beta: float = 1.0,
+        transB: bool = False,
+    ) -> Tracer:
+        # Fused dense layer Y = alpha*(A@B') + beta*C. A is (k,) or (m,k); B is
+        # (k,n), or (n,k) with transB (torch nn.Linear layout). The output
+        # follows numpy's matmul rank convention: (n,) for a 1-D activation,
+        # (m,n) otherwise. c broadcasts like numpy. The Zig VM fuses the
+        # contraction, the alpha/beta scales, and the bias add into one kernel
+        # (linalg.gemm); alpha/beta/transB are baked per node — see lower_zig.
+        a = _lift(self.g, a)
+        b = _lift(self.g, b)
+        c = _lift(self.g, c)
+        n = b.shape[0] if transB else b.shape[1]
+        out_shape: tuple[int, ...] = (n,) if len(a.shape) == 1 else (a.shape[0], n)
+        return self._emit("gemm", [a, b, c], out_shape, alpha=alpha, beta=beta, transB=transB)
+
     def tanh(self, x: Tracer) -> Tracer:
         return self._emit("tanh", [x], x.shape)
 

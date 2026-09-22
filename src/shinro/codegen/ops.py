@@ -80,6 +80,25 @@ def _matmul(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndar
     return values[node.inputs[0]] @ values[node.inputs[1]]
 
 
+@register_op("gemm")
+def _gemm(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
+    """Fused dense layer ``Y = alpha * (A @ B') + beta * C``.
+
+    ``alpha``/``beta`` scale the product and the bias; ``transB`` reads the
+    weight ``B`` as stored ``(n, k)`` (torch ``nn.Linear`` layout) and
+    contracts its rows, i.e. the same values a lazy ``B.T`` would produce with
+    no data movement. This is the numpy oracle for the Zig ``linalg.gemm``
+    kernel — the broadcast on ``C`` (scalar / ``(n,)`` / full) comes free from
+    numpy and is mirrored by the kernel's ``c_len`` dispatch.
+    """
+    a = values[node.inputs[0]]
+    b = values[node.inputs[1]]
+    c = values[node.inputs[2]]
+    if node.attrs.get("transB", False):
+        b = b.T
+    return node.attrs.get("alpha", 1.0) * (a @ b) + node.attrs.get("beta", 1.0) * c
+
+
 @register_op("add")
 def _add(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     return values[node.inputs[0]] + values[node.inputs[1]]

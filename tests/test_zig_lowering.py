@@ -2423,7 +2423,7 @@ class TestOnnxPolicyOracle:
 
     The graph comes from the committed toy fixture, so this is the only oracle
     whose subject is a *learned* policy rather than a hand-written control law:
-    it proves the importer's output (baked encoder, transposed Gemms, composed
+    it proves the importer's output (baked encoder, fused gemm dense layers, composed
     activations, and the action post-processing) compiles bit-for-bit. Each
     action space gets its own kernel because the space — and whether an
     ``epsilon`` port exists — is baked at import time. Graphs lower to tmp
@@ -2499,3 +2499,80 @@ class TestOnnxPolicyOracle:
             want = mean + np.exp(log_std) * eps
             np.testing.assert_allclose(out, traced, rtol=1e-14, atol=1e-14)
             np.testing.assert_allclose(out, want, rtol=1e-12, atol=1e-12)
+
+
+def _build_gemm_oracle_graph():
+    """Hand-built gemm graph covering both weight layouts and the epilogue.
+
+    One gemm node per variant, each a named output, so a single compiled .so
+    exercises transB=1 (torch ``nn.Linear`` layout) with a (n,) bias, transB=0
+    with a zero scalar bias, a non-unit alpha/beta epilogue, and a 2-D (m, k)
+    activation. The oracle compares the .so against interpret() per output.
+    """
+    w_nk = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])  # (n=2, k=3)
+    w_kn = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])  # (k=3, n=2)
+    bias = np.array([0.5, -0.5])
+
+    g = Graph()
+    x = g.input("x", (3,))
+    x2 = g.input("x2", (2, 3))
+    w_nk_id = g.const(w_nk)
+    w_kn_id = g.const(w_kn)
+    bias_id = g.const(bias)
+    zero_id = g.const(np.asarray(0.0))
+
+    out_tb = g.emit("gemm", [x, w_nk_id, bias_id], (2,), transB=True)
+    out_tb0 = g.emit("gemm", [x, w_kn_id, zero_id], (2,), transB=False)
+    out_ab = g.emit("gemm", [x, w_nk_id, bias_id], (2,), transB=True, alpha=0.5, beta=2.0)
+    out_2d = g.emit("gemm", [x2, w_nk_id, bias_id], (2, 2), transB=True)
+    for name, src in (("tb", out_tb), ("tb0", out_tb0), ("ab", out_ab), ("two_d", out_2d)):
+        g.output(name, src)
+    return ComposedGraph(
+        graph=g,
+        inputs=["x", "x2"],
+        outputs=["tb", "tb0", "ab", "two_d"],
+        state_inputs=[],
+        state_outputs=[],
+    )
+
+
+@pytest.fixture(scope="session")
+def gemm_so(tmp_path_factory):
+    d = tmp_path_factory.mktemp("zig-build-gemm")
+    return _build_so(_build_gemm_oracle_graph(), d, graph_path=d / "graph_data.zig")
+
+
+class TestGemmOracle:
+    """linalg.gemm: both weight layouts, alpha/beta, bias shapes, rank 1/2."""
+
+    def test_gemm_so_matches_interpreter_and_hand_math(self, gemm_so):
+        lib, cg = gemm_so
+        n_out, n_state = output_split(cg)
+        assert n_state == 0
+
+        w_nk = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+        w_kn = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
+        bias = np.array([0.5, -0.5])
+
+        rng = np.random.default_rng(11)
+        for _ in range(20):
+            x = rng.normal(0.0, 1.0, 3)
+            x2 = rng.normal(0.0, 1.0, (2, 3))
+            arrays = {"x": x, "x2": x2}
+            out, _ = step_so(lib, pack_arrays(cg, arrays), n_out, n_state)
+            traced = interpret(cg.graph, arrays)
+
+            # Hand-computed contract, independent of the interpreter.
+            want = {
+                "tb": x @ w_nk.T + bias,
+                "tb0": x @ w_kn,
+                "ab": 0.5 * (x @ w_nk.T) + 2.0 * bias,
+                "two_d": x2 @ w_nk.T + bias,
+            }
+            off = 0
+            for name in cg.outputs:
+                expected = np.asarray(traced[name]).ravel()
+                got = out[off : off + expected.size]
+                off += expected.size
+                np.testing.assert_allclose(got, expected, rtol=1e-13, atol=1e-13)
+                np.testing.assert_allclose(got, np.asarray(want[name]).ravel(), rtol=1e-12, atol=1e-12)

@@ -278,6 +278,34 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
                     for (0..in_len) |j| out[row * in_len + j] = src[j];
                 }
             },
+            // .gemm — fused dense layer: out = alpha*(A@B') + beta*C in one
+            // pass (linalg.gemm). Covers the ONNX importer's Gemm: the
+            // contraction, the alpha/beta scales, the optional transB (torch
+            // nn.Linear weight layout, read by striding rather than
+            // materializing a transpose), and the bias add are a single kernel.
+            // alpha/beta are baked into g.gemm_alpha/gemm_beta; aux packs the
+            // table index in the upper bits and the transB flag in bit 0. A
+            // 1-D activation (vec) is treated as a single row (m = 1).
+            .gemm => {
+                const a = node_input(g.nodes[0..], node, &workspace);
+                const b = node_input_at(g.nodes[0..], node.inputs[1], &workspace);
+                const c = node_input_at(g.nodes[0..], node.inputs[2], &workspace);
+                const a_n = g.nodes[node.inputs[0]];
+                const c_n = g.nodes[node.inputs[2]];
+                const r = la.gemm(
+                    if (node.vec) 1 else node.rows,
+                    if (a_n.vec) a_n.rows else a_n.cols,
+                    if (node.vec) node.rows else node.cols,
+                    g.gemm_alpha[node.aux / 2],
+                    g.gemm_beta[node.aux / 2],
+                    node.aux % 2 == 1,
+                    a,
+                    b,
+                    c,
+                    c_n.rows * c_n.cols,
+                );
+                for (0..node.rows * node.cols) |j| out[j] = r[j];
+            },
             // .solve_qp — the convergence-iterative MPC op. The problem data
             // (P, A, l, u) and the pre-factorized KKT matrix are baked into the
             // statically-allocated `solver` global by the codegen C
