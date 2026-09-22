@@ -85,6 +85,14 @@ test "tanh saturates at +-1" {
     try std.testing.expectApproxEqAbs(-0.7615941559557649, r[2], 1e-12);
 }
 
+test "sigmoid matches the logistic function" {
+    const a = [_]f64{ 0, 1, -1 };
+    const r = la.sigmoid(3, &a);
+    try std.testing.expectApproxEqAbs(0.5, r[0], 1e-12);
+    try std.testing.expectApproxEqAbs(0.7310585786300049, r[1], 1e-12);
+    try std.testing.expectApproxEqAbs(0.2689414213699951, r[2], 1e-12);
+}
+
 test "argmax returns index of max" {
     const a = [_]f64{ 0.2, 0.7, 0.1 };
     try std.testing.expectEqual(@as(usize, 1), la.argmax(3, &a));

@@ -221,6 +221,13 @@ def _tanh(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarra
     return np.tanh(values[node.inputs[0]])
 
 
+@register_op("sigmoid")
+def _sigmoid(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
+    """Logistic sigmoid, matching ONNX ``Sigmoid``: 1 / (1 + exp(-x))."""
+    x = values[node.inputs[0]]
+    return 1.0 / (1.0 + np.exp(-x))
+
+
 @register_op("sin")
 def _sin(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     return np.sin(values[node.inputs[0]])

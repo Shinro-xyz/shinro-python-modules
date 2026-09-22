@@ -397,3 +397,18 @@ class TestTorchBackendBatched:
         assert c.shape == (2, 3)
         assert self.bk.allclose(c[0], self.torch.tensor([0, 0, 1], dtype=self.torch.float64))
         assert self.bk.allclose(c[1], self.torch.tensor([0, 0, -1], dtype=self.torch.float64))
+
+
+def test_sigmoid_matches_logistic(bk):
+    """Both eager backends expose the ONNX logistic sigmoid 1 / (1 + exp(-x))."""
+    x = np.array([-4.0, -1.0, 0.0, 1.0, 4.0])
+    got = bk.to_numpy(bk.sigmoid(bk.array(x)))
+    expected = 1.0 / (1.0 + np.exp(-x))
+    np.testing.assert_allclose(got, expected, rtol=1e-12, atol=1e-12)
+
+
+def test_sigmoid_saturates_without_nan(bk):
+    """Large |x| saturates to 0 / 1 like the compiled kernel (no NaN)."""
+    with np.errstate(over="ignore", invalid="ignore"):
+        got = bk.to_numpy(bk.sigmoid(bk.array([-1000.0, 1000.0])))
+    np.testing.assert_allclose(got, [0.0, 1.0], atol=1e-12)

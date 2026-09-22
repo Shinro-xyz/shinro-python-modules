@@ -231,7 +231,7 @@ def _pointwise_graph(g: Graph):
     outs = {}
     x1 = g.input("p1", (1,))
     x8 = g.input("p8", (8,))
-    for op in ("tanh", "relu", "exp", "sin", "cos", "abs", "sign"):
+    for op in ("tanh", "relu", "exp", "sigmoid", "sin", "cos", "abs", "sign"):
         outs[f"{op}_1"] = g.emit(op, [x1], (1,))
         outs[f"{op}_8"] = g.emit(op, [x8], (8,))
 
@@ -247,6 +247,8 @@ def _pointwise_graph(g: Graph):
     am23 = g.input("am23", (2, 3))
     outs["argmax_1d"] = g.emit("argmax", [am5], ())
     outs["argmax_2d"] = g.emit("argmax", [am23], ())
+    # 2-D sigmoid: the elementwise flat path with rows*cols > 1 and both dims > 1.
+    outs["sigmoid_2d"] = g.emit("sigmoid", [am23], (2, 3))
 
     oh = g.input("oh_idx", (1,))
     outs["one_hot_4"] = g.emit("one_hot", [oh], (4,), depth=4)
