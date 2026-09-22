@@ -211,6 +211,10 @@ class TraceBackend:
     def sigmoid(self, x: Tracer) -> Tracer:
         return self._emit("sigmoid", [x], x.shape)
 
+    def softmax(self, x: Tracer) -> Tracer:
+        # Softmax over the last axis (numpy axis=-1); shape-preserving.
+        return self._emit("softmax", [x], x.shape)
+
     def sin(self, x: Tracer) -> Tracer:
         return self._emit("sin", [x], x.shape)
 

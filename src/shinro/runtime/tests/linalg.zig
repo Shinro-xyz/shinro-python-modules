@@ -93,6 +93,24 @@ test "sigmoid matches the logistic function" {
     try std.testing.expectApproxEqAbs(0.2689414213699951, r[2], 1e-12);
 }
 
+test "softmax_rows normalizes each row over the last axis" {
+    // Row 0: [0, ln3] -> [1/4, 3/4]; row 1: [0, 0] -> [1/2, 1/2].
+    const a = [_]f64{ 0, @log(3.0), 0, 0 };
+    const r = la.softmax_rows(2, 2, &a);
+    try std.testing.expectApproxEqAbs(0.25, r[0], 1e-12);
+    try std.testing.expectApproxEqAbs(0.75, r[1], 1e-12);
+    try std.testing.expectApproxEqAbs(0.5, r[2], 1e-12);
+    try std.testing.expectApproxEqAbs(0.5, r[3], 1e-12);
+}
+
+test "softmax_rows is stable on large values" {
+    // [1000, 999] shifts to [0, -1]; the ratio is that of [1, e^-1].
+    const a = [_]f64{ 1000, 999 };
+    const r = la.softmax_rows(1, 2, &a);
+    try std.testing.expectApproxEqAbs(0.7310585786300049, r[0], 1e-12);
+    try std.testing.expectApproxEqAbs(0.2689414213699951, r[1], 1e-12);
+}
+
 test "argmax returns index of max" {
     const a = [_]f64{ 0.2, 0.7, 0.1 };
     try std.testing.expectEqual(@as(usize, 1), la.argmax(3, &a));

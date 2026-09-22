@@ -228,6 +228,20 @@ def _sigmoid(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.nda
     return 1.0 / (1.0 + np.exp(-x))
 
 
+@register_op("softmax")
+def _softmax(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
+    """Softmax over the last axis (numpy ``axis=-1``), shape-preserving.
+
+    Numerically stable: ``e = exp(x - x.max(axis=-1, keepdims=True));
+    e / e.sum(axis=-1, keepdims=True)``. A 1-D input is a single row, which
+    mirrors the VM's ``rows=n, cols=1, vec=true`` -> ``softmax_rows(1, n)``
+    normalization. The Zig mirror is ``linalg.softmax_rows``.
+    """
+    x = values[node.inputs[0]]
+    e = np.exp(x - np.max(x, axis=-1, keepdims=True))
+    return e / np.sum(e, axis=-1, keepdims=True)
+
+
 @register_op("sin")
 def _sin(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     return np.sin(values[node.inputs[0]])

@@ -156,6 +156,9 @@ class ArrayBackend(ABC):
     def sigmoid(self, x) -> Any: ...
 
     @abstractmethod
+    def softmax(self, x) -> Any: ...
+
+    @abstractmethod
     def relu(self, x) -> Any: ...
 
     @abstractmethod
@@ -363,6 +366,10 @@ class NumpyBackend(ArrayBackend):
 
     def sigmoid(self, x):
         return 1.0 / (1.0 + np.exp(-x))
+
+    def softmax(self, x):
+        e = np.exp(x - np.max(x, axis=-1, keepdims=True))
+        return e / np.sum(e, axis=-1, keepdims=True)
 
     def relu(self, x):
         return np.maximum(x, 0.0)
@@ -616,6 +623,9 @@ class TorchBackend(ArrayBackend):
 
     def sigmoid(self, x):
         return self.torch.sigmoid(x)
+
+    def softmax(self, x):
+        return self.torch.softmax(x, dim=-1)
 
     def relu(self, x):
         return self.torch.nn.functional.relu(x)

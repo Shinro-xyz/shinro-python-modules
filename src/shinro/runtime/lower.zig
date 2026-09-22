@@ -213,6 +213,17 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
                 const r = la.sigmoid(node.rows * node.cols, s);
                 for (0..node.rows * node.cols) |j| out[j] = r[j];
             },
+            .softmax => {
+                // Last-axis softmax (numpy axis=-1). A 1-D node is stored as
+                // rows=n, cols=1, vec=true — treat it as a single row of
+                // length n (rows*cols), never as n rows of length 1.
+                const s = node_input(g.nodes[0..], node, &workspace);
+                const r = if (node.vec)
+                    la.softmax_rows(1, node.rows, s)
+                else
+                    la.softmax_rows(node.rows, node.cols, s);
+                for (0..node.rows * node.cols) |j| out[j] = r[j];
+            },
             .exp => {
                 const s = node_input(g.nodes[0..], node, &workspace);
                 const r = la.elementwise_exponential(node.rows * node.cols, s);

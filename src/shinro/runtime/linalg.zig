@@ -342,3 +342,32 @@ pub fn sigmoid(comptime m: usize, a: []const f64) [m]f64 {
     }
     return out;
 }
+
+/// Numerically-stable softmax over the last axis of a flat row-major matrix.
+///
+/// For each row ``i``: ``out[i*cols + j] = exp(a[i*cols+j] - m_i) /
+/// sum_k exp(a[i*cols+k] - m_i)``, with ``m_i = max_k a[i*cols+k]``. The
+/// per-row max-shift keeps every exponent <= 0 (no overflow; the denominator
+/// is >= 1). Shapes are comptime and the output is the full ``[rows*cols]``
+/// array, so the op is shape-preserving (numpy ``axis=-1`` semantics).
+///
+/// A 1-D vector is a single row: callers pass ``rows = 1, cols = n``. Inputs
+/// are expected to be pre-scaled by temperature (the kernel carries none). An
+/// all-(-inf) row yields NaN, matching numpy.
+pub fn softmax_rows(comptime rows: usize, comptime cols: usize, a: []const f64) [rows * cols]f64 {
+    var out: [rows * cols]f64 = undefined;
+    for (0..rows) |i| {
+        const base = i * cols;
+        var m: f64 = a[base];
+        for (1..cols) |j| m = @max(m, a[base + j]);
+
+        var sum: f64 = 0.0;
+        for (0..cols) |j| {
+            const e = std.math.exp(a[base + j] - m);
+            out[base + j] = e;
+            sum += e;
+        }
+        for (0..cols) |j| out[base + j] /= sum;
+    }
+    return out;
+}
