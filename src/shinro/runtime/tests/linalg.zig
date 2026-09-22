@@ -123,6 +123,23 @@ test "gelu tanh approximation matches known values" {
     try std.testing.expectApproxEqAbs(8.0, r[4], 1e-12);
 }
 
+test "elu matches the definition" {
+    const a = [_]f64{ -2, -1, 0, 1, 2 };
+    const r = la.elu(5, 1.0, &a);
+    try std.testing.expectApproxEqAbs(-0.8646647167633873, r[0], 1e-12); // e^-2 - 1
+    try std.testing.expectApproxEqAbs(-0.6321205588285577, r[1], 1e-12); // e^-1 - 1
+    try std.testing.expectApproxEqAbs(0.0, r[2], 1e-12);
+    try std.testing.expectApproxEqAbs(1.0, r[3], 1e-12);
+    try std.testing.expectApproxEqAbs(2.0, r[4], 1e-12);
+}
+
+test "elu honors alpha on the negative branch" {
+    const a = [_]f64{ -1, 1 };
+    const r = la.elu(2, 0.5, &a);
+    try std.testing.expectApproxEqAbs(0.5 * (std.math.exp(-1.0) - 1.0), r[0], 1e-12);
+    try std.testing.expectApproxEqAbs(1.0, r[1], 1e-12);
+}
+
 test "argmax returns index of max" {
     const a = [_]f64{ 0.2, 0.7, 0.1 };
     try std.testing.expectEqual(@as(usize, 1), la.argmax(3, &a));

@@ -529,6 +529,15 @@ class TestTraceBackend:
         assert tg.shape == (4,)
         assert bk.g.nodes[tg.node].op == "gelu"
 
+    def test_elu_emits_elu_op_with_alpha(self):
+        bk = self._bk()
+        ta = _lift(bk.g, np.ones((4,)))
+        te = bk.elu(ta, alpha=0.5)
+        assert te.shape == (4,)
+        node = bk.g.nodes[te.node]
+        assert node.op == "elu"
+        assert node.attrs["alpha"] == 0.5
+
     def test_inv_emits_inv_op(self):
         bk = self._bk()
         ta = _lift(bk.g, np.eye(3))

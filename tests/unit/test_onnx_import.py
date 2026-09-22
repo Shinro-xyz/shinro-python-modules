@@ -349,6 +349,186 @@ class TestActivations:
             import_onnx_policy(path)
 
 
+class TestExpandedOps:
+    """The elementwise / utility ONNX ops added for real small policies."""
+
+    def test_elu(self, tmp_path):
+        from onnx import helper
+
+        path = _save(
+            [helper.make_node("Elu", ["state"], ["y"], alpha=1.0)],
+            [_vi("state", [None, 3])],
+            [_vi("y", [None, 3])],
+            [],
+            tmp_path,
+        )
+        cg = import_onnx_policy(path)
+        assert "elu" in _op_names(cg)
+        x = np.array([-2.0, 0.0, 2.0])
+        np.testing.assert_allclose(_run(cg, x), np.where(x > 0, x, np.exp(x) - 1.0), rtol=1e-12)
+
+    def test_normalized_mlp_matches_manual(self, tmp_path):
+        # Mirrors the real legged-locomotion policies: baked obs normalization
+        # (Sub/Div) -> Gemm (torch layout) -> Elu.
+        from onnx import helper
+
+        w = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float32)  # (out=2, in=3)
+        b = np.array([0.1, -0.2], dtype=np.float32)
+        mean = np.array([0.5, 0.5, 0.5], dtype=np.float32)
+        std = np.array([2.0, 2.0, 2.0], dtype=np.float32)
+        path = _save(
+            [
+                helper.make_node("Sub", ["state", "mean"], ["d"]),
+                helper.make_node("Div", ["d", "std"], ["n"]),
+                helper.make_node("Gemm", ["n", "w", "b"], ["y"], transB=1),
+            ],
+            [_vi("state", [None, 3])],
+            [_vi("y", [None, 2])],
+            [_init("w", w), _init("b", b), _init("mean", mean), _init("std", std)],
+            tmp_path,
+        )
+        cg = import_onnx_policy(path)
+        assert {"sub", "div", "gemm"} <= set(_op_names(cg))
+        x = np.array([1.0, 2.0, 3.0])
+        n = (x - mean.astype(np.float64)) / std.astype(np.float64)
+        expected = n @ w.astype(np.float64).T + b.astype(np.float64)
+        np.testing.assert_allclose(_run(cg, x), expected, rtol=1e-12)
+
+    def test_binary_elementwise(self, tmp_path):
+        from onnx import helper
+
+        two = _init("two", np.full(3, 2.0))
+        path = _save(
+            [
+                helper.make_node("Mul", ["state", "two"], ["m"]),
+                helper.make_node("Sub", ["m", "state"], ["s"]),
+                helper.make_node("Div", ["s", "two"], ["d"]),
+                helper.make_node("Pow", ["d", "two"], ["y"]),
+            ],
+            [_vi("state", [None, 3])],
+            [_vi("y", [None, 3])],
+            [two],
+            tmp_path,
+        )
+        cg = import_onnx_policy(path)
+        assert {"mul", "sub", "div", "pow"} <= set(_op_names(cg))
+        x = np.array([1.0, 2.0, 3.0])
+        np.testing.assert_allclose(_run(cg, x), ((x * 2 - x) / 2) ** 2, rtol=1e-12)
+
+    def test_unary_elementwise(self, tmp_path):
+        from onnx import helper
+
+        path = _save(
+            [
+                helper.make_node("Neg", ["state"], ["n"]),
+                helper.make_node("Abs", ["n"], ["a"]),
+                helper.make_node("Exp", ["a"], ["y"]),
+            ],
+            [_vi("state", [None, 3])],
+            [_vi("y", [None, 3])],
+            [],
+            tmp_path,
+        )
+        cg = import_onnx_policy(path)
+        assert {"neg", "abs", "exp"} <= set(_op_names(cg))
+        x = np.array([0.0, 1.0, -2.0])
+        np.testing.assert_allclose(_run(cg, x), np.exp(np.abs(-x)), rtol=1e-12)
+
+    def test_clip_attrs(self, tmp_path):
+        from onnx import helper
+
+        path = _save(
+            [helper.make_node("Clip", ["state"], ["y"], min=-1.0, max=1.0)],
+            [_vi("state", [None, 3])],
+            [_vi("y", [None, 3])],
+            [],
+            tmp_path,
+        )
+        cg = import_onnx_policy(path)
+        assert "clip" in _op_names(cg)
+        np.testing.assert_allclose(_run(cg, np.array([-5.0, 0.5, 5.0])), [-1.0, 0.5, 1.0], rtol=1e-12)
+
+    def test_constant(self, tmp_path):
+        from onnx import helper
+
+        c = helper.make_node(
+            "Constant", [], ["c"], value=helper.make_tensor("v", onnx.TensorProto.FLOAT, [3], [1.0, 2.0, 3.0])
+        )
+        path = _save(
+            [c, helper.make_node("Add", ["state", "c"], ["y"])],
+            [_vi("state", [None, 3])],
+            [_vi("y", [None, 3])],
+            [],
+            tmp_path,
+        )
+        cg = import_onnx_policy(path)
+        assert "const" in _op_names(cg)
+        np.testing.assert_allclose(_run(cg, np.zeros(3)), [1.0, 2.0, 3.0], rtol=1e-12)
+
+    def test_identity(self, tmp_path):
+        from onnx import helper
+
+        path = _save(
+            [helper.make_node("Identity", ["state"], ["y"])],
+            [_vi("state", [None, 3])],
+            [_vi("y", [None, 3])],
+            [],
+            tmp_path,
+        )
+        cg = import_onnx_policy(path)
+        assert "copy" in _op_names(cg)
+        np.testing.assert_allclose(_run(cg, np.array([1.0, 2.0, 3.0])), [1.0, 2.0, 3.0], rtol=1e-12)
+
+    def test_reshape_and_flatten(self, tmp_path):
+        from onnx import helper
+
+        shape = _init("shape", np.array([1, 3], dtype=np.int64))
+        path = _save(
+            [
+                helper.make_node("Reshape", ["state", "shape"], ["r"]),
+                helper.make_node("Flatten", ["r"], ["y"], axis=1),
+            ],
+            [_vi("state", [None, 3])],
+            [_vi("y", [None, 3])],
+            [shape],
+            tmp_path,
+        )
+        cg = import_onnx_policy(path)
+        assert "reshape" in _op_names(cg)
+        np.testing.assert_allclose(_run(cg, np.array([1.0, 2.0, 3.0])), [1.0, 2.0, 3.0], rtol=1e-12)
+
+    def test_transpose_2d(self, tmp_path):
+        from onnx import helper
+
+        shape = _init("shape", np.array([3, 1], dtype=np.int64))
+        path = _save(
+            [
+                helper.make_node("Reshape", ["state", "shape"], ["r"]),
+                helper.make_node("Transpose", ["r"], ["t"], perm=[1, 0]),
+            ],
+            [_vi("state", [None, 3])],
+            [_vi("t", [None, 3])],
+            [shape],
+            tmp_path,
+        )
+        cg = import_onnx_policy(path)
+        assert "transpose" in _op_names(cg)
+        np.testing.assert_allclose(_run(cg, np.array([1.0, 2.0, 3.0])), [1.0, 2.0, 3.0], rtol=1e-12)
+
+    def test_transpose_rank1_rejected(self, tmp_path):
+        from onnx import helper
+
+        path = _save(
+            [helper.make_node("Transpose", ["state"], ["y"])],
+            [_vi("state", [None, 3])],
+            [_vi("y", [None, 3])],
+            [],
+            tmp_path,
+        )
+        with pytest.raises(NotImplementedError, match="Transpose"):
+            import_onnx_policy(path)
+
+
 class TestPointwiseGraphs:
     def test_matmul_add(self, tmp_path):
         from onnx import helper

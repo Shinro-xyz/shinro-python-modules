@@ -229,6 +229,11 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
                 const r = la.gelu(node.rows * node.cols, s);
                 for (0..node.rows * node.cols) |j| out[j] = r[j];
             },
+            .elu => {
+                const s = node_input(g.nodes[0..], node, &workspace);
+                const r = la.elu(node.rows * node.cols, g.elu_alpha[node.aux], s);
+                for (0..node.rows * node.cols) |j| out[j] = r[j];
+            },
             .exp => {
                 const s = node_input(g.nodes[0..], node, &workspace);
                 const r = la.elementwise_exponential(node.rows * node.cols, s);

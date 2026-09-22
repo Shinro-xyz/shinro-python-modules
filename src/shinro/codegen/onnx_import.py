@@ -25,9 +25,15 @@ Supported ONNX surface — everything else raises ``NotImplementedError``:
 - ``Gemm`` (``alpha`` / ``beta`` / ``transB``; ``transA=1`` is rejected) —
   lowered to the fused ``gemm`` op: one node does the contraction, the
   alpha/beta scales, the transposed-weight read, and the bias add
-- ``MatMul``, ``Add``
+- ``MatMul``
+- ``Add`` / ``Mul`` / ``Sub`` / ``Div`` / ``Pow`` and the unary ``Neg`` /
+  ``Abs`` / ``Exp`` — elementwise, routed to the matching VM op
+- ``Clip``, ``Constant``, ``Identity``, ``Flatten``, ``Reshape``, ``Transpose``
+  — mapped onto the existing ``clip``/``const``/``copy``/``reshape``/``transpose``
+  VM ops
 - ``Relu``, ``Tanh``, ``Sigmoid`` — lowered to the fused ``relu`` / ``tanh`` /
   ``sigmoid`` VM ops (no composition needed)
+- ``Elu`` — lowered to the fused ``elu`` op (``alpha`` baked per node)
 - ``Softmax`` — lowered to the fused ``softmax`` op (last-axis only; any other
   ``axis`` is rejected loudly)
 - ``Gelu`` — lowered to the fused tanh-approx ``gelu`` op; ``approximate``
@@ -82,9 +88,18 @@ _ACTION_SPACES = frozenset({"continuous", "discrete", "stochastic"})
 #: typo (``obs_means``) cannot silently drop normalization or clipping.
 _OBS_KEYS = frozenset({"input_name", "state_keys", "normalize", "obs_mean", "obs_std", "clip", "add_batch_dim"})
 #: ONNX ops the importer can translate. Everything else is rejected loudly.
-_SUPPORTED_OPS = frozenset({"Gemm", "MatMul", "Add", "Relu", "Tanh", "Sigmoid", "Softmax", "Gelu"})
-#: ONNX ops translated straight to a same-named shinro op.
-_UNARY_OPS = {"Relu": "relu", "Tanh": "tanh", "Sigmoid": "sigmoid"}
+_SUPPORTED_OPS = frozenset(
+    {
+        "Gemm", "MatMul", "Add", "Mul", "Sub", "Div", "Pow",
+        "Relu", "Tanh", "Sigmoid", "Elu", "Gelu", "Softmax",
+        "Neg", "Abs", "Exp",
+        "Clip", "Constant", "Identity", "Flatten", "Reshape", "Transpose",
+    }
+)
+#: Binary elementwise ONNX ops translated to a same-named shinro op.
+_BINARY_OPS = {"Add": "add", "Mul": "mul", "Sub": "sub", "Div": "div", "Pow": "pow"}
+#: Unary ONNX ops translated straight to a same-named shinro op.
+_UNARY_OPS = {"Relu": "relu", "Tanh": "tanh", "Sigmoid": "sigmoid", "Neg": "neg", "Abs": "abs", "Exp": "exp"}
 #: Attributes Gemm may carry; any other attribute is rejected.
 _GEMM_ATTRS = frozenset({"alpha", "beta", "transA", "transB"})
 
@@ -374,9 +389,9 @@ class _OnnxImporter:
         elif op_type == "MatMul":
             _require_no_attrs(op_type, attrs)
             result = self.emit("matmul", [self.tensor(inputs[0]), self.tensor(inputs[1])])
-        elif op_type == "Add":
+        elif op_type in _BINARY_OPS:
             _require_no_attrs(op_type, attrs)
-            result = self.emit("add", [self.tensor(inputs[0]), self.tensor(inputs[1])])
+            result = self.emit(_BINARY_OPS[op_type], [self.tensor(inputs[0]), self.tensor(inputs[1])])
         elif op_type in _UNARY_OPS:
             _require_no_attrs(op_type, attrs)
             result = self.emit(_UNARY_OPS[op_type], [self.tensor(inputs[0])])
@@ -384,6 +399,21 @@ class _OnnxImporter:
             result = self.emit_softmax(self.tensor(inputs[0]), attrs)
         elif op_type == "Gelu":
             result = self.emit_gelu(self.tensor(inputs[0]), attrs)
+        elif op_type == "Elu":
+            result = self.emit_elu(self.tensor(inputs[0]), attrs)
+        elif op_type == "Clip":
+            result = self.emit_clip(inputs, attrs)
+        elif op_type == "Constant":
+            result = self.emit_constant(attrs)
+        elif op_type == "Identity":
+            _require_no_attrs(op_type, attrs)
+            result = self.emit("copy", [self.tensor(inputs[0])])
+        elif op_type == "Flatten":
+            result = self.emit_flatten(self.tensor(inputs[0]), attrs)
+        elif op_type == "Reshape":
+            result = self.emit_reshape(inputs, attrs)
+        elif op_type == "Transpose":
+            result = self.emit_transpose(self.tensor(inputs[0]), attrs)
         else:  # pragma: no cover — _SUPPORTED_OPS is disjoint from the above
             raise NotImplementedError(f"ONNX op {op_type!r} has no importer branch")
 
@@ -483,6 +513,112 @@ class _OnnxImporter:
                 f"approximation (approximate='tanh') is implemented"
             )
         return self.emit("gelu", [x_id])
+
+    def emit_elu(self, x_id: int, attrs: dict[str, Any]) -> int:
+        """Emit the fused ``elu`` op; ``alpha`` (default 1.0) is baked per node."""
+        unknown = set(attrs) - {"alpha"}
+        if unknown:
+            raise NotImplementedError(f"ONNX Elu carries unsupported attribute(s): {sorted(unknown)}")
+        return self.emit("elu", [x_id], alpha=float(attrs.get("alpha", 1.0)))
+
+    def emit_clip(self, inputs: list[str], attrs: dict[str, Any]) -> int:
+        """Emit ``clip`` for ONNX ``Clip``.
+
+        Bounds come from the ``min``/``max`` attributes (opset < 11) or the
+        trailing inputs (opset >= 11, usually baked initializers). Both bounds
+        are required — the VM cannot bake a genuinely unbounded clip.
+
+        Raises:
+            NotImplementedError: On extra attributes or a missing bound.
+        """
+        unknown = set(attrs) - {"min", "max"}
+        if unknown:
+            raise NotImplementedError(f"ONNX Clip carries unsupported attribute(s): {sorted(unknown)}")
+        x_id = self.tensor(inputs[0])
+        lo = attrs.get("min")
+        hi = attrs.get("max")
+        if len(inputs) >= 2:
+            lo = float(np.asarray(self.value_of(self.tensor(inputs[1]))).ravel()[0])
+        if len(inputs) >= 3:
+            hi = float(np.asarray(self.value_of(self.tensor(inputs[2]))).ravel()[0])
+        if lo is None or hi is None:
+            raise NotImplementedError("ONNX Clip requires both min and max bounds (an unbounded clip is not supported)")
+        return self.emit("clip", [x_id], lo=float(lo), hi=float(hi))
+
+    def emit_constant(self, attrs: dict[str, Any]) -> int:
+        """Emit a ``const`` node from an ONNX ``Constant`` value attribute.
+
+        Raises:
+            NotImplementedError: On an unsupported value attribute (e.g. sparse).
+        """
+        from onnx import numpy_helper
+
+        unknown = set(attrs) - {"value", "value_float", "value_floats", "value_int", "value_ints"}
+        if unknown:
+            raise NotImplementedError(f"ONNX Constant carries unsupported attribute(s): {sorted(unknown)}")
+        if "value" in attrs:
+            arr = numpy_helper.to_array(attrs["value"])
+        elif "value_floats" in attrs:
+            arr = np.asarray(attrs["value_floats"])
+        elif "value_ints" in attrs:
+            arr = np.asarray(attrs["value_ints"])
+        elif "value_float" in attrs:
+            arr = np.asarray(attrs["value_float"])
+        elif "value_int" in attrs:
+            arr = np.asarray(attrs["value_int"])
+        else:
+            raise NotImplementedError("ONNX Constant carries no supported value attribute")
+        return self.const(np.asarray(arr, dtype=np.float64))
+
+    def emit_flatten(self, x_id: int, attrs: dict[str, Any]) -> int:
+        """Emit ``reshape`` for ONNX ``Flatten`` (dims before/after ``axis`` merged)."""
+        unknown = set(attrs) - {"axis"}
+        if unknown:
+            raise NotImplementedError(f"ONNX Flatten carries unsupported attribute(s): {sorted(unknown)}")
+        shape = self.value_of(x_id).shape
+        n = len(shape)
+        axis = int(attrs.get("axis", 1))
+        if not 0 <= axis <= n:
+            raise NotImplementedError(f"ONNX Flatten axis={axis} out of range for a rank-{n} input")
+        lead = int(np.prod(shape[:axis], dtype=np.int64)) if axis > 0 else 1
+        trail = int(np.prod(shape[axis:], dtype=np.int64)) if axis < n else 1
+        return self.emit("reshape", [x_id], target_shape=(lead, trail))
+
+    def emit_reshape(self, inputs: list[str], attrs: dict[str, Any]) -> int:
+        """Emit ``reshape`` for ONNX ``Reshape`` (``0`` copies a dim, ``-1`` infers)."""
+        unknown = set(attrs) - {"allowzero"}
+        if unknown:
+            raise NotImplementedError(f"ONNX Reshape carries unsupported attribute(s): {sorted(unknown)}")
+        x_id = self.tensor(inputs[0])
+        xshape = self.value_of(x_id).shape
+        shape_vals = [int(s) for s in np.asarray(self.value_of(self.tensor(inputs[1]))).ravel()]
+        allow_zero = int(attrs.get("allowzero", 0)) == 1
+        target: list[int] = []
+        for k, v in enumerate(shape_vals):
+            if v == 0 and not allow_zero:
+                target.append(xshape[k] if k < len(xshape) else 1)
+            else:
+                target.append(v)
+        return self.emit("reshape", [x_id], target_shape=tuple(target))
+
+    def emit_transpose(self, x_id: int, attrs: dict[str, Any]) -> int:
+        """Emit ``transpose`` (or ``copy`` for ``[0,1]``) for ONNX ``Transpose``.
+
+        Only the 2-D permutations are implemented (the VM's transpose is a 2-D
+        swap); any higher-rank perm is rejected loudly.
+        """
+        unknown = set(attrs) - {"perm"}
+        if unknown:
+            raise NotImplementedError(f"ONNX Transpose carries unsupported attribute(s): {sorted(unknown)}")
+        n = self.value_of(x_id).ndim
+        perm = attrs.get("perm")
+        perm = list(range(n))[::-1] if perm is None else [int(p) for p in perm]
+        if n != 2 or perm not in ([1, 0], [0, 1]):
+            raise NotImplementedError(
+                f"ONNX Transpose perm={perm} on a rank-{n} input is not supported "
+                f"(only the 2-D [1,0] / [0,1] permutations are implemented)"
+            )
+        return self.emit("copy" if perm == [0, 1] else "transpose", [x_id])
 
     def flatten_output(self, node_id: int) -> int:
         """Reduce a batch-1 output to a 1-D action vector.

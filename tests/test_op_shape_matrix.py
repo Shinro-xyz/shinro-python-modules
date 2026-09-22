@@ -231,7 +231,7 @@ def _pointwise_graph(g: Graph):
     outs = {}
     x1 = g.input("p1", (1,))
     x8 = g.input("p8", (8,))
-    for op in ("tanh", "relu", "exp", "sigmoid", "softmax", "gelu", "sin", "cos", "abs", "sign"):
+    for op in ("tanh", "relu", "exp", "sigmoid", "softmax", "gelu", "elu", "sin", "cos", "abs", "sign"):
         outs[f"{op}_1"] = g.emit(op, [x1], (1,))
         outs[f"{op}_8"] = g.emit(op, [x8], (8,))
 
@@ -253,6 +253,8 @@ def _pointwise_graph(g: Graph):
     outs["softmax_2d"] = g.emit("softmax", [am23], (2, 3))
     # 2-D gelu: the elementwise flat path.
     outs["gelu_2d"] = g.emit("gelu", [am23], (2, 3))
+    # 2-D elu (non-default alpha exercises the baked elu_alpha table).
+    outs["elu_2d"] = g.emit("elu", [am23], (2, 3), alpha=0.5)
 
     oh = g.input("oh_idx", (1,))
     outs["one_hot_4"] = g.emit("one_hot", [oh], (4,), depth=4)

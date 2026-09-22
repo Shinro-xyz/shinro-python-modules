@@ -162,6 +162,9 @@ class ArrayBackend(ABC):
     def gelu(self, x) -> Any: ...
 
     @abstractmethod
+    def elu(self, x, alpha=1.0) -> Any: ...
+
+    @abstractmethod
     def relu(self, x) -> Any: ...
 
     @abstractmethod
@@ -377,6 +380,9 @@ class NumpyBackend(ArrayBackend):
     def gelu(self, x):
         # tanh approximation (GPT gelu_new), matching linalg.gelu / the oracle.
         return 0.5 * x * (1.0 + np.tanh(np.sqrt(2.0 / np.pi) * (x + 0.044715 * x * x * x)))
+
+    def elu(self, x, alpha=1.0):
+        return np.where(x > 0.0, x, alpha * (np.exp(x) - 1.0))
 
     def relu(self, x):
         return np.maximum(x, 0.0)
@@ -636,6 +642,9 @@ class TorchBackend(ArrayBackend):
 
     def gelu(self, x):
         return self.torch.nn.functional.gelu(x, approximate="tanh")
+
+    def elu(self, x, alpha=1.0):
+        return self.torch.nn.functional.elu(x, alpha=alpha)
 
     def relu(self, x):
         return self.torch.nn.functional.relu(x)
