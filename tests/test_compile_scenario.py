@@ -415,3 +415,77 @@ def test_e2e_policy_named_artifact(tmp_path):
     assert record.exists()
     assert not (out / "lib" / "libbase.so").exists()
     assert json.loads(record.read_text())["slots"]["binary"] == hashlib.sha256(so.read_bytes()).hexdigest()
+
+
+# ─── policy-only (onnx_rl) scenarios — committed toy *recurrent* fixture ─────
+
+# A checked-in one-step LSTM policy (scripts/gen_toy_recurrent_onnx.py) plus its
+# controller config and policy-only scenario. Unlike the MLP fixture this graph
+# has live recurrent state, so the whole ONNX -> .so path is exercised with
+# state ports (the host feeds the previous tick's state back).
+RECURRENT_SCENARIO = REPO_ROOT / "tests" / "fixtures" / "configs" / "scenarios" / "toy_recurrent_policy.toml"
+RECURRENT_ONNX = REPO_ROOT / "tests" / "fixtures" / "models" / "toy_lstm.onnx"
+
+
+def test_toy_recurrent_fixture_matches_its_generator(tmp_path):
+    """The committed .onnx matches scripts/gen_toy_recurrent_onnx.py."""
+    onnx = pytest.importorskip("onnx")
+    import numpy as np
+    from onnx import numpy_helper
+
+    fresh = tmp_path / "toy_lstm.onnx"
+    result = _run(REPO_ROOT / "scripts" / "gen_toy_recurrent_onnx.py", "--out", str(fresh))
+    assert result.returncode == 0, result.stderr
+
+    committed = onnx.load(str(RECURRENT_ONNX)).graph
+    regenerated = onnx.load(str(fresh)).graph
+    assert [n.op_type for n in committed.node] == [n.op_type for n in regenerated.node]
+    assert [t.name for t in committed.initializer] == [t.name for t in regenerated.initializer]
+    for a, b in zip(committed.initializer, regenerated.initializer, strict=True):
+        np.testing.assert_array_equal(numpy_helper.to_array(a), numpy_helper.to_array(b))
+
+
+def test_recurrent_policy_scenario_exposes_state_ports(tmp_path):
+    """A recurrent policy-only scenario lowers with live state ports."""
+    from shinro.codegen.scenario_gen import gen_scenario
+
+    pytest.importorskip("onnx")
+    out = tmp_path / "g"
+    cg, graph_path = gen_scenario(str(RECURRENT_SCENARIO), str(out))
+    assert cg.inputs == ["state", "state_h_0", "state_c_0"]
+    assert cg.state_inputs == ["state_h_0", "state_c_0"]
+    assert cg.state_outputs == ["state_hc_0"]
+    assert graph_path.exists()
+
+
+def test_recurrent_scenario_provenance_pins_onnx_weights(tmp_path):
+    """The deployment record's config slot commits to the exact .onnx file."""
+    from shinro.codegen.scenario_gen import gen_scenario
+
+    pytest.importorskip("onnx")
+    out = tmp_path / "g"
+    gen_scenario(str(RECURRENT_SCENARIO), str(out))
+    configs = json.loads((out / "graph_data_manifest.json").read_text())["provenance"]["configs"]
+    key = next(k for k in configs if k.endswith("toy_lstm.onnx"))
+    assert configs[key] == hashlib.sha256(RECURRENT_ONNX.read_bytes()).hexdigest()
+
+
+@pytest.mark.skipif(shutil.which("zig") is None, reason="zig not on PATH")
+def test_e2e_recurrent_scenario_compiles_with_state_ports(tmp_path):
+    """The recurrent fixture compiles, its oracle passes, and state ports survive."""
+    out = tmp_path / "scenario"
+    gen = _run(GEN, str(RECURRENT_SCENARIO), "--out", str(out))
+    assert gen.returncode == 0, gen.stderr
+    assert "state_h_0" in gen.stdout
+
+    build = _run(BUILD, str(out), "--scenario", str(RECURRENT_SCENARIO))
+    assert build.returncode == 0, build.stderr
+    assert "oracle B" in build.stdout
+
+    record = out / "lib" / "lib_neural_network.deployment.json"
+    rec = json.loads(record.read_text())
+    assert rec["oracle"]["status"] == "passed"
+    # the state ports survive lowering into the artifact's manifest
+    manifest = json.loads((out / "graph_data_manifest.json").read_text())
+    assert [p["name"] for p in manifest["inputs"]] == ["state", "state_h_0", "state_c_0"]
+    assert [p["name"] for p in manifest["state_outputs"]] == ["state_hc_0"]
