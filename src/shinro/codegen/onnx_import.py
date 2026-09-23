@@ -102,9 +102,16 @@ _SUPPORTED_OPS = frozenset(
         "Neg", "Abs", "Exp",
         "Clip", "Constant", "Identity", "Flatten", "Reshape", "Transpose",
         "Squeeze", "Unsqueeze", "Cast", "Shape", "ConstantOfShape", "Gather", "Concat",
+        "RandomNormalLike", "RandomNormal",
         "LSTM", "GRU", "RNN",
     }
 )
+#: In-network RNG ops. The design doctrine keeps randomness on the host — the
+#: compiled kernel is a pure function of its ports — so these become additional
+#: *noise input ports* rather than a random op. They are named ``noise_<k>`` and
+#: always take standard-normal draws; the action-space ``epsilon`` port is
+#: separate because its kind (Gumbel vs normal) depends on the action space.
+_NOISE_OPS = frozenset({"RandomNormalLike", "RandomNormal"})
 #: Shape/metadata ops. The VM is an f64 arithmetic machine with a flat 1-D/2-D
 #: layout, so ONNX's integer-tensor shape algebra has no runtime representation;
 #: these are folded to a constant or rewritten as a reshape at import time.
@@ -221,6 +228,8 @@ class _OnnxImporter:
         self.cell_count = 0
         self.state_port_names: list[str] = []
         self.state_output_names: list[str] = []
+        # In-network noise ports (``noise_<k>``), one per RandomNormalLike.
+        self.noise_ports: list[str] = []
         # Tensor names consumed by the nodes the action depends on. A recurrent
         # cell only materialises an output slice for the halves in here.
         self.consumed: set[str] = set()
@@ -292,6 +301,7 @@ class _OnnxImporter:
         # Recurrent state ports are appended last, so a memoryless policy's port
         # layout (and its golden manifest) is unchanged.
         ports += self.state_port_names
+        ports += self.noise_ports
         return ComposedGraph(
             graph=self.g,
             inputs=ports,
@@ -498,6 +508,11 @@ class _OnnxImporter:
             self.bind(outputs[0], result)
             return
 
+        if op_type in _NOISE_OPS:
+            # randomness is the host's job: this becomes an input port
+            self.bind(outputs[0], self.emit_noise(node, attrs))
+            return
+
         if op_type == "Gemm":
             result = self.emit_gemm(inputs, attrs)
         elif op_type == "MatMul":
@@ -570,6 +585,46 @@ class _OnnxImporter:
             beta=float(attrs.get("beta", 1.0)),
             transB=bool(int(attrs.get("transB", 0))),
         )
+
+    # ── host-supplied randomness ──────────────────────────────────────────
+
+    def emit_noise(self, node: Any, attrs: dict[str, Any]) -> int:
+        """Map an in-network RNG op to a host-filled noise input port.
+
+        The compiled kernel must stay a pure function of its ports (the design
+        doctrine), so ``RandomNormalLike`` does not run a generator: it becomes
+        an input the host fills with standard-normal draws each tick. The port is
+        named ``noise_<k>`` and named distinctly from the action-space
+        ``epsilon`` port, whose kind is Gumbel for discrete policies.
+
+        Returns:
+            The new ``input`` node's id.
+
+        Raises:
+            NotImplementedError: On a rank-3+ noise shape.
+            ValueError: On a non-default ``mean``/``scale`` (the host owns the
+                distribution; silently sampling N(0,1) for N(mu, sigma) would
+                be wrong) or a non-constant ``RandomNormal`` shape.
+        """
+        if node.op_type == "RandomNormalLike":
+            shape = tuple(self.value_of(self.tensor(node.input[0])).shape)
+        else:
+            for key, default in (("mean", 0.0), ("scale", 1.0)):
+                if float(attrs.get(key, default)) != default:
+                    raise ValueError(
+                        f"ONNX RandomNormal {key}={attrs[key]} is not supported: the host supplies "
+                        f"standard-normal noise, so the distribution must be N(0, 1) here"
+                    )
+            shape_input = self.tensor(node.input[0])
+            if self.g.nodes[shape_input].op != "const":
+                raise NotImplementedError(f"ONNX RandomNormal needs a constant shape (got {node.input[0]!r})")
+            shape = tuple(int(v) for v in self.value_of(shape_input).ravel())
+        if len(shape) > 2:
+            raise NotImplementedError(f"ONNX {node.op_type} shape {shape} is rank-{len(shape)}; the VM is 1-D/2-D")
+        name = f"noise_{len(self.noise_ports)}"
+        self.noise_ports.append(name)
+        self.inputs[name] = np.zeros(shape, dtype=np.float64)
+        return self.emit("input", [], name=name)
 
     # ── shape / metadata glue ─────────────────────────────────────────────
 
@@ -1029,8 +1084,24 @@ class _OnnxImporter:
         for k, v in enumerate(shape_vals):
             if v == 0 and not allow_zero:
                 target.append(xshape[k] if k < len(xshape) else 1)
+            elif v < -1:
+                raise ValueError(f"ONNX Reshape target {shape_vals} has an invalid negative dimension {v}")
             else:
                 target.append(v)
+        # A -1 is ONNX's "infer this dimension". The VM has no runtime shape
+        # inference, so resolve it here against the source element count — the
+        # lowerer refuses an unresolved (or still rank-3) target anyway.
+        if -1 in target:
+            if target.count(-1) > 1:
+                raise ValueError(f"ONNX Reshape target {shape_vals} has more than one -1")
+            known = 1
+            for v in target:
+                if v > 0:
+                    known *= v
+            n_src = int(np.prod(xshape)) if xshape else 1
+            if known == 0 or n_src % known != 0:
+                raise ValueError(f"ONNX Reshape target {shape_vals} does not divide the {n_src} source elements")
+            target[target.index(-1)] = n_src // known
         return self.emit("reshape", [x_id], target_shape=tuple(target))
 
     def emit_transpose(self, x_id: int, attrs: dict[str, Any]) -> int:

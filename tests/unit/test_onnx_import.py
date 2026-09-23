@@ -1510,3 +1510,127 @@ class TestShapeGlue:
         x = np.array([4.0, 5.0, 6.0])
         np.testing.assert_allclose(_run(cg, x), np.concatenate([x, x]), rtol=1e-12)
 
+
+
+# ─── host-supplied randomness ───────────────────────────────────────────────
+
+
+class TestHostNoise:
+    """In-network RNG is the *host's* job: the kernel stays a pure function.
+
+    ``RandomNormalLike`` therefore becomes a ``noise_<k>`` input port the adapter
+    fills with standard-normal draws, exactly like MPPI's epsilon and the
+    sampling action spaces — no random op enters the VM.
+    """
+
+    def _noise_policy(self, tmp_path, op="RandomNormalLike", attrs: dict[str, Any] | None = None):
+        """``y = state + <noise>(state)`` — the host noise is the only unknown."""
+        from onnx import helper
+
+        node = helper.make_node(op, ["state"], ["eps"], **(attrs or {"dtype": 1}))
+        return _save(
+            [node, helper.make_node("Add", ["state", "eps"], ["y"])],
+            [_vi("state", [None, 3])],
+            [_vi("y", [None, 3])],
+            [],
+            tmp_path,
+        )
+
+    def test_random_normal_like_becomes_a_noise_port(self, tmp_path):
+        cg = import_onnx_policy(self._noise_policy(tmp_path))
+        assert cg.inputs == [STATE_PORT, "noise_0"]
+        assert cg.state_outputs == []
+        out = interpret(cg.graph, {STATE_PORT: np.array([1.0, 1.0, 1.0]), "noise_0": np.array([1.0, 2.0, 3.0])})
+        np.testing.assert_allclose(out[OUTPUT_PORT], [2.0, 3.0, 4.0], rtol=1e-12)
+
+    def test_two_noise_ops_get_distinct_ports(self, tmp_path):
+        from onnx import helper
+
+        path = _save(
+            [
+                helper.make_node("RandomNormalLike", ["state"], ["e0"], dtype=1),
+                helper.make_node("RandomNormalLike", ["state"], ["e1"], dtype=1),
+                helper.make_node("Add", ["state", "e0"], ["a"]),
+                helper.make_node("Add", ["a", "e1"], ["y"]),
+            ],
+            [_vi("state", [None, 3])],
+            [_vi("y", [None, 3])],
+            [],
+            tmp_path,
+        )
+        cg = import_onnx_policy(path)
+        assert cg.inputs == [STATE_PORT, "noise_0", "noise_1"]
+
+    def test_random_normal_non_default_scale_rejected(self, tmp_path):
+        """The host supplies N(0,1); silently ignoring a scale would be wrong."""
+        path = self._noise_policy(
+            tmp_path,
+            op="RandomNormal",
+            attrs={"dtype": 1, "scale": 2.0, "shape": None} if False else {"dtype": 1, "scale": 2.0},
+        )
+        with pytest.raises(ValueError, match="scale"):
+            import_onnx_policy(path)
+
+    def test_rank3_noise_shape_rejected(self, tmp_path):
+        """A rank-3 noise tensor has no flat representation in the VM."""
+        from onnx import helper
+
+        path = _save(
+            [
+                helper.make_node("RandomNormal", ["shape"], ["e"], dtype=1),
+                helper.make_node("Add", ["state", "e"], ["y"]),
+            ],
+            [_vi("state", [None, 2])],
+            [_vi("y", [None, 2, 2, 2])],
+            [_int_init("shape", [2, 2, 2])],
+            tmp_path,
+        )
+        with pytest.raises(NotImplementedError, match="rank-3"):
+            import_onnx_policy(path)
+
+
+class TestReshapeMinusOne:
+    """ONNX's ``-1`` infers a dimension; the VM has no runtime shape inference."""
+
+    def test_minus_one_is_resolved(self, tmp_path):
+        from onnx import helper
+
+        path = _save(
+            [
+                helper.make_node("Reshape", ["state", "shape"], ["r"]),
+                helper.make_node("Mul", ["r", "two"], ["y"]),
+            ],
+            [_vi("state", [None, 6])],
+            [_vi("y", [None, 6])],
+            [_int_init("shape", [-1]), _init("two", np.float64(2.0))],
+            tmp_path,
+        )
+        cg = import_onnx_policy(path)
+        x = np.arange(6.0)
+        np.testing.assert_allclose(_run(cg, x), x * 2.0, rtol=1e-12)
+
+    def test_two_minus_ones_rejected(self, tmp_path):
+        from onnx import helper
+
+        path = _save(
+            [helper.make_node("Reshape", ["state", "shape"], ["y"])],
+            [_vi("state", [None, 6])],
+            [_vi("y", [None, 3, 2])],
+            [_int_init("shape", [-1, -1])],
+            tmp_path,
+        )
+        with pytest.raises(ValueError, match="more than one -1"):
+            import_onnx_policy(path)
+
+    def test_indivisible_target_rejected(self, tmp_path):
+        from onnx import helper
+
+        path = _save(
+            [helper.make_node("Reshape", ["state", "shape"], ["y"])],
+            [_vi("state", [None, 6])],
+            [_vi("y", [None, 4, 2])],
+            [_int_init("shape", [-1, 4])],
+            tmp_path,
+        )
+        with pytest.raises(ValueError, match="does not divide"):
+            import_onnx_policy(path)

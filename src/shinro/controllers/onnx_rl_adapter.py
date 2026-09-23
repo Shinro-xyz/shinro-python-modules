@@ -111,6 +111,10 @@ class _GraphPolicy:
         self.state_size = _graph_port_size(cg.graph, STATE_PORT)
         self.noise_port = EPSILON_PORT if EPSILON_PORT in self.inputs else None
         self.noise_size = _graph_port_size(cg.graph, EPSILON_PORT) if self.noise_port else 0
+        # In-network noise ports (``noise_<k>`` from RandomNormalLike): the host
+        # supplies standard-normal draws every tick, because the kernel does no
+        # RNG. Distinct from ``epsilon``, whose kind depends on the action space.
+        self.noise_ports = [(n, _graph_port_size(cg.graph, n)) for n in self.inputs if n.startswith("noise_")]
         # Recurrent feedback: what each published state output refills next tick.
         self._state_plan = _state_feedback_plan(cg.state_outputs, lambda n: _graph_port_size(cg.graph, n))
         self.state = _zero_state(self._state_plan, lambda n: _graph_port_size(cg.graph, n))
@@ -205,6 +209,9 @@ class _CompiledPolicy:
         self.state_size = _flat_size(self.manifest["inputs"][self.inputs.index(STATE_PORT)]["shape"])
         self.noise_port = EPSILON_PORT if EPSILON_PORT in self.inputs else None
         self.noise_size = _flat_size(self.manifest["inputs"][self.inputs.index(EPSILON_PORT)]["shape"]) if self.noise_port else 0
+        self.noise_ports = [
+            (port["name"], _flat_size(port["shape"])) for port in self.manifest["inputs"] if port["name"].startswith("noise_")
+        ]
 
         if not so_path.exists():
             raise FileNotFoundError(f"no compiled kernel at {so_path} — run `make compile --out {root}` first")
@@ -291,14 +298,18 @@ class OnnxRLAdapter(Controller):
         feed = {self.policy.state_port: x}
         if self.policy.noise_port is not None:
             feed[self.policy.noise_port] = self._draw_noise(self.policy.noise_size)
+        for name, size in self.policy.noise_ports:
+            feed[name] = self._rng.standard_normal(size)
         return self.bk.from_numpy(self.policy.step(feed))
 
     def _draw_noise(self, size: int) -> np.ndarray:
-        """Draw the host noise the epsilon port expects.
+        """Draw the host noise the action-space ``epsilon`` port expects.
 
         For a discretely-sampling graph this is Gumbel noise, which makes
         ``argmax(logits + g)`` an exact categorical draw from
-        ``softmax(logits)``; otherwise it is a standard normal.
+        ``softmax(logits)``; otherwise it is a standard normal. In-network
+        ``noise_<k>`` ports are always standard normal and are drawn in
+        :meth:`compute`.
         """
         if self.policy.gumbel:
             uniform = np.clip(self._rng.uniform(0.0, 1.0, size=size), _GUMBEL_EPS, 1.0 - _GUMBEL_EPS)
