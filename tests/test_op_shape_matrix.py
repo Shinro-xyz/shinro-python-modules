@@ -4,7 +4,7 @@ The Zig VM is a handwritten dispatch with a *finite* set of code paths
 (vecmat/matvec/matmul; same-shape/scalar/row/col broadcast; square/non-square
 transpose; 1-D/2-D slice; ...). Every bug found in it lived in a path no test
 visited — so this suite visits ALL of them: every op in the vocabulary, each
-in every shape class its numpy semantics distinguish, grouped into four graphs
+in every shape class its numpy semantics distinguish, grouped into five graphs
 (one zig compile each) with every cell exposed as a named output.
 
 Two contracts per cell:
@@ -279,11 +279,58 @@ def _pointwise_graph(g: Graph):
     return outs, specs
 
 
+def _recurrent_graph(g: Graph):
+    """The fused cells: lstm/gru/rnn gate-stack shapes, both
+    linear_before_reset forms, the H=1 / I=1 edges, and a 2-D activation
+    (I = the node's rows*cols, not just its cols).
+
+    Weights are const nodes (the ONNX initializer path); the only free ports
+    are the activation and the recurrent state, so a cell's shape contract is
+    pinned by the declared output shape (2H for lstm's [h ‖ c], H otherwise).
+    """
+    outs = {}
+    specs: dict = {}
+    seed = [0]
+
+    def cell(op: str, H: int, I: int, *, x_shape=None, lbr=None, tag=""):
+        seed[0] += 1
+        rng = np.random.default_rng(seed[0])
+        ng = 4 if op == "lstm" else (3 if op == "gru" else 1)
+        xs = x_shape or (I,)
+        x = g.input(f"x_{op}{tag}", xs)
+        specs[f"x_{op}{tag}"] = (xs, "free")
+        h = g.input(f"h_{op}{tag}", (H,))
+        specs[f"h_{op}{tag}"] = ((H,), "free")
+        w = g.emit("const", [], (ng * H, I), value=rng.normal(0.0, 0.5, (ng * H, I)))
+        r = g.emit("const", [], (ng * H, H), value=rng.normal(0.0, 0.5, (ng * H, H)))
+        b = g.emit("const", [], (2 * ng * H,), value=rng.normal(0.0, 0.5, (2 * ng * H,)))
+        if op == "lstm":
+            c = g.input(f"c_{op}{tag}", (H,))
+            specs[f"c_{op}{tag}"] = ((H,), "free")
+            outs[f"{op}{tag}"] = g.emit("lstm", [x, w, r, b, h, c], (2 * H,))
+        elif op == "gru":
+            outs[f"{op}{tag}"] = g.emit("gru", [x, w, r, b, h], (H,), linear_before_reset=lbr)
+        else:
+            outs[f"{op}{tag}"] = g.emit("rnn", [x, w, r, b, h], (H,))
+
+    cell("lstm", 3, 4)
+    cell("gru", 3, 4, lbr=True, tag="_lbr1")
+    cell("gru", 3, 4, lbr=False, tag="_lbr0")
+    cell("rnn", 3, 4)
+    # H=1/I=1: the degenerate gate stack (1x1 matrices, vec state of length 1).
+    cell("lstm", 1, 1, tag="_h1i1")
+    cell("gru", 2, 1, lbr=True, tag="_i1")
+    # 2-D activation: I must come from rows*cols, not cols alone.
+    cell("rnn", 2, 3, x_shape=(1, 3), tag="_2dx")
+    return outs, specs
+
+
 GRAPHS = {
     "linalg": (_linalg_graph, 11),
     "elementwise": (_elementwise_graph, 23),
     "selection": (_selection_graph, 31),
     "pointwise": (_pointwise_graph, 41),
+    "recurrent": (_recurrent_graph, 53),
 }
 
 

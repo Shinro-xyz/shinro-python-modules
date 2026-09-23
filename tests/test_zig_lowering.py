@@ -29,7 +29,7 @@ from scripts.gen_base import build_base_graph
 from shinro.codegen import interpret
 from shinro.codegen.compose import ComposedGraph, compose
 from shinro.codegen.lower_zig import lower_zig
-from shinro.codegen.oracle import input_shape, output_split, pack_arrays, state_slices, step_so
+from shinro.codegen.oracle import input_shape, output_split, pack_arrays, run_oracle, state_slices, step_so
 from shinro.codegen.trace_node import trace_node
 from shinro.codegen.tracing import Graph
 from shinro.controllers.mppi import MPPIController
@@ -2591,3 +2591,120 @@ class TestGemmOracle:
                 off += expected.size
                 np.testing.assert_allclose(got, expected, rtol=1e-13, atol=1e-13)
                 np.testing.assert_allclose(got, np.asarray(want[name]).ravel(), rtol=1e-12, atol=1e-12)
+
+
+# ─── imported recurrent policies (LSTM / GRU / RNN) ─────────────────────────
+
+def _recurrent_policy_onnx(build_dir, op, *, H=3, I=4, OBS=5, ACT=2, lbr=0, seed=1):
+    """Write a torch-style recurrent policy ONNX (``forward(x, h[, c]) -> action, h'``).
+
+    Built with ``onnx.helper`` so the Zig oracle owns the whole path — ONNX in,
+    fused cell out — without an onnxruntime dependency or a committed fixture.
+    """
+    import onnx
+    from onnx import TensorProto, helper, numpy_helper
+
+    rng = np.random.default_rng(seed)
+    ng = {"LSTM": 4, "GRU": 3, "RNN": 1}[op]
+
+    def f_init(name, arr):
+        a = np.asarray(arr, dtype=np.float32)
+        return numpy_helper.from_array(a, name)
+
+    def i_init(name, values):
+        a = np.asarray(values, dtype=np.int64)
+        return helper.make_tensor(name, TensorProto.INT64, a.shape, a.flatten().tolist())
+
+    inits = [
+        f_init("Win", rng.normal(0.0, 0.3, (OBS, I))),
+        f_init("Whead", rng.normal(0.0, 0.3, (H, ACT))),
+        f_init("W", rng.normal(0.0, 0.3, (1, ng * H, I))),
+        f_init("R", rng.normal(0.0, 0.3, (1, ng * H, H))),
+        f_init("B", rng.normal(0.0, 0.3, (1, 2 * ng * H))),
+        i_init("sx", [1, 1, I]),
+        i_init("sh", [1, H]),
+    ]
+    cell_in = ["X", "W", "R", "B", "", "h_in"] + (["c_in"] if op == "LSTM" else [])
+    cell_out = ["Y", "h_out"] + (["c_out"] if op == "LSTM" else [])
+    attrs: dict[str, Any] = {"hidden_size": H}
+    if op == "GRU":
+        attrs["linear_before_reset"] = int(lbr)
+    nodes = [
+        helper.make_node("MatMul", ["obs", "Win"], ["x2"]),
+        helper.make_node("Reshape", ["x2", "sx"], ["X"]),
+        helper.make_node(op, cell_in, cell_out, **attrs),
+        helper.make_node("Reshape", ["h_out", "sh"], ["hf"]),
+        helper.make_node("MatMul", ["hf", "Whead"], ["action"]),
+    ]
+    ins = [
+        helper.make_tensor_value_info("obs", TensorProto.FLOAT, (1, OBS)),
+        helper.make_tensor_value_info("h_in", TensorProto.FLOAT, (1, 1, H)),
+    ]
+    outs = [
+        helper.make_tensor_value_info("action", TensorProto.FLOAT, (1, ACT)),
+        helper.make_tensor_value_info("h_out", TensorProto.FLOAT, (1, 1, H)),
+    ]
+    if op == "LSTM":
+        ins.append(helper.make_tensor_value_info("c_in", TensorProto.FLOAT, (1, 1, H)))
+        outs.append(helper.make_tensor_value_info("c_out", TensorProto.FLOAT, (1, 1, H)))
+    graph = helper.make_graph(nodes, f"{op.lower()}_policy", ins, outs, initializer=inits)
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 14)])
+    model.ir_version = 8
+    path = build_dir / f"{op.lower()}_policy.onnx"
+    onnx.save(model, str(path))
+    return path
+
+
+@pytest.fixture(scope="module")
+def recurrent_so(tmp_path_factory, request):
+    """Compile an imported recurrent policy; return (op, lib, cg, artifact_dir)."""
+    op = request.param
+    pytest.importorskip("onnx")
+    from shinro.codegen.onnx_import import import_onnx_policy
+
+    d = tmp_path_factory.mktemp(f"zig-build-recurrent-{op}")
+    path = _recurrent_policy_onnx(d, op)
+    cg = import_onnx_policy(str(path))
+    # build_dir == d so the manifest lands beside lib/, the layout the compiled
+    # adapter expects (the .so itself is renamed below).
+    lib, cg2 = _build_so(cg, d, graph_path=d / "graph_data.zig")
+    return op, lib, cg2, d
+
+
+class TestOnnxRecurrentPolicyOracle:
+    """An imported recurrent policy's .so matches the interpreter, with live state.
+
+    This is the end-to-end gate for the recurrent path: ONNX (with separate
+    ``h_in``/``c_in`` ports) -> fused cell + state ports -> lowered VM. The
+    oracle feeds every port (the state ports included) random values and compares
+    every output *and* the state buffer, so a mis-wired recurrent port shows up
+    as a mismatch rather than a silently-zero state.
+    """
+
+    @pytest.mark.parametrize("recurrent_so", ["LSTM", "GRU", "RNN"], indirect=True)
+    def test_so_matches_interpreter(self, recurrent_so):
+        op, lib, cg, _ = recurrent_so
+        # one input per state port (+ the observation), one state output per cell
+        assert cg.inputs[0] == "state"
+        expected_state = ["state_hc_0"] if op == "LSTM" else ["state_h_0"]
+        assert cg.state_outputs == expected_state
+        max_err = run_oracle(lib, cg, samples=25, seed=17)
+        assert max_err < 1e-13, f"{op}: .so vs interpreter max|err| = {max_err:.3e}"
+
+    @pytest.mark.parametrize("recurrent_so", ["LSTM", "GRU", "RNN"], indirect=True)
+    def test_compiled_policy_carries_state(self, recurrent_so):
+        """The compiled adapter's tick N state must feed tick N+1, matching eager."""
+        op, _lib, cg, d = recurrent_so
+        from shinro.controllers.onnx_rl_adapter import KERNEL_FILENAME, _CompiledPolicy, _GraphPolicy
+
+        shutil.copy(d / "lib" / "libbase.so", d / "lib" / KERNEL_FILENAME)
+        compiled = _CompiledPolicy(d)
+        eager = _GraphPolicy(cg)
+        assert compiled.state != {}
+        x = np.linspace(-0.3, 0.3, 5)
+        outs = [np.asarray(compiled.step({"state": x})) for _ in range(3)]
+        exp = [np.asarray(eager.step({"state": x})) for _ in range(3)]
+        for tick, (got, want) in enumerate(zip(outs, exp)):
+            np.testing.assert_allclose(got, want, atol=1e-13, err_msg=f"{op} tick {tick}")
+        # and the state actually moved (a frozen state would pass tick 0 only)
+        assert not np.allclose(outs[-1], np.asarray(compiled.step({"state": x})))

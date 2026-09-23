@@ -7,6 +7,7 @@ pub const Op = enum {
     copy, tanh, relu, exp, argmax, one_hot, slice,
     sin, cos, stack, solve_qp,
     abs, sign, pow, lt, min, gemm, sigmoid, softmax, gelu, elu,
+    lstm, gru, rnn,
 };
 
 pub const Node = struct {

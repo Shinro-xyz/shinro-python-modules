@@ -223,6 +223,48 @@ class TraceBackend:
         # ELU; alpha is baked per node by the lowerer.
         return self._emit("elu", [x], x.shape, alpha=alpha)
 
+    # --- recurrent cells (fused; ONNX LSTM/GRU/RNN semantics) ---
+
+    def lstm(
+        self,
+        x: Tracer,
+        w: Tracer,
+        r: Tracer,
+        b: Tracer,
+        h_prev: Tracer,
+        c_prev: Tracer,
+    ) -> Tracer:
+        # One fused LSTM step. w is (4H, I), r is (4H, H), b is Wb(4H) ‖ Rb(4H);
+        # the output is [h_next ‖ c_next] (2H,), the ML-Agents recurrent layout.
+        # H comes from the state operand, not the weights, so a mis-shaped h/w
+        # pair surfaces here rather than as silent index drift.
+        operands = [_lift(self.g, t) for t in (x, w, r, b, h_prev, c_prev)]
+        H = operands[4].shape[0]
+        return self._emit("lstm", operands, (2 * H,))
+
+    def gru(
+        self,
+        x: Tracer,
+        w: Tracer,
+        r: Tracer,
+        b: Tracer,
+        h_prev: Tracer,
+        *,
+        linear_before_reset: bool = False,
+    ) -> Tracer:
+        # One fused GRU step. w is (3H, I), r is (3H, H), b is the 6H bias block.
+        # linear_before_reset moves the reset gate across the recurrent matmul
+        # (ONNX semantics); it is baked into the node's aux by the lowerer.
+        operands = [_lift(self.g, t) for t in (x, w, r, b, h_prev)]
+        H = operands[4].shape[0]
+        return self._emit("gru", operands, (H,), linear_before_reset=linear_before_reset)
+
+    def rnn(self, x: Tracer, w: Tracer, r: Tracer, b: Tracer, h_prev: Tracer) -> Tracer:
+        # One fused vanilla-RNN step. w is (H, I), r is (H, H), b is Wb(H) ‖ Rb(H).
+        operands = [_lift(self.g, t) for t in (x, w, r, b, h_prev)]
+        H = operands[4].shape[0]
+        return self._emit("rnn", operands, (H,))
+
     def sin(self, x: Tracer) -> Tracer:
         return self._emit("sin", [x], x.shape)
 

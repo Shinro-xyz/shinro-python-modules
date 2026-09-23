@@ -263,6 +263,95 @@ def _elu(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray
     return np.where(x > 0.0, x, alpha * (np.exp(x) - 1.0))
 
 
+# ─── recurrent cells (one fused step; ONNX LSTM/GRU/RNN semantics) ────────
+#
+# Each handler is the numpy mirror of one runtime/linalg.zig kernel, so the
+# interpreter, the ONNX importer's eager evaluation, and the compiled VM all
+# agree by construction. Shapes are the ONNX contract: W is (ngates*H, I) and
+# R is (ngates*H, H), both read as ``·ᵀ``; B is ``Wb ‖ Rb`` with the input
+# biases first. Only the current timestep is computed — time is the host
+# feeding h_next/c_next back next tick.
+
+
+def _logistic(x: np.ndarray) -> np.ndarray:
+    """Elementwise logistic sigmoid (a local helper — the ``sigmoid`` op's
+    handler is a node-taking callable, not this map)."""
+    return 1.0 / (1.0 + np.exp(-x))
+
+
+@register_op("lstm")
+def _lstm(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
+    """Fused LSTM cell: returns ``[h_next(H) ‖ c_next(H)]``.
+
+    ONNX gate order is ``i, o, f, c`` with Sigmoid on i/o/f and Tanh on the
+    cell candidate and the hidden output. The concatenated return is the
+    ML-Agents ``recurrent_in``/``recurrent_out`` layout (h first). The Zig
+    mirror is ``linalg.lstm_cell``.
+    """
+    x = values[node.inputs[0]].ravel()
+    w = values[node.inputs[1]]
+    r = values[node.inputs[2]]
+    b = values[node.inputs[3]].ravel()
+    h = values[node.inputs[4]].ravel()
+    c = values[node.inputs[5]].ravel()
+    H = w.shape[0] // 4
+    z = x @ w.T + h @ r.T + b[: 4 * H] + b[4 * H :]
+    i_g = _logistic(z[:H])
+    o_g = _logistic(z[H : 2 * H])
+    f_g = _logistic(z[2 * H : 3 * H])
+    g_g = np.tanh(z[3 * H : 4 * H])
+    c_next = f_g * c + i_g * g_g
+    h_next = o_g * np.tanh(c_next)
+    return np.concatenate([h_next, c_next])
+
+
+@register_op("gru")
+def _gru(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
+    """Fused GRU cell: returns ``h_next(H)``.
+
+    ONNX gate order is ``z, r, h`` with Sigmoid on z/r and Tanh on the
+    candidate. ``linear_before_reset`` moves the reset gate *across* the
+    recurrent matmul:
+
+    - ``lbr`` true  → ``g(X·Whᵀ + r ⊙ (H·Rhᵀ + Rbh) + Wbh)``
+    - ``lbr`` false → ``g(X·Whᵀ + (r ⊙ H)·Rhᵀ + Rbh + Wbh)``
+
+    Getting this backwards silently diverges ~1e-1, so it is an explicit node
+    attribute (baked into the VM node's ``aux``). The Zig mirror is
+    ``linalg.gru_cell``.
+    """
+    x = values[node.inputs[0]].ravel()
+    w = values[node.inputs[1]]
+    r = values[node.inputs[2]]
+    b = values[node.inputs[3]].ravel()
+    h = values[node.inputs[4]].ravel()
+    H = w.shape[0] // 3
+    gx = x @ w.T
+    gh = h @ r.T
+    z = _logistic(gx[:H] + gh[:H] + b[:H] + b[3 * H : 4 * H])
+    r_g = _logistic(gx[H : 2 * H] + gh[H : 2 * H] + b[H : 2 * H] + b[4 * H : 5 * H])
+    if node.attrs.get("linear_before_reset", False):
+        n = np.tanh(gx[2 * H : 3 * H] + r_g * (gh[2 * H : 3 * H] + b[5 * H : 6 * H]) + b[2 * H : 3 * H])
+    else:
+        n = np.tanh(gx[2 * H : 3 * H] + (r_g * h) @ r[2 * H :].T + b[5 * H : 6 * H] + b[2 * H : 3 * H])
+    return (1.0 - z) * n + z * h
+
+
+@register_op("rnn")
+def _rnn(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
+    """Vanilla Elman RNN cell: ``h_next = tanh(x·Wᵀ + h·Rᵀ + Wb + Rb)``.
+
+    The Zig mirror is ``linalg.rnn_cell``.
+    """
+    x = values[node.inputs[0]].ravel()
+    w = values[node.inputs[1]]
+    r = values[node.inputs[2]]
+    b = values[node.inputs[3]].ravel()
+    h = values[node.inputs[4]].ravel()
+    H = w.shape[0]
+    return np.tanh(x @ w.T + h @ r.T + b[:H] + b[H:])
+
+
 @register_op("sin")
 def _sin(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     return np.sin(values[node.inputs[0]])

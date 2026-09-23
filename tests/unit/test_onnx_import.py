@@ -7,6 +7,8 @@ build tiny models with ``onnx.helper`` and assert the *translated* graph runs
 covered separately in ``tests/test_zig_lowering.py``.
 """
 
+from typing import Any
+
 import numpy as np
 import pytest
 
@@ -879,3 +881,362 @@ class TestActionSurface:
                 self._tiny(tmp_path),
                 action_cfg={"action_clip_low": -np.inf, "action_clip_high": np.inf},
             )
+
+
+# ─── recurrent policies (LSTM / GRU / RNN) ──────────────────────────────────
+
+
+def _int_init(name, values):
+    """Build an int64 initializer (Slice/Reshape shape inputs are int64)."""
+    from onnx import TensorProto, helper
+
+    a = np.asarray(values, dtype=np.int64)
+    return helper.make_tensor(name, TensorProto.INT64, a.shape, a.flatten().tolist())
+
+
+# The three fused cells, and the ONNX gate-stack width each one expects.
+_RECURRENT_OPS = ("LSTM", "GRU", "RNN")
+_RECURRENT_GATES = {"LSTM": 4, "GRU": 3, "RNN": 1}
+
+
+def _sigmoid(v):
+    return 1.0 / (1.0 + np.exp(-v))
+
+
+def _ref_cell(op, x, h, c, w, r, b, H, lbr=0):
+    """Independent numpy implementation of the ONNX cell (test oracle).
+
+    Deliberately hand-written rather than routed through ``ops.py`` so a bug in
+    both the handler and the kernel cannot hide behind a shared implementation.
+    Returns ``(h_next, c_next)`` (``c_next`` is None for GRU/RNN).
+    """
+    gx = x @ w.T
+    gh = h @ r.T
+    if op == "LSTM":
+        z = gx + gh + b[: 4 * H] + b[4 * H :]
+        i_g = _sigmoid(z[:H])
+        o_g = _sigmoid(z[H : 2 * H])
+        f_g = _sigmoid(z[2 * H : 3 * H])
+        cand = np.tanh(z[3 * H : 4 * H])
+        c_next = f_g * c + i_g * cand
+        return o_g * np.tanh(c_next), c_next
+    if op == "GRU":
+        z = _sigmoid(gx[:H] + gh[:H] + b[:H] + b[3 * H : 4 * H])
+        r_g = _sigmoid(gx[H : 2 * H] + gh[H : 2 * H] + b[H : 2 * H] + b[4 * H : 5 * H])
+        if lbr:
+            cand = np.tanh(gx[2 * H : 3 * H] + r_g * (gh[2 * H : 3 * H] + b[5 * H : 6 * H]) + b[2 * H : 3 * H])
+        else:
+            cand = np.tanh(gx[2 * H : 3 * H] + (r_g * h) @ r[2 * H :].T + b[5 * H : 6 * H] + b[2 * H : 3 * H])
+        return (1.0 - z) * cand + z * h, None
+    return np.tanh(gx + gh + b[:H] + b[H:]), None
+
+
+def _recurrent_policy(
+    op,
+    tmp_path,
+    *,
+    H=3,
+    I=4,
+    OBS=5,
+    ACT=2,
+    layers=1,
+    lbr=0,
+    direction="forward",
+    activations=None,
+    clip=None,
+    sequence_lens=False,
+    peepholes=False,
+    consume_sequence=False,
+    batch=1,
+    seq=1,
+    extra_direction=False,
+):
+    """Build a torch-style recurrent export: ``forward(x, h[, c]) -> action, h'[, c']``.
+
+    Layer ``L``'s hidden state enters as ``h{L}_in`` / ``c{L}_in`` and leaves as
+    ``h_out`` (last layer, also a graph output) or ``h_{L}`` (intermediate, fed
+    to the next cell). Returns ``(path, ref)`` where ``ref`` is everything the
+    independent numpy oracle needs.
+    """
+    from onnx import helper
+
+    rng = np.random.default_rng(7)
+    ng = _RECURRENT_GATES[op]
+    nodes = []
+    inits = [_init("Win", rng.normal(0.0, 0.3, (OBS, I))), _init("Whead", rng.normal(0.0, 0.3, (H, ACT)))]
+    inits += [_int_init("sx", [1, seq, I]), _int_init("sh", [1, H]), _int_init("sl", [1])]
+    weights = []
+    ndir = 2 if extra_direction else 1
+    for layer in range(layers):
+        in_w = I if layer == 0 else H
+        w = rng.normal(0.0, 0.3, (ndir, ng * H, in_w)).astype(np.float32)
+        r = rng.normal(0.0, 0.3, (ndir, ng * H, H)).astype(np.float32)
+        b = rng.normal(0.0, 0.3, (ndir, 2 * ng * H)).astype(np.float32)
+        weights.append((w[0].astype(np.float64), r[0].astype(np.float64), b[0].astype(np.float64)))
+        inits += [_init(f"W{layer}", w), _init(f"R{layer}", r), _init(f"B{layer}", b)]
+
+    nodes.append(helper.make_node("MatMul", ["obs", "Win"], ["x2"]))
+    nodes.append(helper.make_node("Reshape", ["x2", "sx"], ["X0"]))
+
+    cell_attrs: dict[str, Any] = {"hidden_size": H}
+    if op == "GRU":
+        cell_attrs["linear_before_reset"] = int(lbr)
+    if direction != "forward":
+        cell_attrs["direction"] = direction
+    if activations is not None:
+        cell_attrs["activations"] = activations
+    if clip is not None:
+        cell_attrs["clip"] = clip
+
+    prev = "X0"
+    for layer in range(layers):
+        last = layer == layers - 1
+        h_name = "h_out" if last else f"h_{layer}"
+        cell_in = [prev, f"W{layer}", f"R{layer}", f"B{layer}", "sl" if sequence_lens else "", f"h{layer}_in"]
+        cell_out = [f"Y_{layer}", h_name]
+        if op == "LSTM":
+            cell_in.append(f"c{layer}_in")
+            cell_out.append(f"c{layer}_out")
+            if peepholes:
+                inits.append(_init(f"P{layer}", np.zeros(3 * H, dtype=np.float32)))
+                cell_in.append(f"P{layer}")
+        nodes.append(helper.make_node(op, cell_in, cell_out, **cell_attrs))
+        prev = h_name
+
+    # Head: consume h_out (or the sequence output Y_0 when consume_sequence).
+    head_src = "h_out"
+    if consume_sequence:
+        nodes.append(helper.make_node("Reshape", ["Y_0", "sh"], ["yflat"]))
+        head_src = "yflat"
+    else:
+        nodes.append(helper.make_node("Reshape", ["h_out", "sh"], ["hflat"]))
+        head_src = "hflat"
+    nodes.append(helper.make_node("MatMul", [head_src, "Whead"], ["action"]))
+
+    ins = [_vi("obs", [batch, OBS])]
+    outs = [_vi("action", [batch, ACT]), _vi("h_out", [1, seq, H])]
+    for layer in range(layers):
+        ins.append(_vi(f"h{layer}_in", [1, seq, H]))
+        if op == "LSTM":
+            ins.append(_vi(f"c{layer}_in", [1, seq, H]))
+    if op == "LSTM":
+        outs.append(_vi("c_out", [1, seq, H]))
+
+    path = _save(nodes, ins, outs, inits, tmp_path, name=f"{op.lower()}.onnx", opset=14)
+    ref = {"weights": weights, "Win": None, "Whead": None, "H": H, "lbr": lbr}
+    # Recover W1/W2 as f64 for the oracle.
+    ref["Win"] = np.asarray([t for t in inits if t.name == "Win"][0].float_data).reshape(OBS, I).astype(np.float64)
+    ref["Whead"] = np.asarray([t for t in inits if t.name == "Whead"][0].float_data).reshape(H, ACT).astype(np.float64)
+    return path, ref
+
+
+def _ref_forward(op, obs, states, ref):
+    """Run the numpy oracle through every layer; returns (action, new_states)."""
+    H = ref["H"]
+    x = np.asarray(obs, dtype=np.float64) @ ref["Win"]
+    new_states = []
+    for layer, (w, r, b) in enumerate(ref["weights"]):
+        h, c = states[layer]
+        h_next, c_next = _ref_cell(op, x, h, c, w, r, b, H, ref["lbr"])
+        new_states.append((h_next, c_next))
+        x = h_next
+    return x @ ref["Whead"], new_states
+
+
+def _state_names(op, layers=1):
+    ports = []
+    for layer in range(layers):
+        ports.append(f"state_h_{layer}")
+        if op == "LSTM":
+            ports.append(f"state_c_{layer}")
+    return ports
+
+
+def _feed_states(op, states, layers=1):
+    feed = {}
+    for layer, (h, c) in enumerate(states):
+        feed[f"state_h_{layer}"] = h
+        if op == "LSTM":
+            feed[f"state_c_{layer}"] = c
+    return feed
+
+
+@pytest.mark.parametrize("op", _RECURRENT_OPS)
+class TestRecurrent:
+    def test_ports_and_state_ports(self, op, tmp_path):
+        path, _ = _recurrent_policy(op, tmp_path)
+        cg = import_onnx_policy(path)
+        assert cg.inputs == [STATE_PORT, *_state_names(op)]
+        assert cg.outputs == [OUTPUT_PORT]
+        assert cg.state_inputs == _state_names(op)
+        assert cg.state_outputs == ["state_hc_0"] if op == "LSTM" else cg.state_outputs == ["state_h_0"]
+
+    def test_cell_is_one_fused_node(self, op, tmp_path):
+        """The whole cell is a single VM node, not a gate-by-gate decomposition."""
+        path, _ = _recurrent_policy(op, tmp_path)
+        cg = import_onnx_policy(path)
+        assert _op_names(cg).count(op.lower()) == 1
+        # and nothing from the decomposed form leaked in
+        for leaked in ("sigmoid", "tanh"):
+            assert leaked not in _op_names(cg)
+
+    def test_matches_numpy_reference(self, op, tmp_path):
+        path, ref = _recurrent_policy(op, tmp_path)
+        cg = import_onnx_policy(path)
+        H = ref["H"]
+        rng = np.random.default_rng(11)
+        obs = rng.normal(0.0, 0.5, 5)
+        h0 = rng.normal(0.0, 0.5, H)
+        c0 = rng.normal(0.0, 0.5, H)
+        feed = {STATE_PORT: obs, **_feed_states(op, [(h0, c0)])}
+        got = interpret(cg.graph, feed)
+        exp_u, exp_states = _ref_forward(op, obs, [(h0, c0)], ref)
+        np.testing.assert_allclose(got[OUTPUT_PORT], exp_u, atol=1e-12)
+        h_next, c_next = exp_states[0]
+        if op == "LSTM":
+            assert c_next is not None
+            np.testing.assert_allclose(got["state_hc_0"], np.concatenate([h_next, c_next]), atol=1e-12)
+        else:
+            np.testing.assert_allclose(got["state_h_0"], h_next, atol=1e-12)
+
+    def test_all_nodes_rank_at_most_two(self, op, tmp_path):
+        path, _ = _recurrent_policy(op, tmp_path)
+        cg = import_onnx_policy(path)
+        assert all(len(n.shape) <= 2 for n in cg.graph.nodes)
+
+    def test_state_feedback_changes_the_next_tick(self, op, tmp_path):
+        """The recurrence is live: feeding the state back must change the action."""
+        path, ref = _recurrent_policy(op, tmp_path)
+        cg = import_onnx_policy(path)
+        H = ref["H"]
+        obs = np.linspace(-0.4, 0.4, 5)
+        first = interpret(cg.graph, {STATE_PORT: obs, **_feed_states(op, [(np.zeros(H), np.zeros(H))])})
+        state = first["state_hc_0"] if op == "LSTM" else first["state_h_0"]
+        h = state[:H]
+        c = state[H:] if op == "LSTM" else np.zeros(H)
+        second = interpret(cg.graph, {STATE_PORT: obs, **_feed_states(op, [(h, c)])})
+        assert not np.allclose(first[OUTPUT_PORT], second[OUTPUT_PORT])
+
+    def test_stacked_cells_get_distinct_state_ports(self, op, tmp_path):
+        """Two stacked cells (a real G1-humanoid shape) get one port pair each."""
+        path, ref = _recurrent_policy(op, tmp_path, layers=2)
+        cg = import_onnx_policy(path)
+        assert cg.state_inputs == _state_names(op, layers=2)
+        assert cg.state_outputs == (["state_hc_0", "state_hc_1"] if op == "LSTM" else ["state_h_0", "state_h_1"])
+        H = ref["H"]
+        rng = np.random.default_rng(3)
+        states = [(rng.normal(0, 0.5, H), rng.normal(0, 0.5, H)) for _ in range(2)]
+        obs = rng.normal(0, 0.5, 5)
+        got = interpret(cg.graph, {STATE_PORT: obs, **_feed_states(op, states, layers=2)})
+        exp_u, _ = _ref_forward(op, obs, states, ref)
+        np.testing.assert_allclose(got[OUTPUT_PORT], exp_u, atol=1e-12)
+        assert _op_names(cg).count(op.lower()) == 2
+
+
+class TestRecurrentGruFlag:
+    def test_linear_before_reset_is_baked_and_changes_the_result(self, tmp_path):
+        """The two reset placements must produce different graphs and numbers."""
+        h = np.array([0.3, -0.2, 0.5])
+        x = np.linspace(-0.5, 0.5, 5)  # the fixture obs port is 5-wide
+        outs = {}
+        for lbr in (0, 1):
+            path, ref = _recurrent_policy("GRU", tmp_path, lbr=lbr)
+            cg = import_onnx_policy(path)
+            node = next(n for n in cg.graph.nodes if n.op == "gru")
+            assert bool(node.attrs.get("linear_before_reset", False)) == bool(lbr)
+            outs[lbr] = interpret(cg.graph, {STATE_PORT: x, "state_h_0": h})[OUTPUT_PORT]
+            exp, _ = _ref_forward("GRU", x, [(h, None)], ref)
+            np.testing.assert_allclose(outs[lbr], exp, atol=1e-12)
+        assert not np.allclose(outs[0], outs[1])
+
+
+class TestRecurrentMlAgentsLayout:
+    def test_recurrent_in_and_out_are_intercepted(self, tmp_path):
+        """An ML-Agents LSTM slices ``recurrent_in`` and concats ``recurrent_out``.
+
+        Both are glue around the cell's state; the importer must bind its own
+        state ports and drop the glue (the cell's ``[h ‖ c]`` output already is
+        ``recurrent_out``).
+        """
+        from onnx import helper
+
+        H, I, OBS, ACT = 3, 4, 5, 2
+        rng = np.random.default_rng(2)
+        ng = 4
+        inits = [
+            _init("Win", rng.normal(0, 0.3, (OBS, I))),
+            _init("Whead", rng.normal(0, 0.3, (H, ACT))),
+            _init("W", rng.normal(0, 0.3, (1, ng * H, I))),
+            _init("R", rng.normal(0, 0.3, (1, ng * H, H))),
+            _init("B", rng.normal(0, 0.3, (1, 2 * ng * H))),
+            _int_init("sx", [1, 1, I]),
+            _int_init("sh", [1, H]),
+            _int_init("s0", [0]),
+            _int_init("e0", [H]),
+            _int_init("sH", [H]),
+            _int_init("eMAX", [2**31 - 1]),
+            _int_init("ax", [2]),
+        ]
+        nodes = [
+            helper.make_node("MatMul", ["obs", "Win"], ["x2"]),
+            helper.make_node("Reshape", ["x2", "sx"], ["X"]),
+            helper.make_node("Slice", ["recurrent_in", "s0", "e0", "ax"], ["h0"]),
+            helper.make_node("Slice", ["recurrent_in", "sH", "eMAX", "ax"], ["c0"]),
+            helper.make_node("LSTM", ["X", "W", "R", "B", "", "h0", "c0"], ["Y", "Y_h", "Y_c"], hidden_size=H),
+            helper.make_node("Reshape", ["Y_h", "sh"], ["hf"]),
+            helper.make_node("MatMul", ["hf", "Whead"], ["action"]),
+            helper.make_node("Concat", ["Y_h", "Y_c"], ["recurrent_out"], axis=2),
+        ]
+        ins = [_vi("obs", [1, OBS]), _vi("recurrent_in", [1, 1, 2 * H])]
+        outs = [_vi("action", [1, ACT]), _vi("recurrent_out", [1, 1, 2 * H])]
+        path = _save(nodes, ins, outs, inits, tmp_path, name="mlagents.onnx", opset=14)
+
+        cg = import_onnx_policy(path)
+        assert cg.inputs == [STATE_PORT, "state_h_0", "state_c_0"]
+        assert cg.state_outputs == ["state_hc_0"]
+        # the ONNX glue is unreachable from the action, so it is not translated
+        assert "concat" not in _op_names(cg)
+
+        H_ = H
+        rng2 = np.random.default_rng(5)
+        obs = rng2.normal(0, 0.5, OBS)
+        h0 = rng2.normal(0, 0.5, H_)
+        c0 = rng2.normal(0, 0.5, H_)
+        got = interpret(cg.graph, {STATE_PORT: obs, "state_h_0": h0, "state_c_0": c0})
+        w = np.asarray([t for t in inits if t.name == "W"][0].float_data).reshape(4 * H_, I).astype(np.float64)
+        r = np.asarray([t for t in inits if t.name == "R"][0].float_data).reshape(4 * H_, H_).astype(np.float64)
+        b = np.asarray([t for t in inits if t.name == "B"][0].float_data).reshape(8 * H_).astype(np.float64)
+        w1 = np.asarray([t for t in inits if t.name == "Win"][0].float_data).reshape(OBS, I).astype(np.float64)
+        w2 = np.asarray([t for t in inits if t.name == "Whead"][0].float_data).reshape(H_, ACT).astype(np.float64)
+        h_next, c_next = _ref_cell("LSTM", obs @ w1, h0, c0, w, r, b, H_)
+        assert c_next is not None
+        np.testing.assert_allclose(got[OUTPUT_PORT], h_next @ w2, atol=1e-12)
+        np.testing.assert_allclose(got["state_hc_0"], np.concatenate([h_next, c_next]), atol=1e-12)
+
+
+class TestRecurrentRejections:
+    def _expect(self, op, tmp_path, match, **kwargs):
+        path, _ = _recurrent_policy(op, tmp_path, **kwargs)
+        with pytest.raises(NotImplementedError, match=match):
+            import_onnx_policy(path)
+
+    def test_bidirectional_rejected(self, tmp_path):
+        self._expect("LSTM", tmp_path, "direction", direction="reverse")
+
+    def test_gate_clip_rejected(self, tmp_path):
+        self._expect("LSTM", tmp_path, "clip", clip=2.0)
+
+    def test_custom_activations_rejected(self, tmp_path):
+        self._expect("LSTM", tmp_path, "activations", activations=["Sigmoid", "Tanh", "Relu"])
+
+    def test_sequence_lens_rejected(self, tmp_path):
+        self._expect("GRU", tmp_path, "sequence_lens", sequence_lens=True)
+
+    def test_peepholes_rejected(self, tmp_path):
+        self._expect("LSTM", tmp_path, "peepholes", peepholes=True)
+
+    def test_sequence_output_rejected_when_consumed(self, tmp_path):
+        self._expect("LSTM", tmp_path, "sequence output", consume_sequence=True)
+
+    def test_extra_direction_axis_rejected(self, tmp_path):
+        self._expect("GRU", tmp_path, "num_directions", extra_direction=True)
