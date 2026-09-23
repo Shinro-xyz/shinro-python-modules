@@ -1,0 +1,23 @@
+# Policy-only compile scenario for the committed toy LSTM fixture: a recurrent
+# ONNX policy -> lib_neural_network.so with live recurrent state ports.
+#
+#   make compile SCENARIO=tests/fixtures/configs/scenarios/toy_recurrent_policy.toml OUT=build/toy_lstm
+#
+# There is no [estimator]: the ONNX policy is a standalone graph (only onnx_rl
+# may omit it). The controller config's model_path is CWD-relative, so run from
+# the repo root. artifact_name makes the deployed kernel lib_neural_network.so,
+# the name the onnx_rl adapter loads.
+#
+# Unlike the MLP scenario this graph has state: the kernel takes state_h_0 and
+# state_c_0 and publishes state_hc_0, so a caller must feed the previous tick's
+# state back (the adapter does this in _CompiledPolicy.step).
+
+[controller]
+type = "onnx_rl"
+config = "tests/fixtures/configs/controllers/onnx_toy_recurrent.toml"
+
+[compile]
+optimize = "debug"
+n_x = 3
+n_u = 2
+artifact_name = "lib_neural_network"
