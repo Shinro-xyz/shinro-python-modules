@@ -560,3 +560,74 @@ pub fn rnn_cell(
 fn sigmoid1(x: f64) f64 {
     return 1.0 / (1.0 + std.math.exp(-x));
 }
+
+// ─── gather (ONNX Gather: index-select along one axis) ────────────────────
+//
+// The index tensor is a flat f64 buffer (the VM has no integer tensor type), so
+// each index is converted once per element. Negative indices count from the end,
+// matching ONNX/numpy. `concat` needs no kernel here: it is a pure buffer copy
+// and lives in the VM's switch, next to `stack`.
+
+/// Index-select a 1-D vector: `out[j] = x[normalize(idx[j])]`.
+///
+/// Args:
+///     n: Number of selected elements (the index buffer's length).
+///     src: Length of `x` (comptime, for negative-index normalization).
+///     x: Flat source vector.
+///     idx: Flat index buffer; values are truncated toward zero.
+pub fn gather_index(comptime n: usize, comptime src: usize, x: []const f64, idx: []const f64) [n]f64 {
+    var out: [n]f64 = undefined;
+    for (0..n) |j| out[j] = x[normalize_index(idx[j], src)];
+    return out;
+}
+
+/// Row-select a row-major `(src_rows, cols)` matrix: `out[i, :] = x[idx[i], :]`.
+///
+/// Args:
+///     n_rows: Rows in the index buffer / in the result.
+///     cols: Columns per row (unchanged by the selection).
+///     src_rows: Rows in `x` (comptime, for negative-index normalization).
+pub fn gather_rows(comptime n_rows: usize, comptime cols: usize, comptime src_rows: usize, x: []const f64, idx: []const f64) [n_rows * cols]f64 {
+    var out: [n_rows * cols]f64 = undefined;
+    for (0..n_rows) |i| {
+        const r = normalize_index(idx[i], src_rows);
+        for (0..cols) |j| out[i * cols + j] = x[r * cols + j];
+    }
+    return out;
+}
+
+/// Column-select a row-major `(rows, src_cols)` matrix: `out[:, j] = x[:, idx[j]]`.
+///
+/// Args:
+///     rows: Rows in `x` / in the result.
+///     n_cols: Columns in the index buffer / in the result.
+///     src_cols: Columns in `x` (comptime, for negative-index normalization).
+pub fn gather_cols(comptime rows: usize, comptime n_cols: usize, comptime src_cols: usize, x: []const f64, idx: []const f64) [rows * n_cols]f64 {
+    var out: [rows * n_cols]f64 = undefined;
+    for (0..rows) |i| {
+        for (0..n_cols) |j| {
+            out[i * n_cols + j] = x[i * src_cols + normalize_index(idx[j], src_cols)];
+        }
+    }
+    return out;
+}
+
+/// ONNX/numpy index normalization: a negative index counts from the end.
+///
+/// The value is sanitized *before* the f64 → int conversion, because
+/// `@intFromFloat` is undefined behaviour for NaN, ±inf, and anything outside
+/// `i64` range — and the index operand can be a host-fed port, not only a baked
+/// constant. Clamping the float into `[-len, len-1]` first makes the conversion
+/// provably in range; an out-of-range index then saturates, because defined
+/// behaviour beats a panic in a deployed kernel (the importer range-checks
+/// baked indices, so the saturation path is not the intended one).
+fn normalize_index(raw: f64, comptime len: usize) usize {
+    if (comptime len == 0) return 0; // no axis to select from
+    const n: i64 = @intCast(len);
+    const nf: f64 = @floatFromInt(n);
+    if (std.math.isNan(raw)) return 0; // NaN has no integer part; define it as the first element
+    const bounded = std.math.clamp(raw, -nf, nf - 1.0); // also maps ±inf to the ends
+    const k: i64 = @intFromFloat(bounded); // now provably within [-len, len-1]
+    const wrapped = if (k < 0) k + n else k;
+    return @intCast(wrapped); // provably within [0, len-1]
+}

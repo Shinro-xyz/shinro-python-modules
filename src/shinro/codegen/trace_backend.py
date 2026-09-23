@@ -150,6 +150,37 @@ class TraceBackend:
         out_shape = (len(arrays),) + base
         return self._emit("stack", [a for a in arrays], out_shape)
 
+    def concat(self, arrays: list[Tracer], *, axis: int = 0) -> Tracer:
+        # Concatenate along an existing axis (ONNX Concat). The VM is 1-D/2-D, so
+        # only axis 0 (row blocks, or a flat vector join) and axis 1 (row-wise
+        # column join with equal row counts) are representable.
+        if not arrays:
+            raise NotImplementedError("TraceBackend.concat of empty list")
+        if axis not in (0, 1):
+            raise NotImplementedError(f"TraceBackend.concat axis={axis} (only 0 and 1 are representable)")
+        base = arrays[0].shape
+        if axis == 0:
+            out_shape = (sum(a.shape[0] for a in arrays),) + tuple(base[1:])
+        else:
+            if any(a.shape[0] != base[0] for a in arrays):
+                raise ValueError("TraceBackend.concat axis=1 needs equal row counts")
+            out_shape = (base[0], sum(a.shape[1] for a in arrays))
+        return self._emit("concat", [a for a in arrays], out_shape, axis=axis)
+
+    def gather(self, x: Tracer, idx: Tracer, *, axis: int = 0) -> Tracer:
+        # ONNX Gather: index-select along one axis. `idx` is a flat index vector
+        # (stored as f64; the VM converts per element) and replaces the selected
+        # axis, so the result keeps x's other dimensions.
+        x = _lift(self.g, x)
+        idx = _lift(self.g, idx)
+        if axis not in (0, 1):
+            raise NotImplementedError(f"TraceBackend.gather axis={axis} (only 0 and 1 are representable)")
+        if axis == 1 and len(x.shape) < 2:
+            raise NotImplementedError("TraceBackend.gather axis=1 needs a 2-D operand")
+        n = idx.shape[0]
+        out_shape = (n, x.shape[1]) if axis == 1 else (n,) + tuple(x.shape[1:])
+        return self._emit("gather", [x, idx], out_shape, axis=axis)
+
     def hstack(self, arrays: list[Tracer]) -> Tracer:
         # 1-D hstack == stack along a new leading axis + flatten: pure data
         # movement, bit-exact with np.hstack. Lets MPC_DeltaU's

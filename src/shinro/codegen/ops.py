@@ -352,6 +352,31 @@ def _rnn(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray
     return np.tanh(x @ w.T + h @ r.T + b[:H] + b[H:])
 
 
+@register_op("concat")
+def _concat(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
+    """Concatenate along an existing axis (ONNX ``Concat``).
+
+    Negative axes are resolved against the assembled rank, matching numpy, so a
+    ``-1`` axis on 1-D/2-D operands normalizes to 0/1 — the only two the VM can
+    represent.
+    """
+    axis = int(node.attrs.get("axis", 0))
+    return np.concatenate([values[i] for i in node.inputs], axis=axis)
+
+
+@register_op("gather")
+def _gather(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
+    """Index-select along one axis (ONNX ``Gather``).
+
+    ``idx`` is a flat index vector; negatives count from the end (numpy/ONNX
+    semantics), which is why the drone policies' ``[-1]`` last-step selection
+    works. The index axis is replaced by the index length.
+    """
+    axis = int(node.attrs.get("axis", 0))
+    idx = np.asarray(values[node.inputs[1]]).astype(np.int64)
+    return np.take(values[node.inputs[0]], idx, axis=axis)
+
+
 @register_op("sin")
 def _sin(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     return np.sin(values[node.inputs[0]])
