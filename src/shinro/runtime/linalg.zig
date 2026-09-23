@@ -401,3 +401,162 @@ pub fn elu(comptime m: usize, comptime alpha: f64, a: []const f64) [m]f64 {
     }
     return out;
 }
+
+// ─── recurrent cells ──────────────────────────────────────────────────────
+//
+// One fused step of an ONNX-style recurrent cell (batch 1, one timestep).
+// Each cell folds the two affine maps (`x·Wᵀ` and `h·Rᵀ`), the gate split, the
+// gate activations, and the state update into a single kernel — the same
+// arithmetic the ONNX `LSTM`/`GRU`/`RNN` ops define. A policy therefore costs
+// one graph node per cell instead of the ~17 nodes the equivalent
+// gemm/slice/sigmoid/tanh decomposition would emit.
+//
+// Layouts are ONNX's: `W` is `(rows, input)` (torch `nn.Linear`/RNN layout),
+// read as `x·Wᵀ` by striding its rows through `matvec`; `R` is `(rows, H)`;
+// `B` is `Wb ‖ Rb` with the input biases first. All dimensions are comptime,
+// every buffer is a flat fixed-size stack array, and the inner loops are
+// runtime `for` (never `inline for`) per the VM's code-size rule.
+//
+// Gate order, activation placement, and the GRU reset-gate placement follow
+// the ONNX spec exactly; every formula is validated against onnxruntime
+// (max|err| ~1e-7) on real HF robotics policies and synthetic per-arch nodes.
+
+/// LSTM cell, one step. Gate order is ONNX's `i, o, f, c`, with Sigmoid on
+/// `i`/`o`/`f` and Tanh on the cell candidate and the hidden output.
+///
+/// Args:
+///     x: Flat input `(I,)`.
+///     w: `(4H, I)` input weights (ONNX `W`).
+///     r: `(4H, H)` recurrent weights (ONNX `R`).
+///     b: `(8H,)` biases, `Wb(4H) ‖ Rb(4H)` (ONNX `B`); both halves are added.
+///     h_prev: `(H,)` previous hidden state.
+///     c_prev: `(H,)` previous cell state.
+///
+/// Returns:
+///     `(2H,)` = `h_next(0..H) ‖ c_next(H..2H)` — the whole next state in one
+///     port, which is exactly the ML-Agents `recurrent_in`/`recurrent_out`
+///     layout (`[h ‖ c]`, h first).
+pub fn lstm_cell(
+    comptime H: usize,
+    comptime I: usize,
+    x: []const f64,
+    w: []const f64,
+    r: []const f64,
+    b: []const f64,
+    h_prev: []const f64,
+    c_prev: []const f64,
+) [2 * H]f64 {
+    const gx = matvec(4 * H, I, w, x); // x·Wᵀ
+    const gh = matvec(4 * H, H, r, h_prev); // h·Rᵀ
+
+    var out: [2 * H]f64 = undefined;
+    for (0..H) |j| {
+        const i_g = sigmoid1(gx[j] + gh[j] + b[j] + b[4 * H + j]);
+        const o_g = sigmoid1(gx[H + j] + gh[H + j] + b[H + j] + b[5 * H + j]);
+        const f_g = sigmoid1(gx[2 * H + j] + gh[2 * H + j] + b[2 * H + j] + b[6 * H + j]);
+        const g_g = std.math.tanh(gx[3 * H + j] + gh[3 * H + j] + b[3 * H + j] + b[7 * H + j]);
+        const c_next = f_g * c_prev[j] + i_g * g_g;
+        out[H + j] = c_next;
+        out[j] = o_g * std.math.tanh(c_next);
+    }
+    return out;
+}
+
+/// GRU cell, one step. Gate order is ONNX's `z, r, h`, with Sigmoid on `z`/`r`
+/// and Tanh on the candidate.
+///
+/// `lbr` (ONNX `linear_before_reset`) moves the reset gate *across* the
+/// recurrent matmul, not merely the bias:
+///   - `lbr = true`  → `h = g(X·Whᵀ + r ⊙ (H·Rhᵀ + Rbh) + Wbh)`
+///   - `lbr = false` → `h = g(X·Whᵀ + (r ⊙ H)·Rhᵀ + Rbh + Wbh)`
+/// Getting this backwards silently diverges ~1e-1 (no error, just wrong
+/// numbers), so it is a comptime parameter, not a runtime branch.
+///
+/// Args:
+///     x: Flat input `(I,)`.
+///     w: `(3H, I)` input weights (ONNX `W`).
+///     r: `(3H, H)` recurrent weights (ONNX `R`).
+///     b: `(6H,)` biases, `Wbz‖Wbr‖Wbh‖Rbz‖Rbr‖Rbh` (ONNX `B`).
+///     h_prev: `(H,)` previous hidden state.
+///
+/// Returns:
+///     `(H,)` the next hidden state.
+pub fn gru_cell(
+    comptime H: usize,
+    comptime I: usize,
+    comptime lbr: bool,
+    x: []const f64,
+    w: []const f64,
+    r: []const f64,
+    b: []const f64,
+    h_prev: []const f64,
+) [H]f64 {
+    const gx = matvec(3 * H, I, w, x); // x·Wᵀ
+    const gh = matvec(3 * H, H, r, h_prev); // h·Rᵀ
+
+    var z: [H]f64 = undefined;
+    var r_g: [H]f64 = undefined;
+    for (0..H) |j| {
+        z[j] = sigmoid1(gx[j] + gh[j] + b[j] + b[3 * H + j]);
+        r_g[j] = sigmoid1(gx[H + j] + gh[H + j] + b[H + j] + b[4 * H + j]);
+    }
+
+    var out: [H]f64 = undefined;
+    if (lbr) {
+        for (0..H) |j| {
+            const n = std.math.tanh(gx[2 * H + j] + r_g[j] * (gh[2 * H + j] + b[5 * H + j]) + b[2 * H + j]);
+            out[j] = (1.0 - z[j]) * n + z[j] * h_prev[j];
+        }
+    } else {
+        // (r ⊙ H)·Rhᵀ — the reset is applied to h BEFORE the recurrent
+        // matmul, so this is not the same product the lbr=1 branch uses.
+        // Rh is R's third H-row block: offset (2H)·H into the (3H, H) matrix.
+        var rh: [H]f64 = undefined;
+        for (0..H) |j| rh[j] = r_g[j] * h_prev[j];
+        var ghr: [H]f64 = undefined;
+        for (0..H) |j| {
+            var s: f64 = 0.0;
+            for (0..H) |p| s += r[(2 * H + j) * H + p] * rh[p];
+            ghr[j] = s;
+        }
+        for (0..H) |j| {
+            const n = std.math.tanh(gx[2 * H + j] + ghr[j] + b[5 * H + j] + b[2 * H + j]);
+            out[j] = (1.0 - z[j]) * n + z[j] * h_prev[j];
+        }
+    }
+    return out;
+}
+
+/// Vanilla (Elman) RNN cell, one step: `h_next = tanh(x·Wᵀ + h·Rᵀ + Wb + Rb)`.
+///
+/// Args:
+///     x: Flat input `(I,)`.
+///     w: `(H, I)` input weights (ONNX `W`).
+///     r: `(H, H)` recurrent weights (ONNX `R`).
+///     b: `(2H,)` biases, `Wb(H) ‖ Rb(H)` (ONNX `B`); both halves are added.
+///     h_prev: `(H,)` previous hidden state.
+///
+/// Returns:
+///     `(H,)` the next hidden state.
+pub fn rnn_cell(
+    comptime H: usize,
+    comptime I: usize,
+    x: []const f64,
+    w: []const f64,
+    r: []const f64,
+    b: []const f64,
+    h_prev: []const f64,
+) [H]f64 {
+    const gx = matvec(H, I, w, x); // x·Wᵀ
+    const gh = matvec(H, H, r, h_prev); // h·Rᵀ
+    var out: [H]f64 = undefined;
+    for (0..H) |j| out[j] = std.math.tanh(gx[j] + gh[j] + b[j] + b[H + j]);
+    return out;
+}
+
+/// Scalar logistic sigmoid `1 / (1 + exp(-x))` — the gate activation the
+/// recurrent cells apply elementwise (the vector `sigmoid` above is the same
+/// map over a buffer; this avoids materialising one).
+fn sigmoid1(x: f64) f64 {
+    return 1.0 / (1.0 + std.math.exp(-x));
+}
