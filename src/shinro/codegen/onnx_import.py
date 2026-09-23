@@ -857,9 +857,9 @@ class _OnnxImporter:
             names = tuple(a.decode() if isinstance(a, bytes) else a for a in acts)
             if names != _RECURRENT_DEFAULT_ACTS[op_type]:
                 raise NotImplementedError(f"ONNX {op_type} activations={names} are not supported (ONNX defaults only)")
-        for name in ("activation_alpha", "activation_beta"):
-            if name in attrs:
-                raise NotImplementedError(f"ONNX {op_type} {name} is not supported")
+        # activation_alpha / activation_beta are deliberately ignored: they only
+        # parameterize *non-default* activations, which are rejected above, so a
+        # harmless default-valued pair must not fail the import.
 
     def _cell_weight(self, name: str, label: str, *, target_ndim: int) -> np.ndarray:
         """Fetch a recurrent weight, dropping ONNX's leading ``num_directions`` axis.
