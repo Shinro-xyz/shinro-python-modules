@@ -1281,6 +1281,28 @@ class TestRecurrentRejections:
     def test_extra_direction_axis_rejected(self, tmp_path):
         self._expect("GRU", tmp_path, "num_directions", extra_direction=True)
 
+    def test_default_valued_activation_alpha_is_accepted(self, tmp_path):
+        """alpha/beta only parameterize non-default activations.
+
+        Some exporters always emit a default-valued pair; since the activations
+        themselves must be the ONNX defaults, these can be ignored rather than
+        failing the import.
+        """
+        from onnx import helper
+
+        path, _ref = _recurrent_policy("LSTM", tmp_path)
+        model = onnx.load(path)
+        lstm = next(n for n in model.graph.node if n.op_type == "LSTM")
+        lstm.attribute.extend(
+            [
+                helper.make_attribute("activation_alpha", [0.5, 0.0, 0.0]),
+                helper.make_attribute("activation_beta", [0.0, 0.0, 0.0]),
+            ]
+        )
+        onnx.save(model, path)
+        cg = import_onnx_policy(path)
+        assert "lstm" in _op_names(cg)
+
 
 # ─── shape / metadata glue ──────────────────────────────────────────────────
 
