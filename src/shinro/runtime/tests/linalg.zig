@@ -306,3 +306,64 @@ test "gru_cell lbr is not a no-op (the two variants differ)" {
     const b = la.gru_cell(2, 3, false, &rc_x, &rc_Wg, &rc_Rg, &rc_Bg, &rc_h);
     try std.testing.expect(@abs(a[0] - b[0]) > 1e-3);
 }
+
+// ─── gather ───────────────────────────────────────────────────────────────
+// ONNX Gather: index-select along one axis. Indices are f64 buffers (the VM
+// has no integer tensor type); negatives count from the end, and an
+// out-of-range index clamps rather than panicking in a deployed kernel.
+
+test "gather_index selects in order, including negative indices" {
+    const x = [_]f64{ 10, 20, 30, 40 };
+    const idx = [_]f64{ 0, 2, -1, -2 };
+    const r = la.gather_index(4, 4, &x, &idx);
+    try std.testing.expectEqual([_]f64{ 10, 30, 40, 30 }, r);
+}
+
+test "gather_index clamps an out-of-range index" {
+    const x = [_]f64{ 10, 20, 30, 40 };
+    try std.testing.expectEqual([_]f64{40}, la.gather_index(1, 4, &x, &[_]f64{99}));
+    try std.testing.expectEqual([_]f64{10}, la.gather_index(1, 4, &x, &[_]f64{-99}));
+}
+
+test "gather_rows picks whole rows of a row-major matrix" {
+    // x = [[1, 2], [3, 4], [5, 6]] -> rows [2, 0]
+    const x = [_]f64{ 1, 2, 3, 4, 5, 6 };
+    const idx = [_]f64{ 2, 0 };
+    try std.testing.expectEqual([_]f64{ 5, 6, 1, 2 }, la.gather_rows(2, 2, 3, &x, &idx));
+}
+
+test "gather_cols picks whole columns of a row-major matrix" {
+    // x = [[1, 2, 3], [4, 5, 6]] -> columns [2, 0]
+    const x = [_]f64{ 1, 2, 3, 4, 5, 6 };
+    const idx = [_]f64{ 2, 0 };
+    try std.testing.expectEqual([_]f64{ 3, 1, 6, 4 }, la.gather_cols(2, 2, 3, &x, &idx));
+}
+
+test "gather_cols with a negative index" {
+    const x = [_]f64{ 1, 2, 3, 4, 5, 6 };
+    try std.testing.expectEqual([_]f64{ 3, 6 }, la.gather_cols(2, 1, 3, &x, &[_]f64{-1}));
+}
+
+test "gather_index sanitizes non-finite and huge indices before converting" {
+    // `@intFromFloat` is UB for these; the kernel must stay defined because the
+    // index operand can be a host-fed port rather than a baked constant.
+    const x = [_]f64{ 10, 20, 30, 40 };
+    try std.testing.expectEqual([_]f64{10}, la.gather_index(1, 4, &x, &[_]f64{std.math.nan(f64)}));
+    try std.testing.expectEqual([_]f64{40}, la.gather_index(1, 4, &x, &[_]f64{std.math.inf(f64)}));
+    try std.testing.expectEqual([_]f64{10}, la.gather_index(1, 4, &x, &[_]f64{-std.math.inf(f64)}));
+    try std.testing.expectEqual([_]f64{40}, la.gather_index(1, 4, &x, &[_]f64{1e300}));
+    try std.testing.expectEqual([_]f64{10}, la.gather_index(1, 4, &x, &[_]f64{-1e300}));
+}
+
+test "gather_index keeps the valid negative wrap boundary" {
+    // -len is a legal index (the first element); only below that does it saturate.
+    const x = [_]f64{ 10, 20, 30, 40 };
+    try std.testing.expectEqual([_]f64{10}, la.gather_index(1, 4, &x, &[_]f64{-4}));
+    try std.testing.expectEqual([_]f64{10}, la.gather_index(1, 4, &x, &[_]f64{-5}));
+}
+
+test "gather_index on a length-1 axis is total" {
+    const x = [_]f64{7};
+    try std.testing.expectEqual([_]f64{7}, la.gather_index(1, 1, &x, &[_]f64{-1}));
+    try std.testing.expectEqual([_]f64{7}, la.gather_index(1, 1, &x, &[_]f64{5}));
+}

@@ -211,6 +211,19 @@ def _selection_graph(g: Graph):
     outs["any_1d"] = g.emit("any", [a4], ())
     outs["any_2d"] = g.emit("any", [a23], ())
 
+    # concat: the two representable joins (flat/row-block append, and row-wise
+    # column join) across 1-D and 2-D operands.
+    outs["concat0_1d"] = g.emit("concat", [s6, s6], (12,), axis=0)
+    outs["concat0_2d"] = g.emit("concat", [s42, s42], (8, 2), axis=0)
+    outs["concat1_2d"] = g.emit("concat", [s42, s42], (4, 4), axis=1)
+
+    # gather: 1-D select (with a negative index), whole rows, whole columns.
+    # Indices are consts — a free index vector could land out of range, where
+    # numpy raises and the kernel clamps.
+    outs["gather_1d"] = g.emit("gather", [s6, g.emit("const", [], (3,), value=np.array([5.0, 0.0, -1.0]))], (3,), axis=0)
+    outs["gather_rows"] = g.emit("gather", [s42, g.emit("const", [], (2,), value=np.array([3.0, 1.0]))], (2, 2), axis=0)
+    outs["gather_cols"] = g.emit("gather", [s42, g.emit("const", [], (2,), value=np.array([1.0, -2.0]))], (4, 2), axis=1)
+
     specs = {
         "x32": ((3, 2), "free"),
         "x3": ((3,), "free"),

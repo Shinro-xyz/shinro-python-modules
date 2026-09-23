@@ -397,6 +397,63 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
                 const res = la.rnn_cell(H, I, x, w, r, b, h_prev);
                 for (0..node.rows * node.cols) |j| out[j] = res[j];
             },
+            // .concat — join operands along `node.aux` (0 = leading axis,
+            // 1 = trailing axis of a 2-D tensor) by copying into the output
+            // slot. Axis 0 is a flat append because row blocks are contiguous
+            // in row-major order; only axis 1 needs per-row offsets. Pure
+            // buffer movement, so — like `.stack` — it needs no linalg kernel.
+            .concat => {
+                var off: usize = 0; // running flat offset (axis 0)
+                comptime var col_off: usize = 0; // per-row column offset (axis 1)
+                inline for (node.inputs) |inp| {
+                    const src = node_input_at(g.nodes[0..], inp, &workspace);
+                    const src_n = g.nodes[inp];
+                    if (node.aux == 0) {
+                        const n = src_n.rows * src_n.cols;
+                        for (0..n) |j| out[off + j] = src[j];
+                        off += n;
+                    } else {
+                        const cols = if (src_n.vec) 1 else src_n.cols;
+                        const rows = if (node.vec) 1 else node.rows;
+                        for (0..rows) |r| {
+                            for (0..cols) |j| out[r * node.cols + col_off + j] = src[r * cols + j];
+                        }
+                        col_off += cols;
+                    }
+                }
+            },
+            // .gather — index-select along `node.aux` (ONNX Gather). The index
+            // operand is a flat f64 buffer the kernel converts per element;
+            // negatives count from the end. Which kernel depends on the source
+            // rank: a `vec` source is a 1-D select, otherwise whole rows
+            // (axis 0) or whole columns (axis 1) move.
+            .gather => {
+                const x = node_input(g.nodes[0..], node, &workspace);
+                const idx = node_input_at(g.nodes[0..], node.inputs[1], &workspace);
+                const x_n = g.nodes[node.inputs[0]];
+                const idx_n = g.nodes[node.inputs[1]];
+                const n_idx = comptime idx_n.rows * idx_n.cols;
+                comptime {
+                    if (node.aux == 1 and x_n.vec) @compileError("gather axis=1 needs a 2-D operand");
+                    const want = if (node.aux == 1)
+                        x_n.rows * n_idx
+                    else if (x_n.vec)
+                        n_idx
+                    else
+                        n_idx * x_n.cols;
+                    if (node.rows * node.cols != want) @compileError("gather: output slot size mismatch");
+                }
+                if (node.aux == 0 and x_n.vec) {
+                    const res = la.gather_index(n_idx, x_n.rows, x, idx);
+                    for (0..node.rows * node.cols) |j| out[j] = res[j];
+                } else if (node.aux == 0) {
+                    const res = la.gather_rows(n_idx, x_n.cols, x_n.rows, x, idx);
+                    for (0..node.rows * node.cols) |j| out[j] = res[j];
+                } else {
+                    const res = la.gather_cols(x_n.rows, n_idx, x_n.cols, x, idx);
+                    for (0..node.rows * node.cols) |j| out[j] = res[j];
+                }
+            },
             // .solve_qp — the convergence-iterative MPC op. The problem data
             // (P, A, l, u) and the pre-factorized KKT matrix are baked into the
             // statically-allocated `solver` global by the codegen C

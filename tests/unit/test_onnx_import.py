@@ -1391,8 +1391,8 @@ class TestShapeGlue:
         exp_u, _ = _ref_forward("GRU", obs, [(h0, None)], ref)
         np.testing.assert_allclose(got[OUTPUT_PORT], exp_u, atol=1e-12)
 
-    def test_gather_real_selection_is_rejected(self, tmp_path):
-        """Selecting a strict subset of a non-trivial axis needs runtime indexing."""
+    def test_gather_selects_from_a_data_tensor(self, tmp_path):
+        """A genuine selection becomes a runtime ``gather`` node."""
         from onnx import helper
 
         path = _save(
@@ -1405,7 +1405,61 @@ class TestShapeGlue:
             [_init("w", np.eye(3, 4, dtype=np.float32)), _int_init("idx", [0, 2])],
             tmp_path,
         )
-        with pytest.raises(NotImplementedError, match="runtime gather op"):
+        cg = import_onnx_policy(path)
+        assert "gather" in _op_names(cg)
+        x = np.array([1.0, 2.0, 3.0])
+        np.testing.assert_allclose(_run(cg, x), [x[0], x[2]], rtol=1e-12)
+
+    def test_gather_negative_index(self, tmp_path):
+        from onnx import helper
+
+        path = _save(
+            [
+                helper.make_node("MatMul", ["state", "w"], ["m"]),
+                helper.make_node("Gather", ["m", "idx"], ["y"], axis=0),
+            ],
+            [_vi("state", [None, 3])],
+            [_vi("y", [None, 1])],
+            [_init("w", np.eye(3, 4, dtype=np.float32)), _int_init("idx", [-1])],
+            tmp_path,
+        )
+        cg = import_onnx_policy(path)
+        x = np.array([1.0, 2.0, 3.0])
+        m = x @ np.eye(3, 4)  # the gathered tensor is (4,), not the 3-wide state
+        np.testing.assert_allclose(_run(cg, x), [m[-1]], rtol=1e-12)
+
+    def test_gather_scalar_index_rejected(self, tmp_path):
+        """A scalar index drops the axis in ONNX, which the flat VM cannot express."""
+        from onnx import helper
+
+        path = _save(
+            [
+                helper.make_node("MatMul", ["state", "w"], ["m"]),
+                helper.make_node("Gather", ["m", "idx"], ["y"], axis=0),
+            ],
+            [_vi("state", [None, 3])],
+            [_vi("y", [None])],
+            [_init("w", np.eye(3, 4, dtype=np.float32)), _int_init("idx", 1)],
+            tmp_path,
+        )
+        with pytest.raises(NotImplementedError, match="scalar index"):
+            import_onnx_policy(path)
+
+    def test_gather_out_of_range_index_rejected(self, tmp_path):
+        """A baked index is checked at import, so the kernel's clamp is unreachable."""
+        from onnx import helper
+
+        path = _save(
+            [
+                helper.make_node("MatMul", ["state", "w"], ["m"]),
+                helper.make_node("Gather", ["m", "idx"], ["y"], axis=0),
+            ],
+            [_vi("state", [None, 3])],
+            [_vi("y", [None, 1])],
+            [_init("w", np.eye(3, 4, dtype=np.float32)), _int_init("idx", [9])],
+            tmp_path,
+        )
+        with pytest.raises(ValueError, match="out of range"):
             import_onnx_policy(path)
 
     def test_concat_single_input_is_a_noop(self, tmp_path):
@@ -1426,7 +1480,7 @@ class TestShapeGlue:
         np.testing.assert_allclose(_run(cg, x), x @ np.eye(3, 2), rtol=1e-12)
         assert "concat" not in _op_names(cg)
 
-    def test_concat_of_two_data_tensors_is_rejected_for_now(self, tmp_path):
+    def test_concat_joins_two_data_tensors(self, tmp_path):
         from onnx import helper
 
         path = _save(
@@ -1436,5 +1490,23 @@ class TestShapeGlue:
             [],
             tmp_path,
         )
-        with pytest.raises(NotImplementedError, match="runtime concat op"):
-            import_onnx_policy(path)
+        cg = import_onnx_policy(path)
+        assert "concat" in _op_names(cg)
+        x = np.array([1.0, 2.0, 3.0])
+        np.testing.assert_allclose(_run(cg, x), np.concatenate([x, x]), rtol=1e-12)
+
+    def test_concat_negative_axis_on_1d_is_axis_zero(self, tmp_path):
+        """axis=-1 on 1-D operands normalizes to the only representable axis."""
+        from onnx import helper
+
+        path = _save(
+            [helper.make_node("Concat", ["state", "state"], ["y"], axis=-1)],
+            [_vi("state", [None, 3])],
+            [_vi("y", [None, 6])],
+            [],
+            tmp_path,
+        )
+        cg = import_onnx_policy(path)
+        x = np.array([4.0, 5.0, 6.0])
+        np.testing.assert_allclose(_run(cg, x), np.concatenate([x, x]), rtol=1e-12)
+

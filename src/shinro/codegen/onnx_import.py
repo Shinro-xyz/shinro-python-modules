@@ -623,32 +623,69 @@ class _OnnxImporter:
         if op_type == "Concat":
             if len(ids) == 1:
                 return self._reshape_to(ids[0], self.value_of(ids[0]).shape)
-            raise NotImplementedError(
-                f"ONNX Concat of {len(ids)} tensors needs a runtime concat op (not implemented yet)"
-            )
+            return self.emit_concat(ids, attrs)
 
         raise NotImplementedError(f"ONNX shape op {op_type!r} is not supported")
 
+    def emit_concat(self, ids: list[int], attrs: dict[str, Any]) -> int:
+        """Emit a runtime ``concat`` for a genuine multi-operand join.
+
+        The VM is 1-D/2-D, so axis 0 (a flat/row-block append) and axis 1 (a
+        row-wise column join) are the only representable joins. ONNX's negative
+        axis is resolved against the assembled rank.
+
+        Raises:
+            NotImplementedError: On rank-3+ operands or an unrepresentable axis.
+        """
+        rank = max(self.value_of(i).ndim for i in ids)
+        axis = int(attrs.get("axis", 0))
+        if axis < 0:
+            axis += rank
+        if rank > 2:
+            raise NotImplementedError(f"ONNX Concat over rank-{rank} operands is not supported (the VM is 1-D/2-D)")
+        if rank == 1 and axis != 0:
+            raise NotImplementedError(f"ONNX Concat axis={axis} on 1-D operands is not representable")
+        if axis not in (0, 1):
+            raise NotImplementedError(f"ONNX Concat axis={axis} on rank-{rank} operands is not representable")
+        return self.emit("concat", ids, axis=axis)
+
     def _emit_gather(self, node: Any, ids: list[int], attrs: dict[str, Any]) -> int:
-        """Handle ``Gather`` when it only moves size-1 axes (the last-step idiom).
+        """Handle ``Gather``, reducing it to a reshape or a runtime ``gather``.
 
         Selecting the single element of a length-1 axis — or the identity
         selection of a whole axis — leaves the flat order untouched, so it is a
-        reshape. A genuine multi-element selection along a non-trivial axis needs
-        runtime indexing and is rejected for now.
+        reshape (the drone policies' last-step idiom). Anything else is a real
+        data selection and becomes a ``gather`` node, which needs a 1-D index
+        vector: a scalar index drops the axis in ONNX, a shape the flat VM does
+        not carry.
+
+        Raises:
+            NotImplementedError: On a rank-3+ operand or a scalar index.
         """
         axis = int(attrs.get("axis", 0))
         x = self.value_of(ids[0])
         idx = self.value_of(ids[1]).astype(np.int64)
+        if axis < 0:
+            axis += x.ndim
         if axis >= x.ndim:
             # A collapsed leading singleton axis (batch/seq): selecting along it
             # is a no-op in the VM's 1-D/2-D layout.
             return self._reshape_to(ids[0], x.shape)
         if x.shape[axis] != 1 and not np.array_equal(idx.ravel(), np.arange(x.shape[axis])):
-            raise NotImplementedError(
-                f"ONNX Gather axis={axis} selects {idx.size} of {x.shape[axis]} elements from a data "
-                f"tensor — that needs a runtime gather op (not implemented yet)"
-            )
+            if x.ndim > 2:
+                raise NotImplementedError(f"ONNX Gather on a rank-{x.ndim} operand is not supported (the VM is 1-D/2-D)")
+            if idx.ndim != 1:
+                raise NotImplementedError(
+                    "ONNX Gather with a scalar index drops the axis, which the flat VM cannot represent; "
+                    "use a 1-element index vector instead"
+                )
+            # A baked index is checkable here: reject an out-of-range one rather
+            # than letting the kernel's clamp silently disagree with the model.
+            if self.g.nodes[ids[1]].op == "const":
+                lo, hi = -x.shape[axis], x.shape[axis]
+                if np.any(idx.ravel() < lo) or np.any(idx.ravel() >= hi):
+                    raise ValueError(f"ONNX Gather index {idx.ravel().tolist()} out of range for axis length {x.shape[axis]}")
+            return self.emit("gather", [ids[0], ids[1]], axis=axis)
         out_shape = list(x.shape)
         out_shape[axis : axis + 1] = list(idx.shape)
         return self._reshape_to(ids[0], tuple(out_shape))

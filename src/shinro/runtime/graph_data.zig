@@ -8,6 +8,7 @@ pub const Op = enum {
     sin, cos, stack, solve_qp,
     abs, sign, pow, lt, min, gemm, sigmoid, softmax, gelu, elu,
     lstm, gru, rnn,
+    concat, gather,
 };
 
 pub const Node = struct {

@@ -182,6 +182,7 @@ def lower_zig(
     lines.append("    sin, cos, stack, solve_qp,")
     lines.append("    abs, sign, pow, lt, min, gemm, sigmoid, softmax, gelu, elu,")
     lines.append("    lstm, gru, rnn,")
+    lines.append("    concat, gather,")
     lines.append("};")
     lines.append("")
     lines.append("pub const Node = struct {")
@@ -493,6 +494,11 @@ def _node_vm_info(
         # linear_before_reset rides in aux bit 0; the VM reads it as a comptime
         # bool so the two reset placements constant-fold.
         return "gru", gru_aux[i]
+    if node.op in ("concat", "gather"):
+        # The join / index axis (0 or 1) rides in aux; the importer resolves a
+        # negative ONNX axis before emitting, and a Tracer axis is validated at
+        # emit time.
+        return node.op, int(node.attrs.get("axis", 0))
     return node.op, 0
 
 
