@@ -404,3 +404,47 @@ def test_memoryless_policy_still_works(tmp_path):
     first = np.asarray(ctrl.compute(np.array([1.0, 2.0, 3.0])))
     second = np.asarray(ctrl.compute(np.array([1.0, 2.0, 3.0])))
     np.testing.assert_allclose(first, second, atol=1e-12)
+
+
+def _noise_policy(tmp_path):
+    """``y = state + RandomNormalLike(state)`` — the host must supply the noise."""
+    from onnx import TensorProto, helper
+
+    nodes = [
+        helper.make_node("RandomNormalLike", ["obs"], ["eps"], dtype=1),
+        helper.make_node("Add", ["obs", "eps"], ["y"]),
+    ]
+    graph = helper.make_graph(
+        nodes,
+        "noise",
+        [helper.make_tensor_value_info("obs", TensorProto.FLOAT, [None, 3])],
+        [helper.make_tensor_value_info("y", TensorProto.FLOAT, [None, 3])],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 14)])
+    model.ir_version = 8
+    path = tmp_path / "noise.onnx"
+    onnx.save(model, str(path))
+    return str(path)
+
+
+def test_in_network_noise_is_drawn_every_tick(tmp_path):
+    """A graph with in-network RNG gets fresh host noise each tick, reproducibly."""
+    ctrl = OnnxRLAdapter.from_config({"model_path": _noise_policy(tmp_path), "seed": 5})
+    assert ctrl.policy.noise_ports and ctrl.policy.noise_ports[0][0] == "noise_0"
+    state = np.array([1.0, 1.0, 1.0])
+    first = np.asarray(ctrl.compute(state))
+    second = np.asarray(ctrl.compute(state))
+    assert first.shape == (3,)
+    assert not np.allclose(first, second), "the noise port was not fed a fresh draw"
+    # reset() reseeds, so the first tick repeats and the policy stays reproducible
+    ctrl.reset()
+    np.testing.assert_allclose(np.asarray(ctrl.compute(state)), first, atol=0)
+
+
+def test_noise_is_standard_normal(tmp_path):
+    """The draws must be N(0,1) — that is the port's documented contract."""
+    ctrl = OnnxRLAdapter.from_config({"model_path": _noise_policy(tmp_path), "seed": 3})
+    state = np.zeros(3)
+    draws = np.array([np.asarray(ctrl.compute(state)) for _ in range(400)])
+    np.testing.assert_allclose(draws.mean(), 0.0, atol=0.15)
+    np.testing.assert_allclose(draws.std(), 1.0, atol=0.15)
