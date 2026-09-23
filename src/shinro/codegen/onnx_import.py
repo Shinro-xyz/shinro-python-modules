@@ -101,9 +101,27 @@ _SUPPORTED_OPS = frozenset(
         "Relu", "Tanh", "Sigmoid", "Elu", "Gelu", "Softmax",
         "Neg", "Abs", "Exp",
         "Clip", "Constant", "Identity", "Flatten", "Reshape", "Transpose",
+        "Squeeze", "Unsqueeze", "Cast", "Shape", "ConstantOfShape", "Gather", "Concat",
         "LSTM", "GRU", "RNN",
     }
 )
+#: Shape/metadata ops. The VM is an f64 arithmetic machine with a flat 1-D/2-D
+#: layout, so ONNX's integer-tensor shape algebra has no runtime representation;
+#: these are folded to a constant or rewritten as a reshape at import time.
+_SHAPE_GLUE_OPS = frozenset({"Shape", "ConstantOfShape", "Squeeze", "Unsqueeze", "Cast", "Gather", "Concat"})
+#: ONNX TensorProto element types → numpy dtypes (for the metadata `Cast`).
+_ONNX_DTYPES = {
+    1: np.float32,
+    2: np.uint8,
+    3: np.int8,
+    6: np.int32,
+    7: np.int64,
+    9: np.bool_,
+    10: np.float16,
+    11: np.float64,
+    12: np.uint32,
+    13: np.uint64,
+}
 #: Recurrent ONNX ops lowered to the fused ``lstm``/``gru``/``rnn`` VM ops.
 _RECURRENT_OPS = frozenset({"LSTM", "GRU", "RNN"})
 #: Attributes the recurrent translator understands; anything else is rejected.
@@ -475,6 +493,11 @@ class _OnnxImporter:
                 self.bind(name, node_id)
             return
 
+        if op_type in _SHAPE_GLUE_OPS:
+            result = self.emit_shape_glue(node, attrs)
+            self.bind(outputs[0], result)
+            return
+
         if op_type == "Gemm":
             result = self.emit_gemm(inputs, attrs)
         elif op_type == "MatMul":
@@ -547,6 +570,100 @@ class _OnnxImporter:
             beta=float(attrs.get("beta", 1.0)),
             transB=bool(int(attrs.get("transB", 0))),
         )
+
+    # ── shape / metadata glue ─────────────────────────────────────────────
+
+    def emit_shape_glue(self, node: Any, attrs: dict[str, Any]) -> int:
+        """Translate one ONNX shape/metadata op into a const or a reshape.
+
+        The VM has no integer-tensor type and no rank above 2, so ONNX's shape
+        algebra (``Shape`` → ``Gather`` → ``Unsqueeze`` → ``Concat`` → ``Reshape``,
+        and the sequence-length-1 "take the last step" dance) cannot run at
+        runtime. Every operand's value *is* known at import time, so:
+
+        - ``Shape`` folds to a constant of the input's (statically known) dims;
+        - a fully-constant subtree folds to one ``const`` — the whole idiom
+          collapses to the value the downstream ``Reshape`` consumes;
+        - a shape-only op (``Squeeze``/``Unsqueeze``/``Cast``) becomes a
+          ``reshape``: only size-1 axes move, so the flat order is unchanged;
+        - a ``Transpose``/``Gather``/single-input ``Concat`` that only moves
+          size-1 axes becomes a ``reshape`` for the same reason;
+        - anything else is rejected loudly (until a real runtime op exists).
+
+        Raises:
+            NotImplementedError: On an op that would need runtime integer
+                indexing (e.g. a genuine multi-element ``Gather`` selection).
+        """
+        from onnx import numpy_helper
+
+        op_type = node.op_type
+        inputs = [n for n in node.input if n]
+        ids = [self.tensor(n) for n in inputs]
+
+        # Shape depends only on its input's shape, which is static — fold it
+        # even when the op's own input is a data tensor.
+        if op_type == "Shape":
+            return self.const(np.asarray(self.value_of(ids[0]).shape, dtype=np.float64))
+
+        # A fully-constant subtree is pure metadata: evaluate it here and bake
+        # one const, so no runtime op is needed for integer arithmetic.
+        if all(self.g.nodes[i].op == "const" for i in ids):
+            value = np.asarray(_onnx_glue_eval(op_type, [self.values[i] for i in ids], attrs, numpy_helper), dtype=np.float64)
+            if value.ndim > 2:
+                value = value.reshape(_collapse_leading_singletons(value.shape))
+            return self.const(value)
+
+        if op_type in ("Squeeze", "Unsqueeze", "Cast"):
+            out = _onnx_glue_eval(op_type, [self.value_of(i) for i in ids], attrs, numpy_helper)
+            return self._reshape_to(ids[0], out.shape)
+
+        if op_type == "Gather":
+            return self._emit_gather(node, ids, attrs)
+
+        if op_type == "Concat":
+            if len(ids) == 1:
+                return self._reshape_to(ids[0], self.value_of(ids[0]).shape)
+            raise NotImplementedError(
+                f"ONNX Concat of {len(ids)} tensors needs a runtime concat op (not implemented yet)"
+            )
+
+        raise NotImplementedError(f"ONNX shape op {op_type!r} is not supported")
+
+    def _emit_gather(self, node: Any, ids: list[int], attrs: dict[str, Any]) -> int:
+        """Handle ``Gather`` when it only moves size-1 axes (the last-step idiom).
+
+        Selecting the single element of a length-1 axis — or the identity
+        selection of a whole axis — leaves the flat order untouched, so it is a
+        reshape. A genuine multi-element selection along a non-trivial axis needs
+        runtime indexing and is rejected for now.
+        """
+        axis = int(attrs.get("axis", 0))
+        x = self.value_of(ids[0])
+        idx = self.value_of(ids[1]).astype(np.int64)
+        if axis >= x.ndim:
+            # A collapsed leading singleton axis (batch/seq): selecting along it
+            # is a no-op in the VM's 1-D/2-D layout.
+            return self._reshape_to(ids[0], x.shape)
+        if x.shape[axis] != 1 and not np.array_equal(idx.ravel(), np.arange(x.shape[axis])):
+            raise NotImplementedError(
+                f"ONNX Gather axis={axis} selects {idx.size} of {x.shape[axis]} elements from a data "
+                f"tensor — that needs a runtime gather op (not implemented yet)"
+            )
+        out_shape = list(x.shape)
+        out_shape[axis : axis + 1] = list(idx.shape)
+        return self._reshape_to(ids[0], tuple(out_shape))
+
+    def _reshape_to(self, src_id: int, shape: Any) -> int:
+        """Alias a shape-only op as a ``reshape`` (skipped when it is a no-op).
+
+        The VM stores a 1-D tensor as ``rows = n, cols = 1``, so rank-3 shapes
+        collapse to their 2-D form. When the source already has that shape the
+        node is returned unchanged — a pure-metadata op costs no graph node.
+        """
+        target = _collapse_leading_singletons(shape)
+        if _collapse_leading_singletons(self.value_of(src_id).shape) == target:
+            return src_id
+        return self.emit("reshape", [src_id], target_shape=target)
 
     # ── recurrent cells ───────────────────────────────────────────────────
 
@@ -713,20 +830,22 @@ class _OnnxImporter:
         """Bind the ONNX cell's output tensors to the fused node's slot.
 
         For LSTM the kernel emits ``[h ‖ c]``; each half is sliced only when the
-        action actually consumes it, so an unused ``Y_c`` costs no node. The
-        sequence output ``Y`` is rejected (its rank-3 layout would have to be
-        reconciled per consumer).
+        action actually consumes it, so an unused ``Y_c`` costs no node.
+
+        The sequence output ``Y`` is bound to the same value as ``Y_h``: with
+        seq == 1 the sequence *is* the single step, so the two are identical
+        (this is what lets the drone policies' "take the last step" idiom —
+        Squeeze/Transpose/Gather over ``Y`` — collapse to a no-op). Any consumer
+        that reordered ``Y`` for real would be rejected by the shape-glue layer,
+        because none of those ops are order-preserving in that case.
         """
         raw = list(node.output)
         y = raw[0] if raw else None
         y_h = raw[1] if len(raw) > 1 else None
         y_c = raw[2] if len(raw) > 2 else None
-        if y and y in self.consumed:
-            raise NotImplementedError(
-                f"ONNX {node.op_type} sequence output {y!r} is not supported — consume the "
-                f"per-step hidden state (Y_h/Y_c) instead"
-            )
         bound: dict[str, int] = {}
+        if y and y in self.consumed:
+            bound[y] = self.emit("slice", [out_id], start=0, stop=H) if split else out_id
         if y_h and y_h in self.consumed:
             bound[y_h] = self.emit("slice", [out_id], start=0, stop=H) if split else out_id
         if split and y_c and y_c in self.consumed:
@@ -889,6 +1008,22 @@ class _OnnxImporter:
         n = self.value_of(x_id).ndim
         perm = attrs.get("perm")
         perm = list(range(n))[::-1] if perm is None else [int(p) for p in perm]
+        x = self.value_of(x_id)
+        # ONNX tensors here carry leading size-1 batch/seq axes that the VM
+        # collapses, so pad the shape back out before judging the permutation: a
+        # perm that only moves those collapsed singletons leaves the flat f64
+        # order untouched (the sequence-length-1 "take the last step" idiom) and
+        # is therefore a reshape — usually a no-op.
+        rank = max(n, len(perm))
+        pad = rank - n
+        padded = (1,) * pad + tuple(x.shape)
+        perm_padded = perm if len(perm) == rank else list(range(rank))
+        if all(padded[a] == 1 or perm_padded[a] == a for a in range(rank)):
+            # Drop exactly the padding dims we added: collapsing them generically
+            # would stop at rank 2 and leave a spurious leading 1, which then
+            # reads as a real (non-singleton) axis downstream.
+            out = [padded[perm_padded[a]] for a in range(rank)]
+            return self._reshape_to(x_id, out[pad:])
         if n != 2 or perm not in ([1, 0], [0, 1]):
             raise NotImplementedError(
                 f"ONNX Transpose perm={perm} on a rank-{n} input is not supported "
@@ -1082,6 +1217,55 @@ def import_onnx_policy(
         NotImplementedError: On an unsupported ONNX op or attribute.
     """
     return _OnnxImporter(model_path, n_x=n_x, obs_cfg=obs_cfg, action_cfg=action_cfg, output_name=output_name).build()
+
+
+def _onnx_glue_eval(op_type: str, values: list[Any], attrs: dict[str, Any], numpy_helper: Any) -> np.ndarray:
+    """Evaluate one shape-glue ONNX op in numpy (import-time only).
+
+    These ops move integer metadata (shapes, indices) around; the importer stores
+    every tensor as float64, so the results are floats here too. Only the ops the
+    importer accepts reach this function.
+    """
+    x = np.asarray(values[0], dtype=np.float64)
+    # opset >= 13 passes Squeeze/Unsqueeze axes as a second *input tensor*; older
+    # opsets use an attribute. Accept both.
+    axes = attrs.get("axes")
+    if axes is None and len(values) > 1:
+        axes = np.asarray(values[1]).astype(np.int64).ravel().tolist()
+    if op_type == "ConstantOfShape":
+        dims = tuple(int(v) for v in x.ravel())
+        raw = attrs.get("value")
+        fill = float(numpy_helper.to_array(raw).ravel()[0]) if raw is not None else 0.0
+        return np.full(dims, fill, dtype=np.float64)
+    if op_type == "Squeeze":
+        if axes is None:
+            return np.squeeze(x) if x.ndim else x
+        keep = tuple(int(a) for a in axes)
+        # An axis at/above the current rank names a leading singleton the VM
+        # collapses (batch/seq/direction), so there is nothing to squeeze.
+        if any(a >= x.ndim for a in keep):
+            return x
+        return np.squeeze(x, axis=keep)
+    if op_type == "Unsqueeze":
+        if axes is None:
+            raise NotImplementedError("ONNX Unsqueeze without axes")
+        keep = [int(a) for a in axes]
+        if any(a > x.ndim for a in keep):
+            return x
+        out = x
+        for axis in sorted(keep):
+            out = np.expand_dims(out, axis=axis)
+        return out
+    if op_type == "Cast":
+        return np.asarray(x, dtype=_ONNX_DTYPES.get(int(attrs.get("to", 1)), np.float64)).astype(np.float64)
+    if op_type == "Gather":
+        axis = int(attrs.get("axis", 0))
+        if axis >= x.ndim:  # a collapsed leading singleton axis
+            return x
+        return np.take(x, np.asarray(values[1]).astype(np.int64), axis=axis)
+    if op_type == "Concat":
+        return np.concatenate([np.asarray(v, dtype=np.float64) for v in values], axis=int(attrs.get("axis", 0)))
+    raise NotImplementedError(f"cannot evaluate ONNX shape op {op_type!r} in numpy")
 
 
 def _collapse_leading_singletons(shape: Any) -> tuple[int, ...]:
