@@ -38,6 +38,13 @@ Supported ONNX surface — everything else raises ``NotImplementedError``:
   ``axis`` is rejected loudly)
 - ``Gelu`` — lowered to the fused tanh-approx ``gelu`` op; ``approximate``
   must be ``"tanh"`` (the exact erf default is rejected loudly)
+- ``LSTM`` / ``GRU`` / ``RNN`` — lowered to one fused cell each, replacing the
+  ~17-node gemm/slice/sigmoid decomposition of the same arithmetic. The cell's
+  initial state is bound to a graph input port and its new state published as a
+  graph state output, so the host feeds the recurrence back each tick; the
+  ONNX graph's own ``initial_h``/``initial_c`` chain is intercepted. Only
+  single-layer, forward, single-step, batch-1 cells with the default
+  activations are supported — anything else is rejected loudly.
 
 Nodes that do not contribute to the declared output are ignored, so an
 exporter's stray logging/cast node does not fail the import.
@@ -94,8 +101,35 @@ _SUPPORTED_OPS = frozenset(
         "Relu", "Tanh", "Sigmoid", "Elu", "Gelu", "Softmax",
         "Neg", "Abs", "Exp",
         "Clip", "Constant", "Identity", "Flatten", "Reshape", "Transpose",
+        "LSTM", "GRU", "RNN",
     }
 )
+#: Recurrent ONNX ops lowered to the fused ``lstm``/``gru``/``rnn`` VM ops.
+_RECURRENT_OPS = frozenset({"LSTM", "GRU", "RNN"})
+#: Attributes the recurrent translator understands; anything else is rejected.
+_RECURRENT_ATTRS = frozenset(
+    {
+        "hidden_size",
+        "direction",
+        "layout",
+        "linear_before_reset",
+        "clip",
+        "activations",
+        "activation_alpha",
+        "activation_beta",
+        "input_forget",
+    }
+)
+#: ONNX's default activation list per recurrent op — the fused kernels hardcode
+#: exactly these, so a policy overriding them is rejected rather than silently
+#: computed with the wrong nonlinearity.
+_RECURRENT_DEFAULT_ACTS = {
+    "LSTM": ("Sigmoid", "Tanh", "Tanh"),
+    "GRU": ("Sigmoid", "Tanh"),
+    "RNN": ("Tanh",),
+}
+#: ONNX gate-stack width per recurrent op (rows of W/R are ngates*H).
+_RECURRENT_GATES = {"LSTM": 4, "GRU": 3, "RNN": 1}
 #: Binary elementwise ONNX ops translated to a same-named shinro op.
 _BINARY_OPS = {"Add": "add", "Mul": "mul", "Sub": "sub", "Div": "div", "Pow": "pow"}
 #: Unary ONNX ops translated straight to a same-named shinro op.
@@ -160,6 +194,19 @@ class _OnnxImporter:
         self.inputs: dict[str, np.ndarray] = {}
         self.initializers: dict[str, np.ndarray] = {}
 
+        # Recurrent-cell bookkeeping. Each cell binds its initial state to
+        # fresh graph input ports (``state_h_<k>`` / ``state_c_<k>``) and
+        # publishes its new state as a graph state output. The ONNX graph's own
+        # initial_h/initial_c chain is intercepted, because the deployed
+        # recurrence is ours — the host feeds the state back each tick — not a
+        # trace-time constant that would silently freeze it.
+        self.cell_count = 0
+        self.state_port_names: list[str] = []
+        self.state_output_names: list[str] = []
+        # Tensor names consumed by the nodes the action depends on. A recurrent
+        # cell only materialises an output slice for the halves in here.
+        self.consumed: set[str] = set()
+
         # Overwritten by _resolve_action_cfg(); the defaults keep the object
         # introspectable before build() runs.
         self.action_space = "continuous"
@@ -189,10 +236,21 @@ class _OnnxImporter:
         graph_proto = onnx.load(self.model_path).graph
         self.initializers = {t.name: np.asarray(numpy_helper.to_array(t), dtype=np.float64) for t in graph_proto.initializer}
 
-        input_name, state_keys, n_x = self._resolve_ports(graph_proto)
         resolved_output = self.output_name or graph_proto.output[0].name
         nodes = list(graph_proto.node)
-        needed = _needed_node_indices(nodes, resolved_output, self.initializers, input_name)
+        # Only non-initializer graph inputs are real ports. A recurrent export
+        # usually adds one per cell state (torch's h_in/c_in, ML-Agents'
+        # recurrent_in); the reachability walk stops at the cells' initial-state
+        # slots, so those tensors never look like extra policy inputs.
+        real_inputs = [i.name for i in graph_proto.input if i.name not in self.initializers]
+        needed = _needed_node_indices(nodes, resolved_output, self.initializers, set(real_inputs))
+        # Only the traversed upstream inputs count as "consumed": a recurrent
+        # cell's initial-state slots are intercepted, so the tensors feeding
+        # them must not be mistaken for observation inputs, and Y_h/Y_c are only
+        # sliced when something the action needs reads them.
+        self.consumed = {t for idx in needed for t in _upstream_inputs(nodes[idx]) if t}
+
+        input_name, state_keys, n_x = self._resolve_ports(graph_proto, real_inputs)
 
         self.inputs = {STATE_PORT: np.ones(n_x, dtype=np.float64)}
         state_id = self.emit("input", [], name=STATE_PORT)
@@ -213,43 +271,56 @@ class _OnnxImporter:
         epsilon_id = self._emit_epsilon(action_id, ports) if self.samples_actions else None
         u = self.apply_action(action_id, epsilon_id)
         self.emit("output", [u], name=OUTPUT_PORT)
-        return ComposedGraph(graph=self.g, inputs=ports, outputs=[OUTPUT_PORT])
+        # Recurrent state ports are appended last, so a memoryless policy's port
+        # layout (and its golden manifest) is unchanged.
+        ports += self.state_port_names
+        return ComposedGraph(
+            graph=self.g,
+            inputs=ports,
+            outputs=[OUTPUT_PORT],
+            state_inputs=list(self.state_port_names),
+            state_outputs=list(self.state_output_names),
+        )
 
-    def _resolve_ports(self, graph_proto: Any) -> tuple[str, list[int], int]:
-        """Resolve the input tensor name, observation indices, and ``n_x``.
+    def _resolve_ports(self, graph_proto: Any, real_inputs: list[str]) -> tuple[str, list[int], int]:
+        """Resolve the observation input name, its indices, and ``n_x``.
 
-        Validates the model's declared input against the observation config, so
-        a ``state_keys`` list that disagrees with the ONNX input (or reaches
-        past ``n_x``) fails here rather than producing a silently mis-wired
-        encoder.
+        A recurrent export declares more than one graph input (one per cell
+        state). Only the input the *action* actually consumes is the
+        observation: the reachability walk already skipped the cells'
+        initial-state slots, so anything still consumed is the observation.
+        Exactly one such input is required.
 
         Args:
             graph_proto: The model's ``GraphProto``.
+            real_inputs: Names of the graph's non-initializer inputs.
 
         Returns:
             ``(input_name, state_keys, n_x)``.
 
         Raises:
-            ValueError: On multiple graph inputs, an ``input_name`` override
-                that does not match, an unknown observation key, an
-                un-inferable observation dimension, or out-of-range
-                ``state_keys``.
+            ValueError: On zero or multiple observation inputs, an
+                ``input_name`` override that does not match, an unknown
+                observation key, an un-inferable observation dimension, or
+                out-of-range ``state_keys``.
         """
         unknown = set(self.obs_cfg) - _OBS_KEYS
         if unknown:
             raise ValueError(f"observation has unknown key(s): {sorted(unknown)} — valid keys: {sorted(_OBS_KEYS)}")
-        real_inputs = [i for i in graph_proto.input if i.name not in self.initializers]
-        if len(real_inputs) != 1:
+        obs_candidates = [name for name in real_inputs if name in self.consumed]
+        if len(obs_candidates) != 1:
             raise ValueError(
-                f"ONNX policy must declare exactly one non-initializer input "
-                f"(got {[i.name for i in real_inputs]}); multi-input policies are not supported"
+                f"ONNX policy must expose exactly one observation input that the action "
+                f"depends on (got {obs_candidates} of {real_inputs}); multi-input policies "
+                f"are not supported (recurrent initial states are bound as separate ports)"
             )
-        input_name = self.obs_cfg.get("input_name") or real_inputs[0].name
-        if input_name != real_inputs[0].name:
-            raise ValueError(f"observation.input_name {input_name!r} is not the model's input {real_inputs[0].name!r}")
+        input_name = self.obs_cfg.get("input_name") or obs_candidates[0]
+        if input_name != obs_candidates[0]:
+            raise ValueError(f"observation.input_name {input_name!r} is not the model's observation input {obs_candidates[0]!r}")
+        input_value_info = next(i for i in graph_proto.input if i.name == input_name)
 
         state_keys = self.obs_cfg.get("state_keys")
-        declared_obs = _declared_last_dim(real_inputs[0])
+        declared_obs = _declared_last_dim(input_value_info)
         if state_keys is None:
             if declared_obs is None:
                 raise ValueError("cannot infer the observation dimension from the ONNX input shape — set observation.state_keys")
@@ -281,11 +352,23 @@ class _OnnxImporter:
 
         Raises:
             NotImplementedError: If ``op`` is not in the registry.
+            ValueError: If the op would leave a rank-3+ tensor in the graph
+                (the lowered VM is 1-D/2-D only). A ``reshape`` to a rank-3
+                target is collapsed instead — ONNX recurrent exports routinely
+                reshape an activation to ``(1, 1, I)``, and collapsing the
+                leading singletons is exactly the 1-D form the VM wants.
         """
         if not has_op(op):
             raise missing_op_error(op)
+        if op == "reshape" and "target_shape" in attrs:
+            attrs["target_shape"] = _collapse_leading_singletons(attrs["target_shape"])
         probe = Node(op=op, inputs=list(inputs), shape=(), attrs=dict(attrs))
         value = np.asarray(OP_HANDLERS[op](probe, self.values, self.inputs), dtype=np.float64)
+        if value.ndim > 2:
+            raise ValueError(
+                f"ONNX op {op!r} produced a rank-{value.ndim} tensor {value.shape}; the "
+                f"lowered VM supports 1-D and 2-D tensors only"
+            )
         node_id = self.g.emit(op, inputs, value.shape, **attrs)
         self.values[node_id] = value
         return node_id
@@ -381,8 +464,16 @@ class _OnnxImporter:
                 f"{sorted(_SUPPORTED_OPS)}. Decompose the policy to Gemm/MatMul/Add + Relu/Tanh/Sigmoid/Softmax/Gelu, "
                 f"or extend shinro.codegen.onnx_import."
             )
-        if len(outputs) != 1:
+        if len(outputs) != 1 and op_type not in _RECURRENT_OPS:
             raise NotImplementedError(f"ONNX op {op_type!r} must have exactly one output (got {outputs})")
+
+        if op_type in _RECURRENT_OPS:
+            # Recurrent ops have several optional outputs (Y, Y_h[, Y_c]) and
+            # bind them themselves, so the single-output contract above does
+            # not apply.
+            for name, node_id in self.emit_recurrent(node, attrs).items():
+                self.bind(name, node_id)
+            return
 
         if op_type == "Gemm":
             result = self.emit_gemm(inputs, attrs)
@@ -456,6 +547,191 @@ class _OnnxImporter:
             beta=float(attrs.get("beta", 1.0)),
             transB=bool(int(attrs.get("transB", 0))),
         )
+
+    # ── recurrent cells ───────────────────────────────────────────────────
+
+    def emit_recurrent(self, node: Any, attrs: dict[str, Any]) -> dict[str, int]:
+        """Lower one ONNX ``LSTM``/``GRU``/``RNN`` to a single fused VM cell.
+
+        The cell's initial state is bound to fresh graph ports rather than
+        following the ONNX graph's ``initial_h``/``initial_c`` producers, so
+        the deployed recurrence is live (the host feeds the state back) and a
+        policy exported with a baked zero state does not silently become
+        memoryless. Its new state is published as a graph state output — for
+        LSTM the kernel emits ``[h ‖ c]`` in one tensor, which is exactly the
+        ML-Agents ``recurrent_in``/``recurrent_out`` layout.
+
+        Only single-layer, single-direction, single-step, batch-1 cells are
+        supported; everything else (unrolled sequences, bidirectional, gate
+        clipping, custom activations, peepholes) is rejected loudly rather than
+        silently mis-computed.
+
+        Returns:
+            ONNX output tensor name → shinro node id, for the outputs the
+            action actually consumes.
+        """
+        op = {"LSTM": "lstm", "GRU": "gru", "RNN": "rnn"}[node.op_type]
+        self._validate_recurrent_attrs(node.op_type, attrs)
+        raw = list(node.input)
+        if len(raw) > 4 and raw[4]:
+            raise NotImplementedError(f"ONNX {node.op_type} sequence_lens is not supported (single-step policies only)")
+        if op == "lstm" and len(raw) > 7 and raw[7]:
+            raise NotImplementedError("ONNX LSTM peepholes (P) are not supported")
+
+        H = int(attrs["hidden_size"])
+        ng = _RECURRENT_GATES[node.op_type]
+        w = self._cell_weight(raw[1], f"ONNX {node.op_type} W", target_ndim=2)
+        if w.shape[0] != ng * H:
+            raise ValueError(f"ONNX {node.op_type} W must be ({ng * H}, I) for hidden_size={H}, got {w.shape}")
+        input_size = int(w.shape[1])
+        r = self._cell_weight(raw[2], f"ONNX {node.op_type} R", target_ndim=2)
+        if r.shape != (ng * H, H):
+            raise ValueError(f"ONNX {node.op_type} R must be ({ng * H}, {H}), got {r.shape}")
+        if raw[3]:
+            b = self._cell_weight(raw[3], f"ONNX {node.op_type} B", target_ndim=1)
+            if b.shape != (2 * ng * H,):
+                raise ValueError(f"ONNX {node.op_type} B must be ({2 * ng * H},), got {b.shape}")
+        else:
+            b = np.zeros(2 * ng * H, dtype=np.float64)
+
+        x_id = self._cell_activation(raw[0], input_size, node.op_type)
+
+        k = self.cell_count
+        self.cell_count += 1
+        h_port = f"state_h_{k}"
+        h_id = self._state_input(h_port, (H,))
+        self.state_port_names.append(h_port)
+        operands = [x_id, self.const(w), self.const(r), self.const(b), h_id]
+        if op == "lstm":
+            c_port = f"state_c_{k}"
+            operands.append(self._state_input(c_port, (H,)))
+            self.state_port_names.append(c_port)
+            out_id = self.emit("lstm", operands)
+            bound = self._bind_cell_outputs(node, out_id, H, split=True)
+        else:
+            kwargs: dict[str, Any] = {}
+            if op == "gru":
+                kwargs["linear_before_reset"] = bool(int(attrs.get("linear_before_reset", 0)))
+            out_id = self.emit(op, operands, **kwargs)
+            bound = self._bind_cell_outputs(node, out_id, H, split=False)
+
+        state_name = f"state_hc_{k}" if op == "lstm" else f"state_h_{k}"
+        self.emit("output", [out_id], name=state_name)
+        self.state_output_names.append(state_name)
+        return bound
+
+    def _validate_recurrent_attrs(self, op_type: str, attrs: dict[str, Any]) -> None:
+        """Reject recurrent attributes the fused kernels do not implement.
+
+        Raises:
+            ValueError: If ``hidden_size`` is missing.
+            NotImplementedError: On any unsupported attribute or value
+                (direction, layout, gate clip, custom activations, ...).
+        """
+        unknown = set(attrs) - _RECURRENT_ATTRS
+        if unknown:
+            raise NotImplementedError(f"ONNX {op_type} carries unsupported attribute(s): {sorted(unknown)}")
+        if "hidden_size" not in attrs:
+            raise ValueError(f"ONNX {op_type} is missing the required hidden_size attribute")
+        direction = attrs.get("direction", "forward")
+        direction = direction.decode() if isinstance(direction, bytes) else direction
+        if direction != "forward":
+            raise NotImplementedError(f"ONNX {op_type} direction={direction!r} is not supported (forward only)")
+        if int(attrs.get("layout", 0)):
+            raise NotImplementedError(f"ONNX {op_type} layout=1 (batch-major) is not supported")
+        if int(attrs.get("input_forget", 0)):
+            raise NotImplementedError("ONNX LSTM input_forget=1 is not supported")
+        if "clip" in attrs:
+            raise NotImplementedError(f"ONNX {op_type} clip is not supported (the fused kernel has no gate clip)")
+        acts = attrs.get("activations")
+        if acts is not None:
+            names = tuple(a.decode() if isinstance(a, bytes) else a for a in acts)
+            if names != _RECURRENT_DEFAULT_ACTS[op_type]:
+                raise NotImplementedError(f"ONNX {op_type} activations={names} are not supported (ONNX defaults only)")
+        for name in ("activation_alpha", "activation_beta"):
+            if name in attrs:
+                raise NotImplementedError(f"ONNX {op_type} {name} is not supported")
+
+    def _cell_weight(self, name: str, label: str, *, target_ndim: int) -> np.ndarray:
+        """Fetch a recurrent weight, dropping ONNX's leading ``num_directions`` axis.
+
+        ONNX stores W/R as ``[num_dir, ngates*H, I]`` and B as
+        ``[num_dir, 2*ngates*H]``; only a single forward layer is supported, so
+        the leading axis must be 1 when present.
+        """
+        value = self.initializers.get(name)
+        if value is None:
+            raise ValueError(f"{label} must be an initializer (got tensor {name!r})")
+        if value.ndim == target_ndim + 1:
+            if value.shape[0] != 1:
+                raise NotImplementedError(f"{label}: num_layers/num_directions must be 1 (got shape {value.shape})")
+            value = value[0]
+        if value.ndim != target_ndim:
+            raise ValueError(f"{label}: expected rank {target_ndim} after dropping num_directions, got shape {value.shape}")
+        return np.asarray(value, dtype=np.float64)
+
+    def _cell_activation(self, name: str, input_size: int, op_type: str) -> int:
+        """Resolve a cell's X operand and collapse ``(seq, batch, I)`` to 1-D.
+
+        Raises:
+            NotImplementedError: On a batched or multi-step input.
+            ValueError: If the input's width disagrees with ``W``.
+        """
+        node_id = self.tensor(name)
+        shape = self.value_of(node_id).shape
+        if len(shape) == 3:
+            if shape[0] != 1 or shape[1] != 1:
+                raise NotImplementedError(
+                    f"ONNX {op_type} only supports seq=batch=1 (got X shape {shape}); "
+                    f"unrolled sequences and batched policies are not supported"
+                )
+            node_id = self.emit("reshape", [node_id], target_shape=(shape[2],))
+        elif len(shape) == 2:
+            if shape[0] != 1:
+                raise NotImplementedError(f"ONNX {op_type} only supports batch=1 (got X shape {shape})")
+            node_id = self.emit("reshape", [node_id], target_shape=(shape[1],))
+        elif len(shape) != 1:
+            raise NotImplementedError(f"ONNX {op_type} X must be rank 1-3, got shape {shape}")
+        if int(np.prod(self.value_of(node_id).shape)) != input_size:
+            raise ValueError(
+                f"ONNX {op_type} X width {self.value_of(node_id).shape} does not match W's input width {input_size}"
+            )
+        return node_id
+
+    def _state_input(self, name: str, shape: tuple[int, ...]) -> int:
+        """Declare a recurrent-state input port and return its node id.
+
+        The initial state is always a port, never a baked constant: a constant
+        would silently disable the recurrence in the deployed graph. The host
+        seeds zeros (or any chosen state) at tick 0 and feeds the previous
+        tick's state output thereafter.
+        """
+        self.inputs[name] = np.zeros(shape, dtype=np.float64)
+        return self.emit("input", [], name=name)
+
+    def _bind_cell_outputs(self, node: Any, out_id: int, H: int, *, split: bool) -> dict[str, int]:
+        """Bind the ONNX cell's output tensors to the fused node's slot.
+
+        For LSTM the kernel emits ``[h ‖ c]``; each half is sliced only when the
+        action actually consumes it, so an unused ``Y_c`` costs no node. The
+        sequence output ``Y`` is rejected (its rank-3 layout would have to be
+        reconciled per consumer).
+        """
+        raw = list(node.output)
+        y = raw[0] if raw else None
+        y_h = raw[1] if len(raw) > 1 else None
+        y_c = raw[2] if len(raw) > 2 else None
+        if y and y in self.consumed:
+            raise NotImplementedError(
+                f"ONNX {node.op_type} sequence output {y!r} is not supported — consume the "
+                f"per-step hidden state (Y_h/Y_c) instead"
+            )
+        bound: dict[str, int] = {}
+        if y_h and y_h in self.consumed:
+            bound[y_h] = self.emit("slice", [out_id], start=0, stop=H) if split else out_id
+        if split and y_c and y_c in self.consumed:
+            bound[y_c] = self.emit("slice", [out_id], start=H, stop=2 * H)
+        return bound
 
     def emit_softmax(self, x_id: int, attrs: dict[str, Any]) -> int:
         """Emit a last-axis softmax for ONNX ``Softmax``.
@@ -808,6 +1084,25 @@ def import_onnx_policy(
     return _OnnxImporter(model_path, n_x=n_x, obs_cfg=obs_cfg, action_cfg=action_cfg, output_name=output_name).build()
 
 
+def _collapse_leading_singletons(shape: Any) -> tuple[int, ...]:
+    """Drop leading singleton dims so a shape fits the VM's 2-D limit.
+
+    ONNX recurrent exports reshape an activation to ``(1, 1, I)``; the VM stores
+    a 1-D tensor as ``rows = n, cols = 1``, so the collapsed form is the 1-D
+    ``(I,)``. Values are unchanged (the dropped dims are 1), and a shape that
+    still exceeds rank 2 is rejected rather than silently truncated.
+
+    Raises:
+        ValueError: If leading singletons cannot reduce the shape to rank <= 2.
+    """
+    dims = tuple(int(d) for d in shape)
+    while len(dims) > 2 and dims[0] == 1:
+        dims = dims[1:]
+    if len(dims) > 2:
+        raise ValueError(f"cannot fit rank-{len(dims)} shape {dims} into the VM's 2-D limit")
+    return dims
+
+
 def _onnx_modules() -> tuple[Any, Any]:
     """Import and return the lazily-required ``(onnx, numpy_helper)`` modules.
 
@@ -822,7 +1117,23 @@ def _onnx_modules() -> tuple[Any, Any]:
     return onnx, numpy_helper
 
 
-def _needed_node_indices(nodes: list[Any], output_name: str, initializers: dict[str, np.ndarray], input_name: str) -> set[int]:
+def _upstream_inputs(node: Any) -> list[str]:
+    """The inputs the reachability walk follows for ``node``.
+
+    A recurrent op's ``sequence_lens`` and ``initial_h``/``initial_c`` (indices
+    4+) are replaced by fresh graph ports, so they are neither traversed nor
+    counted as consumed. W/R/B (indices 1-3) stay in the walk in case they are
+    produced rather than baked as initializers.
+    """
+    return node.input[:4] if node.op_type in _RECURRENT_OPS else node.input
+
+
+def _needed_node_indices(
+    nodes: list[Any],
+    output_name: str,
+    initializers: dict[str, np.ndarray],
+    leaf_names: set[str],
+) -> set[int]:
     """Collect the node indices the declared output actually depends on.
 
     A backwards walk from ``output_name`` through tensor producers. Exporters
@@ -830,11 +1141,18 @@ def _needed_node_indices(nodes: list[Any], output_name: str, initializers: dict[
     branches), and those must not fail the import — only the reachable subgraph
     is translated, so an unsupported op is rejected exactly when it matters.
 
+    The walk stops at a recurrent op's non-weight inputs (indices 4+): its
+    ``sequence_lens`` and ``initial_h``/``initial_c`` are replaced by fresh
+    graph ports, so the ONNX tensors feeding them — an ML-Agents
+    ``recurrent_in``, a torch ``h_in``/``c_in`` — must not pull nodes (or extra
+    policy inputs) into the compiled graph. W/R/B (indices 1-3) are still
+    followed when they are produced rather than baked as initializers.
+
     Args:
         nodes: The ONNX graph's nodes, in topological order.
         output_name: ONNX tensor name of the requested output.
         initializers: Initializer names (leaves of the walk).
-        input_name: The model's real input tensor name (leaf of the walk).
+        leaf_names: The model's real (non-initializer) input tensor names.
 
     Returns:
         Indices into ``nodes`` of the reachable nodes.
@@ -860,11 +1178,11 @@ def _needed_node_indices(nodes: list[Any], output_name: str, initializers: dict[
             continue
         idx = producer.get(name)
         if idx is None:
-            if name == input_name:
+            if name in leaf_names:
                 continue
             raise ValueError(f"ONNX graph references unknown tensor {name!r}")
         needed.add(idx)
-        stack.extend(n for n in nodes[idx].input if n)
+        stack.extend(n for n in _upstream_inputs(nodes[idx]) if n)
     return needed
 
 

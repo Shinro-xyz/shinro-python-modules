@@ -111,6 +111,9 @@ class _GraphPolicy:
         self.state_size = _graph_port_size(cg.graph, STATE_PORT)
         self.noise_port = EPSILON_PORT if EPSILON_PORT in self.inputs else None
         self.noise_size = _graph_port_size(cg.graph, EPSILON_PORT) if self.noise_port else 0
+        # Recurrent feedback: what each published state output refills next tick.
+        self._state_plan = _state_feedback_plan(cg.state_outputs, lambda n: _graph_port_size(cg.graph, n))
+        self.state = _zero_state(self._state_plan, lambda n: _graph_port_size(cg.graph, n))
 
     @property
     def gumbel(self) -> bool:
@@ -118,10 +121,20 @@ class _GraphPolicy:
         return "one_hot" in self.ops
 
     def step(self, feed: dict[str, np.ndarray]) -> np.ndarray:
-        """Run one tick through the interpreter."""
+        """Run one tick through the interpreter, carrying the recurrent state."""
         from shinro.codegen.interpreter import interpret
 
-        return interpret(self._cg.graph, feed)[self._u_port]
+        out = interpret(self._cg.graph, {**feed, **self.state})
+        for out_port, chunks in self._state_plan:
+            values = np.asarray(out[out_port]).ravel()
+            for in_port, start, stop in chunks:
+                self.state[in_port] = values[start:stop].copy()
+        return out[self._u_port]
+
+    def reset(self) -> None:
+        """Zero the recurrent state (a fresh run starts from the zero state)."""
+        for name in self.state:
+            self.state[name] = np.zeros_like(self.state[name])
 
 
 class _CompiledPolicy:
@@ -174,6 +187,20 @@ class _CompiledPolicy:
         u_start = sum(out_sizes[:u_index])
         self._u_slice = (u_start, u_start + out_sizes[u_index])
 
+        # Recurrent feedback: each state output's slot in the state buffer, and
+        # which input ports it refills next tick.
+        self._state_sizes = {
+            port["name"]: _flat_size(port["shape"]) for port in self.manifest["state_outputs"]
+        }
+        self._state_slices: dict[str, tuple[int, int]] = {}
+        offset = 0
+        for port in self.manifest["state_outputs"]:
+            size = self._state_sizes[port["name"]]
+            self._state_slices[port["name"]] = (offset, offset + size)
+            offset += size
+        self._state_plan = _state_feedback_plan(self._state_slices, lambda n: self._state_sizes[n])
+        self.state = _zero_state(self._state_plan, lambda n: self._state_sizes[n])
+
         self.state_port = STATE_PORT
         self.state_size = _flat_size(self.manifest["inputs"][self.inputs.index(STATE_PORT)]["shape"])
         self.noise_port = EPSILON_PORT if EPSILON_PORT in self.inputs else None
@@ -192,8 +219,10 @@ class _CompiledPolicy:
         return "one_hot" in self.ops
 
     def step(self, feed: dict[str, np.ndarray]) -> np.ndarray:
-        """Pack the ports, call ``shinro_step``, and return the ``u`` slice."""
-        packed = np.concatenate([np.asarray(feed[name], dtype=np.float64).ravel() for name in self.inputs])
+        """Pack the ports (plus the carried state), call ``shinro_step``, and
+        return the ``u`` slice."""
+        merged = {**feed, **self.state}
+        packed = np.concatenate([np.asarray(merged[name], dtype=np.float64).ravel() for name in self.inputs])
         out = np.zeros(self._n_out, dtype=np.float64)
         # A memoryless policy declares no state outputs; the C ABI still wants a
         # non-null pointer, so give it a one-element scratch buffer.
@@ -204,8 +233,18 @@ class _CompiledPolicy:
             out.ctypes.data_as(ptr),
             state.ctypes.data_as(ptr),
         )
+        for out_port, chunks in self._state_plan:
+            start, stop = self._state_slices[out_port]
+            values = state[start:stop]
+            for in_port, a, b in chunks:
+                self.state[in_port] = values[a:b].copy()
         start, stop = self._u_slice
         return out[start:stop].copy()
+
+    def reset(self) -> None:
+        """Zero the recurrent state (a fresh run starts from the zero state)."""
+        for name in self.state:
+            self.state[name] = np.zeros_like(self.state[name])
 
 
 @register_controller("onnx_rl")
@@ -267,8 +306,9 @@ class OnnxRLAdapter(Controller):
         return self._rng.standard_normal(size)
 
     def reset(self):
-        """Reseed the action-sampling RNG (a fresh run is reproducible)."""
+        """Reseed the action-sampling RNG and clear any recurrent state."""
         self._rng = np.random.default_rng(self.seed)
+        self.policy.reset()
 
     @classmethod
     def from_config(cls, config, backend: ArrayBackend | None = None):
@@ -334,6 +374,37 @@ class OnnxRLAdapter(Controller):
         return cls(policy, seed=cfg.seed, backend=bk)
 
 
+def _state_feedback_plan(state_outputs, size_of) -> list[tuple[str, list[tuple[str, int, int]]]]:
+    """Map each published state output to the input ports it refills next tick.
+
+    Follows the importer's port convention: a GRU/RNN publishes ``state_h_<k>``
+    (H) which refills the same-named input; an LSTM publishes ``state_hc_<k>``
+    (2H, ``[h ‖ c]`` — the kernel's output order and ML-Agents' ``recurrent_in``
+    layout) which refills ``state_h_<k>`` / ``state_c_<k>`` in that order.
+
+    Args:
+        state_outputs: State-output port names (a mapping's keys work too).
+        size_of: Callable returning an output port's flat element count.
+
+    Returns:
+        ``[(output_port, [(input_port, start, stop), ...]), ...]``.
+    """
+    plan: list[tuple[str, list[tuple[str, int, int]]]] = []
+    for out in state_outputs:
+        n = size_of(out)
+        if out.startswith("state_hc_"):
+            suffix = out[len("state_hc_") :]
+            plan.append((out, [(f"state_h_{suffix}", 0, n // 2), (f"state_c_{suffix}", n // 2, n)]))
+        else:
+            plan.append((out, [(out, 0, n)]))
+    return plan
+
+
+def _zero_state(plan, size_of) -> dict[str, np.ndarray]:
+    """Initial recurrent state: zeros for every input port the plan refills."""
+    return {name: np.zeros(stop - start, dtype=np.float64) for _, chunks in plan for name, start, stop in chunks}
+
+
 def _flat_size(shape: Any) -> int:
     """Flat element count of a manifest shape (an empty shape is a scalar)."""
     dims = list(shape) if shape is not None else []
@@ -341,12 +412,15 @@ def _flat_size(shape: Any) -> int:
 
 
 def _graph_port_size(graph, name: str) -> int:
-    """Flat element count of a named input port of a shinro graph.
+    """Flat element count of a named input *or* output port of a shinro graph.
+
+    Both directions are needed: recurrent state ports are looked up on the
+    input side (``state_h_0``) and the output side (``state_hc_0``).
 
     Raises:
-        KeyError: If the graph declares no such input port.
+        KeyError: If the graph declares no such port.
     """
     for node in graph.nodes:
-        if node.op == "input" and node.attrs["name"] == name:
+        if node.op in ("input", "output") and node.attrs["name"] == name:
             return _flat_size(node.shape)
-    raise KeyError(f"input port '{name}' not found in graph")
+    raise KeyError(f"port '{name}' not found in graph")

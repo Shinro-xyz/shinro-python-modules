@@ -146,6 +146,17 @@ def lower_zig(
             elu_aux[i] = len(elu_alpha)
             elu_alpha.append(float(node.attrs.get("alpha", 1.0)))
 
+    # --- baked gru linear_before_reset flag ---
+    # gru's `linear_before_reset` is a bool, so it rides directly in the node's
+    # `aux` bit 0 (the gemm transB pattern) — no parallel table needed. The VM
+    # folds it into a comptime parameter, because lbr moves the reset gate
+    # across the recurrent matmul and picking the wrong form silently diverges
+    # ~1e-1.
+    gru_aux: dict[int, int] = {}
+    for i, node in enumerate(g.nodes):
+        if node.op == "gru":
+            gru_aux[i] = 1 if bool(node.attrs.get("linear_before_reset", False)) else 0
+
     # --- output port packing: separate zero-indexed offsets per buffer ---
     # `outputs` and `state_out` are separate C-ABI buffers, so each needs its
     # own cumulative offset table starting at 0.
@@ -170,6 +181,7 @@ def lower_zig(
     lines.append("    copy, tanh, relu, exp, argmax, one_hot, slice,")
     lines.append("    sin, cos, stack, solve_qp,")
     lines.append("    abs, sign, pow, lt, min, gemm, sigmoid, softmax, gelu, elu,")
+    lines.append("    lstm, gru, rnn,")
     lines.append("};")
     lines.append("")
     lines.append("pub const Node = struct {")
@@ -192,7 +204,9 @@ def lower_zig(
     lines.append("")
     lines.append("pub const nodes = [_]Node{")
     for i, node in enumerate(g.nodes):
-        rendered = _node_line(g, i, node, const_offsets, clip_offsets, gemm_aux, elu_aux, input_offsets, cg.outputs, cg.state_outputs)
+        rendered = _node_line(
+            g, i, node, const_offsets, clip_offsets, gemm_aux, elu_aux, gru_aux, input_offsets, cg.outputs, cg.state_outputs
+        )
         lines.append("    " + rendered + ",")
     lines.append("};")
     lines.append("")
@@ -223,6 +237,7 @@ def lower_zig(
         clip_offsets,
         gemm_aux,
         elu_aux,
+        gru_aux,
         input_offsets,
     )
     if provenance:
@@ -242,6 +257,7 @@ def _graph_manifest(
     clip_offsets: dict[int, int],
     gemm_aux: dict[int, int],
     elu_aux: dict[int, int],
+    gru_aux: dict[int, int],
     input_offsets: dict[str, int],
 ) -> dict:
     """Build the deterministic graph manifest for a composed graph.
@@ -289,7 +305,9 @@ def _graph_manifest(
 
     nodes = []
     for i, node in enumerate(g.nodes):
-        vm_op, aux = _node_vm_info(g, i, node, const_offsets, clip_offsets, gemm_aux, elu_aux, input_offsets, cg.outputs, cg.state_outputs)
+        vm_op, aux = _node_vm_info(
+            g, i, node, const_offsets, clip_offsets, gemm_aux, elu_aux, gru_aux, input_offsets, cg.outputs, cg.state_outputs
+        )
         rows, cols = _rows_cols(node.shape)
         nodes.append(
             {
@@ -360,6 +378,7 @@ def _node_line(
     clip_offsets: dict[int, int],
     gemm_aux: dict[int, int],
     elu_aux: dict[int, int],
+    gru_aux: dict[int, int],
     input_offsets: dict[str, int],
     outputs: list[str],
     state_outputs: list[str],
@@ -391,7 +410,7 @@ def _node_line(
     """
     rows, cols = _rows_cols(node.shape)
     inputs = "&.{" + ", ".join(str(x) for x in node.inputs) + "}"
-    op, aux = _node_vm_info(g, i, node, const_offsets, clip_offsets, gemm_aux, elu_aux, input_offsets, outputs, state_outputs)
+    op, aux = _node_vm_info(g, i, node, const_offsets, clip_offsets, gemm_aux, elu_aux, gru_aux, input_offsets, outputs, state_outputs)
     vec = str(len(node.shape) == 1).lower()
 
     return f".{{ .op = .{op}, .inputs = {inputs}, .rows = {rows}, .cols = {cols}, .aux = {aux}, .vec = {vec} }}"
@@ -405,6 +424,7 @@ def _node_vm_info(
     clip_offsets: dict[int, int],
     gemm_aux: dict[int, int],
     elu_aux: dict[int, int],
+    gru_aux: dict[int, int],
     input_offsets: dict[str, int],
     outputs: list[str],
     state_outputs: list[str],
@@ -469,6 +489,10 @@ def _node_vm_info(
         # alpha is baked into elu_alpha; the VM reads g.elu_alpha[node.aux]
         # (comptime-folded inside the unrolled node loop).
         return "elu", elu_aux[i]
+    if node.op == "gru":
+        # linear_before_reset rides in aux bit 0; the VM reads it as a comptime
+        # bool so the two reset placements constant-fold.
+        return "gru", gru_aux[i]
     return node.op, 0
 
 

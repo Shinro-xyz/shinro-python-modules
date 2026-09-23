@@ -332,6 +332,71 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
                 );
                 for (0..node.rows * node.cols) |j| out[j] = r[j];
             },
+            // .lstm / .gru / .rnn — one fused recurrent step each
+            // (linalg.lstm_cell / gru_cell / rnn_cell). Operands are
+            // [x, W, R, B, h_prev(, c_prev)] in ONNX layout: W is
+            // (ngates*H, I), R is (ngates*H, H), B is the stacked Wb ‖ Rb.
+            // H and I are derived at COMPTIME from the weight and activation
+            // node shapes, so the kernels carry no runtime shape metadata; a
+            // weight that is not an exact gate stack, or an output slot that
+            // is not the size the cell produces, is rejected at compile time
+            // rather than read out of bounds. gru's linear_before_reset rides
+            // in aux bit 0.
+            .lstm => {
+                const x = node_input(g.nodes[0..], node, &workspace);
+                const w = node_input_at(g.nodes[0..], node.inputs[1], &workspace);
+                const r = node_input_at(g.nodes[0..], node.inputs[2], &workspace);
+                const b = node_input_at(g.nodes[0..], node.inputs[3], &workspace);
+                const h_prev = node_input_at(g.nodes[0..], node.inputs[4], &workspace);
+                const c_prev = node_input_at(g.nodes[0..], node.inputs[5], &workspace);
+                const w_n = g.nodes[node.inputs[1]];
+                const x_n = g.nodes[node.inputs[0]];
+                const H = comptime w_n.rows / 4;
+                const I = comptime x_n.rows * x_n.cols;
+                comptime {
+                    if (w_n.rows % 4 != 0) @compileError("lstm: W rows must be 4*H (i,o,f,c gate stack)");
+                    if (w_n.cols != I) @compileError("lstm: W (4H, I) input width must match the activation width");
+                    if (node.rows * node.cols != 2 * H) @compileError("lstm: output slot must be 2*H ([h_next ‖ c_next])");
+                }
+                const res = la.lstm_cell(H, I, x, w, r, b, h_prev, c_prev);
+                for (0..node.rows * node.cols) |j| out[j] = res[j];
+            },
+            .gru => {
+                const x = node_input(g.nodes[0..], node, &workspace);
+                const w = node_input_at(g.nodes[0..], node.inputs[1], &workspace);
+                const r = node_input_at(g.nodes[0..], node.inputs[2], &workspace);
+                const b = node_input_at(g.nodes[0..], node.inputs[3], &workspace);
+                const h_prev = node_input_at(g.nodes[0..], node.inputs[4], &workspace);
+                const w_n = g.nodes[node.inputs[1]];
+                const x_n = g.nodes[node.inputs[0]];
+                const H = comptime w_n.rows / 3;
+                const I = comptime x_n.rows * x_n.cols;
+                const lbr = comptime (node.aux % 2 == 1);
+                comptime {
+                    if (w_n.rows % 3 != 0) @compileError("gru: W rows must be 3*H (z,r,h gate stack)");
+                    if (w_n.cols != I) @compileError("gru: W (3H, I) input width must match the activation width");
+                    if (node.rows * node.cols != H) @compileError("gru: output slot must be H");
+                }
+                const res = la.gru_cell(H, I, lbr, x, w, r, b, h_prev);
+                for (0..node.rows * node.cols) |j| out[j] = res[j];
+            },
+            .rnn => {
+                const x = node_input(g.nodes[0..], node, &workspace);
+                const w = node_input_at(g.nodes[0..], node.inputs[1], &workspace);
+                const r = node_input_at(g.nodes[0..], node.inputs[2], &workspace);
+                const b = node_input_at(g.nodes[0..], node.inputs[3], &workspace);
+                const h_prev = node_input_at(g.nodes[0..], node.inputs[4], &workspace);
+                const w_n = g.nodes[node.inputs[1]];
+                const x_n = g.nodes[node.inputs[0]];
+                const H = comptime w_n.rows;
+                const I = comptime x_n.rows * x_n.cols;
+                comptime {
+                    if (w_n.cols != I) @compileError("rnn: W (H, I) input width must match the activation width");
+                    if (node.rows * node.cols != H) @compileError("rnn: output slot must be H");
+                }
+                const res = la.rnn_cell(H, I, x, w, r, b, h_prev);
+                for (0..node.rows * node.cols) |j| out[j] = res[j];
+            },
             // .solve_qp — the convergence-iterative MPC op. The problem data
             // (P, A, l, u) and the pre-factorized KKT matrix are baked into the
             // statically-allocated `solver` global by the codegen C

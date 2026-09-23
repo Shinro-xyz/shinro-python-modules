@@ -352,3 +352,55 @@ class TestCompiledModeSurface:
         (d / "graph_data_manifest.json").write_text("{ not json")
         with pytest.raises(ValueError, match="corrupt"):
             _CompiledPolicy(d)
+
+
+# ─── recurrent policies carry state between ticks ───────────────────────────
+
+from test_onnx_import import _recurrent_policy, _ref_forward  # noqa: E402  (sibling test module)
+
+
+@pytest.mark.parametrize("op", ("LSTM", "GRU", "RNN"))
+def test_recurrent_state_carries_between_ticks(op, tmp_path):
+    """The adapter must feed tick N's state output back as tick N+1's input."""
+    path, ref = _recurrent_policy(op, tmp_path)
+    ctrl = OnnxRLAdapter.from_config({"model_path": path})
+    x = np.linspace(-0.3, 0.3, 5)
+    zeros = (np.zeros(ref["H"]), np.zeros(ref["H"]))
+
+    a1 = np.asarray(ctrl.compute(x))
+    exp_a1, states = _ref_forward(op, x, [zeros], ref)
+    np.testing.assert_allclose(a1, exp_a1, atol=1e-12)
+
+    # Second tick: the state from tick 1 must be in the loop, not zeros.
+    a2 = np.asarray(ctrl.compute(x))
+    exp_a2, _ = _ref_forward(op, x, states, ref)
+    np.testing.assert_allclose(a2, exp_a2, atol=1e-12)
+    assert not np.allclose(a1, a2), "recurrent state did not carry between ticks"
+
+    # reset() returns the policy to the zero state -> tick 1 again.
+    ctrl.reset()
+    np.testing.assert_allclose(np.asarray(ctrl.compute(x)), exp_a1, atol=1e-12)
+
+
+def test_recurrent_stacked_layers_train_independently(tmp_path):
+    """A 2-layer policy (the G1-humanoid shape) carries both cells' states."""
+    path, ref = _recurrent_policy("GRU", tmp_path, layers=2)
+    ctrl = OnnxRLAdapter.from_config({"model_path": path})
+    x = np.linspace(-0.2, 0.2, 5)
+    zeros = (np.zeros(ref["H"]), np.zeros(ref["H"]))
+    a1 = np.asarray(ctrl.compute(x))
+    exp_a1, states = _ref_forward("GRU", x, [zeros, zeros], ref)
+    np.testing.assert_allclose(a1, exp_a1, atol=1e-12)
+    a2 = np.asarray(ctrl.compute(x))
+    exp_a2, _ = _ref_forward("GRU", x, states, ref)
+    np.testing.assert_allclose(a2, exp_a2, atol=1e-12)
+
+
+def test_memoryless_policy_still_works(tmp_path):
+    """The memoryless path must be untouched (no state ports, no reset side-effects)."""
+    path = _save_model(np.eye(3), np.zeros(3), tmp_path)
+    ctrl = OnnxRLAdapter.from_config({"model_path": str(path)})
+    assert ctrl.policy.state == {}
+    first = np.asarray(ctrl.compute(np.array([1.0, 2.0, 3.0])))
+    second = np.asarray(ctrl.compute(np.array([1.0, 2.0, 3.0])))
+    np.testing.assert_allclose(first, second, atol=1e-12)
