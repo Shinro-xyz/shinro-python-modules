@@ -517,11 +517,27 @@ class TestExpandedOps:
         assert "transpose" in _op_names(cg)
         np.testing.assert_allclose(_run(cg, np.array([1.0, 2.0, 3.0])), [1.0, 2.0, 3.0], rtol=1e-12)
 
-    def test_transpose_rank1_rejected(self, tmp_path):
+    def test_transpose_rank1_identity_is_a_noop(self, tmp_path):
+        """A rank-1 transpose with the default perm moves nothing: it is a no-op."""
         from onnx import helper
 
         path = _save(
             [helper.make_node("Transpose", ["state"], ["y"])],
+            [_vi("state", [None, 3])],
+            [_vi("y", [None, 3])],
+            [],
+            tmp_path,
+        )
+        cg = import_onnx_policy(path)
+        np.testing.assert_allclose(_run(cg, np.array([1.0, 2.0, 3.0])), [1.0, 2.0, 3.0], rtol=1e-12)
+        assert "transpose" not in _op_names(cg)  # collapsed to nothing at all
+
+    def test_transpose_that_reorders_a_real_axis_is_rejected(self, tmp_path):
+        """Only size-1 axes may move; a perm that shuffles real data needs a rank-3 op."""
+        from onnx import helper
+
+        path = _save(
+            [helper.make_node("Transpose", ["state"], ["y"], perm=[2, 1, 0])],
             [_vi("state", [None, 3])],
             [_vi("y", [None, 3])],
             [],
@@ -947,6 +963,7 @@ def _recurrent_policy(
     sequence_lens=False,
     peepholes=False,
     consume_sequence=False,
+    last_step=False,
     batch=1,
     seq=1,
     extra_direction=False,
@@ -1003,11 +1020,20 @@ def _recurrent_policy(
         nodes.append(helper.make_node(op, cell_in, cell_out, **cell_attrs))
         prev = h_name
 
-    # Head: consume h_out (or the sequence output Y_0 when consume_sequence).
-    head_src = "h_out"
+    # Head: consume h_out, the sequence output Y_0, or the real drone chain that
+    # extracts the last step from Y (Squeeze -> Transpose -> Gather).
     if consume_sequence:
         nodes.append(helper.make_node("Reshape", ["Y_0", "sh"], ["yflat"]))
         head_src = "yflat"
+    elif last_step:
+        inits += [_int_init("ax1", [1]), _int_init("last", [-1])]
+        nodes += [
+            helper.make_node("Squeeze", ["Y_0", "ax1"], ["ls_sq"]),
+            helper.make_node("Transpose", ["ls_sq"], ["ls_tr"], perm=[1, 0, 2]),
+            helper.make_node("Gather", ["ls_tr", "last"], ["ls_g"], axis=1),
+            helper.make_node("Reshape", ["ls_g", "sh"], ["hflat"]),
+        ]
+        head_src = "hflat"
     else:
         nodes.append(helper.make_node("Reshape", ["h_out", "sh"], ["hflat"]))
         head_src = "hflat"
@@ -1235,8 +1261,180 @@ class TestRecurrentRejections:
     def test_peepholes_rejected(self, tmp_path):
         self._expect("LSTM", tmp_path, "peepholes", peepholes=True)
 
-    def test_sequence_output_rejected_when_consumed(self, tmp_path):
-        self._expect("LSTM", tmp_path, "sequence output", consume_sequence=True)
+    def test_sequence_output_aliases_the_step_output(self, tmp_path):
+        """With seq == 1 the ONNX sequence output Y *is* Y_h, so consuming Y works.
+
+        The drone policies depend on this: they read ``Y`` through a
+        Squeeze/Transpose/Gather "take the last step" chain.
+        """
+        path, ref = _recurrent_policy("LSTM", tmp_path, consume_sequence=True)
+        cg = import_onnx_policy(path)
+        H = ref["H"]
+        rng = np.random.default_rng(11)
+        obs = rng.normal(0.0, 0.5, 5)
+        h0 = rng.normal(0.0, 0.5, H)
+        c0 = rng.normal(0.0, 0.5, H)
+        got = interpret(cg.graph, {STATE_PORT: obs, **_feed_states("LSTM", [(h0, c0)])})
+        exp_u, _ = _ref_forward("LSTM", obs, [(h0, c0)], ref)
+        np.testing.assert_allclose(got[OUTPUT_PORT], exp_u, atol=1e-12)
 
     def test_extra_direction_axis_rejected(self, tmp_path):
         self._expect("GRU", tmp_path, "num_directions", extra_direction=True)
+
+
+# ─── shape / metadata glue ──────────────────────────────────────────────────
+
+
+class TestShapeGlue:
+    """ONNX's integer-tensor shape algebra has no VM representation.
+
+    Every operand is known at import time, so each op must either fold to a
+    constant or collapse to a reshape — never become a runtime op. The last-step
+    idiom (Squeeze/Transpose/Gather over a sequence output) is what makes the
+    real drone policies importable.
+    """
+
+    def test_squeeze_of_a_singleton_axis_is_shape_only(self, tmp_path):
+        from onnx import helper
+
+        # const w (1, 3) -> Squeeze(axes=[0]) -> (3,) -> Mul with the state.
+        w = np.array([[1.0, 2.0, 3.0]], dtype=np.float32)
+        path = _save(
+            [
+                helper.make_node("Squeeze", ["w", "ax0"], ["w1d"]),
+                helper.make_node("Mul", ["state", "w1d"], ["y"]),
+            ],
+            [_vi("state", [None, 3])],
+            [_vi("y", [None, 3])],
+            [_init("w", w), _int_init("ax0", [0])],
+            tmp_path,
+        )
+        cg = import_onnx_policy(path)
+        np.testing.assert_allclose(_run(cg, np.array([1.0, 1.0, 1.0])), [1.0, 2.0, 3.0], rtol=1e-12)
+        # the squeeze is metadata: it must not survive as a runtime op
+        assert "squeeze" not in _op_names(cg)
+
+    def test_unsqueeze_round_trips_to_the_same_values(self, tmp_path):
+        from onnx import helper
+
+        path = _save(
+            [
+                helper.make_node("Unsqueeze", ["state", "ax0"], ["u"]),
+                helper.make_node("Squeeze", ["u", "ax0"], ["y"]),
+            ],
+            [_vi("state", [None, 3])],
+            [_vi("y", [None, 3])],
+            [_int_init("ax0", [0])],
+            tmp_path,
+        )
+        cg = import_onnx_policy(path)
+        x = np.array([0.5, -1.5, 2.5])
+        np.testing.assert_allclose(_run(cg, x), x, rtol=1e-12)
+
+    def test_cast_to_float_is_a_noop(self, tmp_path):
+        from onnx import helper
+
+        path = _save(
+            [helper.make_node("Cast", ["state"], ["y"], to=1)],  # to = FLOAT
+            [_vi("state", [None, 3])],
+            [_vi("y", [None, 3])],
+            [],
+            tmp_path,
+        )
+        cg = import_onnx_policy(path)
+        x = np.array([1.5, 2.5, 3.5])
+        np.testing.assert_allclose(_run(cg, x), x, rtol=1e-12)
+        assert "cast" not in _op_names(cg)
+
+    def test_dynamic_shape_idiom_folds_to_constants(self, tmp_path):
+        """Shape -> Gather -> Unsqueeze -> Concat -> Reshape is pure metadata.
+
+        This is the exporter's generic "reshape to the input's own size" pattern;
+        with the whole subtree known at import time it must fold away entirely.
+        """
+        from onnx import helper
+
+        path = _save(
+            [
+                helper.make_node("Shape", ["state"], ["s"]),
+                helper.make_node("Gather", ["s", "idx0"], ["d"], axis=0),
+                helper.make_node("Unsqueeze", ["d", "ax0"], ["d1"]),
+                helper.make_node("Concat", ["d1"], ["shape"], axis=0),
+                helper.make_node("Reshape", ["state", "shape"], ["y"]),
+            ],
+            [_vi("state", [None, 2])],
+            [_vi("y", [None, 2])],
+            [_int_init("idx0", 0), _int_init("ax0", [0])],
+            tmp_path,
+        )
+        cg = import_onnx_policy(path)
+        x = np.array([4.0, 5.0])
+        np.testing.assert_allclose(_run(cg, x), x, rtol=1e-12)
+        # the shape algebra is gone; only the data path remains
+        assert not {"shape", "gather", "unsqueeze", "concat"} & set(_op_names(cg))
+
+    def test_last_step_idiom_collapses(self, tmp_path):
+        """The real drone chain over the sequence output Y collapses away.
+
+        Squeeze -> Transpose(perm longer than the rank) -> Gather of the last
+        element only moves axes the VM already collapsed, so it must vanish
+        instead of needing a rank-3 runtime op.
+        """
+        path, ref = _recurrent_policy("GRU", tmp_path, last_step=True)
+        cg = import_onnx_policy(path)
+        assert not {"squeeze", "transpose", "gather"} & set(_op_names(cg))
+        H = ref["H"]
+        rng = np.random.default_rng(11)
+        obs = rng.normal(0.0, 0.5, 5)
+        h0 = rng.normal(0.0, 0.5, H)
+        got = interpret(cg.graph, {STATE_PORT: obs, **_feed_states("GRU", [(h0, None)])})
+        exp_u, _ = _ref_forward("GRU", obs, [(h0, None)], ref)
+        np.testing.assert_allclose(got[OUTPUT_PORT], exp_u, atol=1e-12)
+
+    def test_gather_real_selection_is_rejected(self, tmp_path):
+        """Selecting a strict subset of a non-trivial axis needs runtime indexing."""
+        from onnx import helper
+
+        path = _save(
+            [
+                helper.make_node("MatMul", ["state", "w"], ["m"]),
+                helper.make_node("Gather", ["m", "idx"], ["y"], axis=0),
+            ],
+            [_vi("state", [None, 3])],
+            [_vi("y", [None, 2])],
+            [_init("w", np.eye(3, 4, dtype=np.float32)), _int_init("idx", [0, 2])],
+            tmp_path,
+        )
+        with pytest.raises(NotImplementedError, match="runtime gather op"):
+            import_onnx_policy(path)
+
+    def test_concat_single_input_is_a_noop(self, tmp_path):
+        from onnx import helper
+
+        path = _save(
+            [
+                helper.make_node("MatMul", ["state", "w"], ["m"]),
+                helper.make_node("Concat", ["m"], ["y"], axis=-1),
+            ],
+            [_vi("state", [None, 3])],
+            [_vi("y", [None, 2])],
+            [_init("w", np.eye(3, 2, dtype=np.float32))],
+            tmp_path,
+        )
+        cg = import_onnx_policy(path)
+        x = np.array([1.0, 2.0, 3.0])
+        np.testing.assert_allclose(_run(cg, x), x @ np.eye(3, 2), rtol=1e-12)
+        assert "concat" not in _op_names(cg)
+
+    def test_concat_of_two_data_tensors_is_rejected_for_now(self, tmp_path):
+        from onnx import helper
+
+        path = _save(
+            [helper.make_node("Concat", ["state", "state"], ["y"], axis=0)],
+            [_vi("state", [None, 3])],
+            [_vi("y", [None, 6])],
+            [],
+            tmp_path,
+        )
+        with pytest.raises(NotImplementedError, match="runtime concat op"):
+            import_onnx_policy(path)
