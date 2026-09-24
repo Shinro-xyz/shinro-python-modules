@@ -263,6 +263,29 @@ def _elu(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray
     return np.where(x > 0.0, x, alpha * (np.exp(x) - 1.0))
 
 
+@register_op("layernorm")
+def _layernorm(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
+    """Layer normalization over the last axis, the torch/ONNX canonical form.
+
+    ``y = (x - mean) * (1 / sqrt(var + eps)) * scale + bias`` with the
+    **biased** variance (``mean`` and ``var`` reduce the last axis, so a 1-D
+    input is a single normalized row). ``scale``/``bias`` are the ONNX
+    ``Scale``/``B`` operands, one entry per feature; ``eps`` is baked per node
+    (default ONNX's 1e-5) and rides the same f64 table as elu's ``alpha``.
+
+    The Zig mirror is ``linalg.layernorm_rows`` and evaluates the identical
+    expression in the identical order (reciprocal-then-multiply), so the three
+    engines agree to the oracle tolerance rather than merely mathematically.
+    """
+    x = values[node.inputs[0]]
+    scale = values[node.inputs[1]]
+    bias = values[node.inputs[2]]
+    eps = float(node.attrs.get("eps", 1e-5))
+    mean = x.mean(axis=-1, keepdims=True)
+    var = ((x - mean) ** 2).mean(axis=-1, keepdims=True)
+    return (x - mean) * (1.0 / np.sqrt(var + eps)) * scale + bias
+
+
 # ─── recurrent cells (one fused step; ONNX LSTM/GRU/RNN semantics) ────────
 #
 # Each handler is the numpy mirror of one runtime/linalg.zig kernel, so the

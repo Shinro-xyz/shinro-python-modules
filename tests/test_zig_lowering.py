@@ -2593,6 +2593,117 @@ class TestGemmOracle:
                 np.testing.assert_allclose(got, np.asarray(want[name]).ravel(), rtol=1e-12, atol=1e-12)
 
 
+# ─── layernorm ─────────────────────────────────────────────────────────────
+
+def _build_layernorm_oracle_graph():
+    """Hand-built layernorm graph: multi-row 2-D, single-row 1-D, baked eps,
+    and a width-128 large-offset row.
+
+    ``layernorm`` is the fused last-axis normalization (``linalg.layernorm_rows``)
+    in the canonical torch/ONNX form with the biased variance. The named outputs
+    cover the multi-row path (the in-loop-return regression), the 1-D single-row
+    path, a non-default ``eps`` (the baked ``layernorm_eps`` table), and a
+    128-feature row whose test feed sits at a ~1e9 offset (the condition-number
+    regime); ``scale``/``bias`` stand in for ONNX ``Scale``/``B``.
+    """
+    g = Graph()
+    x = g.input("x", (2, 3))
+    x1 = g.input("x1", (3,))
+    x128 = g.input("x128", (128,))
+    scale = g.const(np.array([2.0, 3.0, 4.0]))
+    bias = g.const(np.array([0.5, -0.5, 1.0]))
+    scale128 = g.const(np.linspace(0.5, 1.5, 128))
+    bias128 = g.const(np.linspace(-0.2, 0.2, 128))
+    out = g.emit("layernorm", [x, scale, bias], (2, 3), eps=1e-5)
+    out1 = g.emit("layernorm", [x1, scale, bias], (3,), eps=1e-5)
+    out_eps = g.emit("layernorm", [x, scale, bias], (2, 3), eps=1e-2)
+    out128 = g.emit("layernorm", [x128, scale128, bias128], (128,), eps=1e-5)
+    for name, src in (("ln", out), ("ln1", out1), ("ln_eps", out_eps), ("ln128", out128)):
+        g.output(name, src)
+    return ComposedGraph(
+        graph=g,
+        inputs=["x", "x1", "x128"],
+        outputs=["ln", "ln1", "ln_eps", "ln128"],
+        state_inputs=[],
+        state_outputs=[],
+    )
+
+
+@pytest.fixture(scope="session")
+def layernorm_so(tmp_path_factory):
+    d = tmp_path_factory.mktemp("zig-build-layernorm")
+    return _build_so(_build_layernorm_oracle_graph(), d, graph_path=d / "graph_data.zig")
+
+
+def _reference_layernorm(x, scale, bias, eps):
+    """Independent numpy reference — the ONNX/torch canonical formula."""
+    mean = x.mean(axis=-1, keepdims=True)
+    var = ((x - mean) ** 2).mean(axis=-1, keepdims=True)
+    return (x - mean) * (1.0 / np.sqrt(var + eps)) * scale + bias
+
+
+class TestLayernormOracle:
+    """linalg.layernorm_rows: multi-row, 1-D single-row, baked eps, and a
+    width-128 large-offset row (the anti-cancellation two-pass regime)."""
+
+    def test_so_matches_interpreter_and_reference(self, layernorm_so):
+        lib, cg = layernorm_so
+        n_out, n_state = output_split(cg)
+        assert n_state == 0
+
+        scale = np.array([2.0, 3.0, 4.0])
+        bias = np.array([0.5, -0.5, 1.0])
+        scale128 = np.linspace(0.5, 1.5, 128)
+        bias128 = np.linspace(-0.2, 0.2, 128)
+
+        rng = np.random.default_rng(13)
+        for _ in range(20):
+            x = rng.normal(0.0, 1.0, (2, 3))
+            x1 = rng.normal(0.0, 1.0, 3)
+            # Width 128 at a ~1e9 offset with an O(1) spread: the conditioning
+            # regime where the one-pass E[x^2]-mean^2 variance loses ~9 digits.
+            x128 = 1e9 + (np.arange(128) - 63.5) + rng.normal(0.0, 0.5, 128)
+            arrays = {"x": x, "x1": x1, "x128": x128}
+            out, _ = step_so(lib, pack_arrays(cg, arrays), n_out, n_state)
+            traced = interpret(cg.graph, arrays)
+
+            want = {
+                "ln": _reference_layernorm(x, scale, bias, 1e-5),
+                "ln1": _reference_layernorm(x1, scale, bias, 1e-5),
+                "ln_eps": _reference_layernorm(x, scale, bias, 1e-2),
+                "ln128": _reference_layernorm(x128, scale128, bias128, 1e-5),
+            }
+            got_by_name = {}
+            off = 0
+            for name in cg.outputs:
+                expected = np.asarray(traced[name]).ravel()
+                got = out[off : off + expected.size]
+                off += expected.size
+                got_by_name[name] = got
+                if name == "ln128":
+                    # Conditioning-limited: the f64 mean of 128 values at a ~1e9
+                    # offset is itself good only to ~1e-6, so .so / interpreter /
+                    # reference agree to ~1e-5 — this cell pins the absence of a
+                    # cancellation blowup (asserted below), not bit-parity.
+                    np.testing.assert_allclose(got, expected, rtol=0.0, atol=1e-4)
+                    np.testing.assert_allclose(got, np.asarray(want[name]).ravel(), rtol=0.0, atol=1e-4)
+                else:
+                    np.testing.assert_allclose(got, expected, rtol=1e-13, atol=1e-13)
+                    np.testing.assert_allclose(got, np.asarray(want[name]).ravel(), rtol=1e-12, atol=1e-12)
+
+            # Conditioning guard: the kernel must track the two-pass reference far
+            # more closely than the naive one-pass variance. That gap IS the "no
+            # catastrophic cancellation" property this cell exists to prove.
+            mean128 = x128.mean()
+            naive_var = (x128 * x128).mean() - mean128 * mean128
+            naive = (x128 - mean128) * (1.0 / np.sqrt(naive_var + 1e-5)) * scale128 + bias128
+            err_two_pass = float(np.max(np.abs(got_by_name["ln128"] - np.asarray(want["ln128"]).ravel())))
+            err_naive = float(np.max(np.abs(got_by_name["ln128"] - naive)))
+            assert err_two_pass < 1e-4, f"two-pass error {err_two_pass:.3e} exceeds 1e-4"
+            assert err_naive > 1e-2, f"naive one-pass error {err_naive:.3e} is unexpectedly small"
+            assert err_two_pass < 0.05 * err_naive, f"two-pass {err_two_pass:.3e} not clearly better than naive {err_naive:.3e}"
+
+
 # ─── imported recurrent policies (LSTM / GRU / RNN) ─────────────────────────
 
 def _recurrent_policy_onnx(build_dir, op, *, H=3, I=4, OBS=5, ACT=2, lbr=0, seed=1):

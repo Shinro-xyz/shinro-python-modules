@@ -36,6 +36,10 @@ Supported ONNX surface — everything else raises ``NotImplementedError``:
 - ``Elu`` — lowered to the fused ``elu`` op (``alpha`` baked per node)
 - ``Softmax`` — lowered to the fused ``softmax`` op (last-axis only; any other
   ``axis`` is rejected loudly)
+- ``LayerNormalization`` — lowered to the fused ``layernorm`` op (last-axis
+  only; ``epsilon`` baked per node, a missing ``B`` emitted as an explicit zero
+  feature-vector). Any other ``axis`` or a ``stash_type`` other than 1 is
+  rejected loudly.
 - ``Gelu`` — lowered to the fused tanh-approx ``gelu`` op; ``approximate``
   must be ``"tanh"`` (the exact erf default is rejected loudly)
 - ``LSTM`` / ``GRU`` / ``RNN`` — lowered to one fused cell each, replacing the
@@ -98,7 +102,7 @@ _OBS_KEYS = frozenset({"input_name", "state_keys", "normalize", "obs_mean", "obs
 _SUPPORTED_OPS = frozenset(
     {
         "Gemm", "MatMul", "Add", "Mul", "Sub", "Div", "Pow",
-        "Relu", "Tanh", "Sigmoid", "Elu", "Gelu", "Softmax",
+        "Relu", "Tanh", "Sigmoid", "Elu", "Gelu", "Softmax", "LayerNormalization",
         "Neg", "Abs", "Exp",
         "Clip", "Constant", "Identity", "Flatten", "Reshape", "Transpose",
         "Squeeze", "Unsqueeze", "Cast", "Shape", "ConstantOfShape", "Gather", "Concat",
@@ -526,6 +530,8 @@ class _OnnxImporter:
             result = self.emit(_UNARY_OPS[op_type], [self.tensor(inputs[0])])
         elif op_type == "Softmax":
             result = self.emit_softmax(self.tensor(inputs[0]), attrs)
+        elif op_type == "LayerNormalization":
+            result = self.emit_layernorm(inputs, attrs)
         elif op_type == "Gelu":
             result = self.emit_gelu(self.tensor(inputs[0]), attrs)
         elif op_type == "Elu":
@@ -974,6 +980,59 @@ class _OnnxImporter:
                 "only last-axis softmax is supported"
             )
         return self.emit("softmax", [x_id])
+
+    def emit_layernorm(self, inputs: list[str], attrs: dict[str, Any]) -> int:
+        """Emit the fused ``layernorm`` op for ONNX ``LayerNormalization``.
+
+        The VM op normalizes over the last axis in the canonical torch/ONNX
+        form — ``(x - mean) * 1/sqrt(var + eps) * Scale + B`` with the **biased**
+        variance — so the accepted ``axis`` is the last axis only (for a rank-1
+        input that is its sole axis). ``epsilon`` (default 1e-5) is baked per
+        node, like elu's ``alpha``. ``stash_type`` must be 1 (float statistics),
+        the only value meaningful on this f64-only machine.
+
+        ``B`` is optional in the spec. A missing bias is emitted as an explicit
+        *feature-vector* of zeros (not a scalar): the kernel's comptime gate
+        requires one entry per normalized feature, so the uniform three-operand
+        contract holds for every node.
+
+        Raises:
+            NotImplementedError: On unknown attributes, an axis that is not the
+                last axis, or a ``stash_type`` other than 1.
+            ValueError: On an input arity other than ``(X, Scale)`` or
+                ``(X, Scale, B)``.
+        """
+        unknown = set(attrs) - {"axis", "epsilon", "stash_type"}
+        if unknown:
+            raise NotImplementedError(f"ONNX LayerNormalization carries unsupported attribute(s): {sorted(unknown)}")
+        if len(inputs) not in (2, 3):
+            raise ValueError(f"ONNX LayerNormalization must have 2 or 3 inputs (X, Scale[, B]); got {len(inputs)}")
+        if int(attrs.get("stash_type", 1)) != 1:
+            raise NotImplementedError(
+                f"ONNX LayerNormalization stash_type={attrs['stash_type']} is not supported; "
+                "only stash_type=1 (float statistics) is implemented"
+            )
+        x_id = self.tensor(inputs[0])
+        shape = self.value_of(x_id).shape
+        rank = len(shape)
+        axis = int(attrs.get("axis", -1))
+        axis_norm = axis % rank if rank else axis
+        # Same last-axis-only rule as emit_softmax: for a rank-1 vector every
+        # axis spelling (-1, 0, and opset<17's coerced default 1) names it; for
+        # rank-2 only 1/-1 do, and a per-column normalization (axis=0) is
+        # rejected rather than silently reinterpreted.
+        ok = axis in (-1, 0, 1) if rank <= 1 else axis_norm == rank - 1
+        if not ok:
+            raise NotImplementedError(
+                f"ONNX LayerNormalization axis={axis} on a rank-{rank} input is not the last axis; "
+                "only last-axis normalization is supported"
+            )
+        scale_id = self.tensor(inputs[1])
+        if len(inputs) == 3:
+            bias_id = self.tensor(inputs[2])
+        else:
+            bias_id = self.const(np.zeros(int(shape[-1]) if rank else 1))
+        return self.emit("layernorm", [x_id, scale_id, bias_id], eps=float(attrs.get("epsilon", 1e-5)))
 
     def emit_gelu(self, x_id: int, attrs: dict[str, Any]) -> int:
         """Emit the fused tanh-approx ``gelu`` op for ONNX ``Gelu``.

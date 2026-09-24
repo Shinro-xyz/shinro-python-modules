@@ -234,6 +234,40 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
                 const r = la.elu(node.rows * node.cols, g.elu_alpha[node.aux], s);
                 for (0..node.rows * node.cols) |j| out[j] = r[j];
             },
+            // .layernorm — last-axis normalization (the canonical torch
+            // nn.LayerNorm / ONNX LayerNormalization form): per row
+            // (a - mean) * rstd * scale + bias with the biased variance. The
+            // scale/bias operands are ONNX Scale/B, one entry per normalized
+            // feature; eps is baked into g.layernorm_eps (aux = table index).
+            // A 1-D node is a single row (rows=n, cols=1, vec=true) and must be
+            // normalized as layernorm_rows(1, n), never as n rows of length 1.
+            // The comptime gate rejects a scale/bias that is not the (cols,)
+            // feature vector rather than reading past the operand's slot.
+            .layernorm => {
+                const a = node_input(g.nodes[0..], node, &workspace);
+                const scale = node_input_at(g.nodes[0..], node.inputs[1], &workspace);
+                const bias = node_input_at(g.nodes[0..], node.inputs[2], &workspace);
+                const scale_n = g.nodes[node.inputs[1]];
+                const bias_n = g.nodes[node.inputs[2]];
+                comptime {
+                    const n = if (node.vec) node.rows else node.cols;
+                    if (scale_n.rows * scale_n.cols != n) {
+                        @compileError("layernorm: scale must have one entry per normalized feature (cols)");
+                    }
+                    if (bias_n.rows * bias_n.cols != n) {
+                        @compileError("layernorm: bias must have one entry per normalized feature (cols)");
+                    }
+                }
+                const r = la.layernorm_rows(
+                    if (node.vec) 1 else node.rows,
+                    if (node.vec) node.rows else node.cols,
+                    a,
+                    scale,
+                    bias,
+                    g.layernorm_eps[node.aux],
+                );
+                for (0..node.rows * node.cols) |j| out[j] = r[j];
+            },
             .exp => {
                 const s = node_input(g.nodes[0..], node, &workspace);
                 const r = la.elementwise_exponential(node.rows * node.cols, s);

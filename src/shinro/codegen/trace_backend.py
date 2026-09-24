@@ -254,6 +254,15 @@ class TraceBackend:
         # ELU; alpha is baked per node by the lowerer.
         return self._emit("elu", [x], x.shape, alpha=alpha)
 
+    def layernorm(self, x: Tracer, scale: Tracer, bias: Tracer, *, eps: float = 1e-5) -> Tracer:
+        # Layer normalization over the last axis (numpy axis=-1), shape-preserving.
+        # scale/bias are the ONNX Scale/B operands (one entry per feature); eps is
+        # baked per node by the lowerer, exactly like elu's alpha.
+        x = _lift(self.g, x)
+        scale = _lift(self.g, scale)
+        bias = _lift(self.g, bias)
+        return self._emit("layernorm", [x, scale, bias], x.shape, eps=eps)
+
     # --- recurrent cells (fused; ONNX LSTM/GRU/RNN semantics) ---
 
     def lstm(

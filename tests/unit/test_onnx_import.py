@@ -351,6 +351,86 @@ class TestActivations:
             import_onnx_policy(path)
 
 
+class TestLayerNorm:
+    """ONNX LayerNormalization -> the fused last-axis ``layernorm`` op."""
+
+    def test_last_axis_with_scale_and_bias(self, tmp_path):
+        from onnx import helper
+
+        scale = np.array([2.0, 3.0, 4.0], dtype=np.float32)
+        bias = np.array([0.5, -0.5, 1.0], dtype=np.float32)
+        path = _save(
+            [helper.make_node("LayerNormalization", ["state", "scale", "bias"], ["y"], axis=-1, epsilon=1e-5)],
+            [_vi("state", [None, 3])],
+            [_vi("y", [None, 3])],
+            [_init("scale", scale), _init("bias", bias)],
+            tmp_path,
+        )
+        cg = import_onnx_policy(path)
+        assert "layernorm" in _op_names(cg)
+        x = np.array([1.0, 2.0, 3.0])
+        mean = x.mean()
+        var = ((x - mean) ** 2).mean()
+        expected = (x - mean) * (1.0 / np.sqrt(var + 1e-5)) * scale + bias
+        np.testing.assert_allclose(_run(cg, x), expected, rtol=1e-6)
+
+    def test_missing_bias_is_a_zero_feature_vector(self, tmp_path):
+        from onnx import helper
+
+        # ONNX's B is optional; the importer must still satisfy the kernel's
+        # one-entry-per-feature contract, so it emits an explicit zero vector.
+        scale = np.array([1.0, 2.0, 1.0], dtype=np.float32)
+        path = _save(
+            [helper.make_node("LayerNormalization", ["state", "scale"], ["y"])],
+            [_vi("state", [None, 3])],
+            [_vi("y", [None, 3])],
+            [_init("scale", scale)],
+            tmp_path,
+        )
+        cg = import_onnx_policy(path)
+        x = np.array([1.0, 2.0, 3.0])
+        mean = x.mean()
+        var = ((x - mean) ** 2).mean()
+        expected = (x - mean) * (1.0 / np.sqrt(var + 1e-5)) * scale
+        np.testing.assert_allclose(_run(cg, x), expected, rtol=1e-6)
+
+    def test_rejects_non_last_axis(self, tmp_path):
+        from onnx import helper
+
+        # w is a (2,3) initializer normalized over axis 0; state keeps the
+        # observation input on the reachable path so the rejection is the axis
+        # check, not the port-layout check.
+        path = _save(
+            [
+                helper.make_node("LayerNormalization", ["w", "scale", "bias"], ["ln"], axis=0),
+                helper.make_node("MatMul", ["ln", "state"], ["y"]),
+            ],
+            [_vi("state", [None, 3])],
+            [_vi("y", [None, 2])],
+            [
+                _init("w", np.ones((2, 3), dtype=np.float32)),
+                _init("scale", np.ones((2, 3), dtype=np.float32)),
+                _init("bias", np.zeros((2, 3), dtype=np.float32)),
+            ],
+            tmp_path,
+        )
+        with pytest.raises(NotImplementedError, match="not the last axis"):
+            import_onnx_policy(path)
+
+    def test_rejects_non_float_stash_type(self, tmp_path):
+        from onnx import helper
+
+        path = _save(
+            [helper.make_node("LayerNormalization", ["state", "scale", "bias"], ["y"], stash_type=10)],
+            [_vi("state", [None, 3])],
+            [_vi("y", [None, 3])],
+            [_init("scale", np.ones(3, dtype=np.float32)), _init("bias", np.zeros(3, dtype=np.float32))],
+            tmp_path,
+        )
+        with pytest.raises(NotImplementedError, match="stash_type"):
+            import_onnx_policy(path)
+
+
 class TestExpandedOps:
     """The elementwise / utility ONNX ops added for real small policies."""
 
