@@ -4,6 +4,8 @@
   "clip_blob_bytes": 48,
   "clip_blob_len": 3,
   "const_blob_bytes": 1008,
+  "const_blob_f32_bytes": 0,
+  "const_blob_f32_len": 0,
   "const_blob_len": 126,
   "float_type": "f64",
   "has_solve_qp": false,

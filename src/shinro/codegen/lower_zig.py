@@ -43,6 +43,8 @@ from shinro.codegen.tracing import Graph, Node
 #: The compiled VM and every C-ABI buffer are f64, so the manifest's byte
 #: metrics are element counts times this.
 _FLOAT_BYTES = 8
+#: f32 bytes, for the manifest's f32 weight-blob metric.
+_FLOAT32_BYTES = 4
 
 
 def lower_zig(
@@ -92,17 +94,37 @@ def lower_zig(
         input_offsets[name] = acc
         acc += _input_size(g, name)
 
+    # --- consumers, for the f32 weight-blob decision below ---
+    # node index → [(consumer node index, input position)]. Bounds the f32 path
+    # to constants that only ever feed a gemm's weight operand.
+    consumers: dict[int, list[tuple[int, int]]] = {}
+    for ci, cnode in enumerate(g.nodes):
+        for pos, src in enumerate(cnode.inputs):
+            consumers.setdefault(int(src), []).append((ci, pos))
+
     # --- constants and clip bounds ---
+    # A const node is baked into const_blob_f32 (instead of const_blob) when it
+    # is f32-exact and only consumed as a gemm weight — see _is_f32_weight.
+    # const_offsets carries the blob offset plus that dtype choice, so the VM's
+    # gemm arm selects the mixed-dtype kernel at comptime. This halves the
+    # per-tick weight bytes while the kernel widens each lane in a register, so
+    # the f64 result is unchanged.
     const_blob: list[float] = []
-    const_offsets: dict[int, int] = {}
+    const_blob_f32: list[float] = []
+    const_offsets: dict[int, tuple[int, bool]] = {}
     clip_lo: list[float] = []
     clip_hi: list[float] = []
     clip_offsets: dict[int, int] = {}
 
     for i, node in enumerate(g.nodes):
         if node.op == "const":
-            const_offsets[i] = len(const_blob)
-            const_blob.extend(float(v) for v in node.attrs["value"].ravel())
+            vals = np.asarray(node.attrs["value"], dtype=np.float64).ravel()
+            if _is_f32_weight(i, consumers, g, vals):
+                const_offsets[i] = (len(const_blob_f32), True)
+                const_blob_f32.extend(vals.tolist())
+            else:
+                const_offsets[i] = (len(const_blob), False)
+                const_blob.extend(vals.tolist())
         elif node.op == "clip":
             clip_offsets[i] = len(clip_lo)
             bounds: dict[str, list[float]] = {"lo": clip_lo, "hi": clip_hi}
@@ -189,7 +211,7 @@ def lower_zig(
     lines.append("// A ComposedGraph serialized as a comptime data table.")
     lines.append("")
     lines.append("pub const Op = enum {")
-    lines.append("    cst, inp, out, matmul, add, sub, mul, div, ne, neg,")
+    lines.append("    cst, cst_f32, inp, out, matmul, add, sub, mul, div, ne, neg,")
     lines.append("    transpose, inv, reshape, clip, where_op, any,")
     lines.append("    copy, tanh, relu, exp, argmax, one_hot, slice,")
     lines.append("    sin, cos, stack, solve_qp,")
@@ -240,6 +262,7 @@ def lower_zig(
         lines.append("    " + _zig_floats(const_blob) + ",")
     lines.append("};")
     lines.append("")
+    lines.append("pub const const_blob_f32 = [_]f32{" + _zig_f32s(const_blob_f32) + "};")
     lines.append("pub const clip_lo = [_]f64{" + _zig_floats(clip_lo) + "};")
     lines.append("pub const clip_hi = [_]f64{" + _zig_floats(clip_hi) + "};")
     lines.append("pub const gemm_alpha = [_]f64{" + _zig_floats(gemm_alpha) + "};")
@@ -257,6 +280,7 @@ def lower_zig(
         cg,
         buf_len,
         len(const_blob),
+        len(const_blob_f32),
         offsets,
         const_offsets,
         clip_offsets,
@@ -278,8 +302,9 @@ def _graph_manifest(
     cg: ComposedGraph,
     buf_len: int,
     const_blob_len: int,
+    const_blob_f32_len: int,
     offsets: list[int],
-    const_offsets: dict[int, int],
+    const_offsets: dict[int, tuple[int, bool]],
     clip_offsets: dict[int, int],
     gemm_aux: dict[int, int],
     elu_aux: dict[int, int],
@@ -303,7 +328,8 @@ def _graph_manifest(
         const_blob_len: Number of f64s in the baked constants blob.
         offsets: Per-node buffer offset (node ``i`` owns ``rows*cols`` f64s at
             ``buf[offsets[i]..]``).
-        const_offsets: Maps const node index → offset into ``const_blob``.
+        const_offsets: Maps const node index → ``(blob offset, is_f32)``; an f32
+            constant indexes ``const_blob_f32``, every other one ``const_blob``.
         clip_offsets: Maps clip node index → offset into ``clip_lo``/``hi``.
         gemm_aux: Maps gemm node index → packed aux (``(table_index << 1) | transB``).
         elu_aux: Maps elu node index → index into ``elu_alpha``.
@@ -379,6 +405,8 @@ def _graph_manifest(
         "buf_bytes": buf_len * _FLOAT_BYTES,
         "const_blob_len": const_blob_len,
         "const_blob_bytes": const_blob_len * _FLOAT_BYTES,
+        "const_blob_f32_len": const_blob_f32_len,
+        "const_blob_f32_bytes": const_blob_f32_len * _FLOAT32_BYTES,
         "clip_blob_len": clip_blob_len,
         "clip_blob_bytes": 2 * clip_blob_len * _FLOAT_BYTES,
         "input_bytes": input_bytes,
@@ -413,7 +441,7 @@ def _node_line(
     g: Graph,
     i: int,
     node: Node,
-    const_offsets: dict[int, int],
+    const_offsets: dict[int, tuple[int, bool]],
     clip_offsets: dict[int, int],
     gemm_aux: dict[int, int],
     elu_aux: dict[int, int],
@@ -436,7 +464,7 @@ def _node_line(
         g: The composed graph being serialized.
         i: Node index in ``g.nodes`` (kept for symmetry with the table).
         node: The Python node to render.
-        const_offsets: Maps const node index → offset into ``const_blob``.
+        const_offsets: Maps const node index → ``(blob offset, is_f32)``.
         clip_offsets: Maps clip node index → offset into ``clip_lo``/``hi``.
         gemm_aux: Maps gemm node index → packed aux.
         elu_aux: Maps elu node index → index into ``elu_alpha``.
@@ -474,7 +502,7 @@ def _node_vm_info(
     g: Graph,
     i: int,
     node: Node,
-    const_offsets: dict[int, int],
+    const_offsets: dict[int, tuple[int, bool]],
     clip_offsets: dict[int, int],
     gemm_aux: dict[int, int],
     elu_aux: dict[int, int],
@@ -500,7 +528,7 @@ def _node_vm_info(
         g: The composed graph being serialized.
         i: Node index in ``g.nodes``.
         node: The Python node to translate.
-        const_offsets: Maps const node index → offset into ``const_blob``.
+        const_offsets: Maps const node index → ``(blob offset, is_f32)``.
         clip_offsets: Maps clip node index → offset into ``clip_lo``/``hi``.
         gemm_aux: Maps gemm node index → packed aux (``(table_index << 1) | transB``).
         elu_aux: Maps elu node index → index into ``elu_alpha``.
@@ -514,7 +542,11 @@ def _node_vm_info(
         The ``(vm_op, aux)`` pair for the node.
     """
     if node.op == "const":
-        return "cst", const_offsets[i]
+        # aux is the offset into the blob this constant was baked into; an
+        # f32-exact gemm weight lives in const_blob_f32 and gets the distinct op
+        # so the VM's gemm arm selects the mixed-dtype kernel at comptime.
+        off, is_f32 = const_offsets[i]
+        return ("cst_f32" if is_f32 else "cst"), off
     if node.op == "input":
         return "inp", input_offsets[node.attrs["name"]]
     if node.op == "output":
@@ -631,3 +663,36 @@ def _zig_float(x: float) -> str:
 def _zig_floats(vals: list[float]) -> str:
     """Format a list of f64s as a comma-separated Zig hex-float literal."""
     return ", ".join(_zig_float(x) for x in vals)
+
+
+def _zig_f32(x: float) -> str:
+    """Format an f32-exact value as a Zig f32 hex-float literal.
+
+    The value is rounded to f32 first (a no-op for the caller's exact values),
+    then written as its full f64 hex. Parsing that literal back into an f32
+    returns the identical value, so the f32 weight blob is bit-faithful and the
+    kernel's in-register widening reproduces the f64 the f64 blob would hold.
+    """
+    return float(np.float32(x)).hex()
+
+
+def _zig_f32s(vals: list[float]) -> str:
+    """Format a list of f32-exact values as comma-separated Zig f32 literals."""
+    return ", ".join(_zig_f32(x) for x in vals)
+
+
+def _is_f32_weight(node_index: int, consumers: dict[int, list[tuple[int, int]]], g: Graph, vals: np.ndarray) -> bool:
+    """Whether a constant can be baked as f32 (the gemm weight fast path).
+
+    True when every element round-trips through f32 exactly — the case for a
+    model's float32 initializers, which the importer only widened — and every
+    consumer is a ``gemm`` reading it as the weight operand (input position 1).
+    The second condition bounds the mixed-dtype path to the gemm arm, so no
+    other VM arm ever receives an ``.cst_f32`` node.
+    """
+    uses = consumers.get(node_index)
+    if not uses:
+        return False
+    if not all(g.nodes[ci].op == "gemm" and pos == 1 for ci, pos in uses):
+        return False
+    return bool(np.array_equal(vals.astype(np.float32).astype(np.float64), vals))
