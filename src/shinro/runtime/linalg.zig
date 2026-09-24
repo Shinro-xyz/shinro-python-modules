@@ -57,15 +57,14 @@ pub fn matmul(comptime m: usize, comptime k: usize, comptime n: usize, a: []cons
 ///
 /// Returns:
 ///     The flat `m`-vector result.
+///
+/// Row `i` of `a` and all of `v` are contiguous along the contraction, so each
+/// output element is a vector `dot`. This is the recurrent cells' hot path
+/// (`x·Wᵀ` and `h·Rᵀ`), where `k` is the input/hidden width — far above
+/// `SIMD_MIN_K`.
 pub fn matvec(comptime m: usize, comptime k: usize, a: []const f64, v: []const f64) [m]f64 {
     var out: [m]f64 = undefined;
-    for (0..m) |i| {
-        var s: f64 = 0.0;
-        for (0..k) |p| {
-            s += a[i * k + p] * v[p];
-        }
-        out[i] = s;
-    }
+    for (0..m) |i| out[i] = dot(k, a[i * k ..][0..k], v);
     return out;
 }
 
@@ -308,9 +307,12 @@ pub fn onehot (comptime depth: usize, idx:usize) [depth]f64{
 const SIMD_VL = std.simd.suggestVectorLength(f64) orelse 1;
 
 /// Contraction length below which the vector dot product is not worth its
-/// horizontal reduce. Small (classical-sized) matrices therefore keep the
-/// scalar loop and its exact bit-for-bit accumulation order.
-const SIMD_MIN_K = SIMD_VL * 2;
+/// horizontal reduce. The floor of 8, independent of the target's vector
+/// width, keeps every small/classical-sized contraction on the exact scalar
+/// order on *every* target — so a result never depends on the build target's
+/// SIMD width — while every policy-sized contraction still takes the vector
+/// path.
+const SIMD_MIN_K = @max(2 * SIMD_VL, 8);
 
 /// Lane-parallel dot product of two contiguous length-`len` vectors.
 ///
