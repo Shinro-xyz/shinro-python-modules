@@ -83,7 +83,12 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
 
         switch (node.op) {
             .cst => {
-                for (0..node.rows * node.cols) |j| out[j] = g.const_blob[node.aux + j];
+                // Constants are NOT copied into the workspace: every consumer
+                // reads them in place from g.const_blob via node_input_at.
+                // Copying each one per tick was pure data movement with zero
+                // flops — for an MLP policy the const slots are the bulk of
+                // buf_len, so this was a full weights memcpy every tick before
+                // any arithmetic.
             },
             .inp => {
                 for (0..node.rows * node.cols) |j| out[j] = inputs[node.aux + j];
@@ -604,5 +609,11 @@ fn node_input(nodes: []const g.Node, node: g.Node, buf: *[g.buf_len]f64) []const
 /// Returns:
 ///     A fixed-length slice of `buf` covering node `idx`'s `rows*cols` f64s.
 fn node_input_at(nodes: []const g.Node, idx: usize, buf: *[g.buf_len]f64) []const f64 {
-    return buf.*[g.offsets[idx]..][0 .. nodes[idx].rows * nodes[idx].cols];
+    const n = nodes[idx];
+    // .cst nodes live in the baked const_blob and are never copied into the
+    // workspace (their switch arm is a no-op), so read them in place. This is
+    // the additive fast path for policy weights; all other nodes keep the
+    // workspace-slot contract unchanged.
+    if (n.op == .cst) return g.const_blob[n.aux..][0 .. n.rows * n.cols];
+    return buf.*[g.offsets[idx]..][0 .. n.rows * n.cols];
 }
