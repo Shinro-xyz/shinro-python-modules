@@ -62,9 +62,9 @@ pub fn matmul(comptime m: usize, comptime k: usize, comptime n: usize, a: []cons
 /// output element is a vector `dot`. This is the recurrent cells' hot path
 /// (`x·Wᵀ` and `h·Rᵀ`), where `k` is the input/hidden width — far above
 /// `SIMD_MIN_K`.
-pub fn matvec(comptime m: usize, comptime k: usize, a: []const f64, v: []const f64) [m]f64 {
+pub fn matvec(comptime m: usize, comptime k: usize, comptime TB: type, a: []const TB, v: []const f64) [m]f64 {
     var out: [m]f64 = undefined;
-    for (0..m) |i| out[i] = dot(k, f64, a[i * k ..][0..k], v);
+    for (0..m) |i| out[i] = dot(k, TB, v, a[i * k ..][0..k]);
     return out;
 }
 
@@ -497,9 +497,10 @@ pub fn elu(comptime m: usize, comptime alpha: f64, a: []const f64) [m]f64 {
 ///
 /// Args:
 ///     x: Flat input `(I,)`.
-///     w: `(4H, I)` input weights (ONNX `W`).
-///     r: `(4H, H)` recurrent weights (ONNX `R`).
-///     b: `(8H,)` biases, `Wb(4H) ‖ Rb(4H)` (ONNX `B`); both halves are added.
+///     w: `(4H, I)` input weights (ONNX `W`); element type `TB` (f32 or f64).
+///     r: `(4H, H)` recurrent weights (ONNX `R`); element type `TB`.
+///     b: `(8H,)` biases, `Wb(4H) ‖ Rb(4H)` (ONNX `B`); both halves are added;
+///         always f64 (the bias is tiny, so it stays on the f64 blob).
 ///     h_prev: `(H,)` previous hidden state.
 ///     c_prev: `(H,)` previous cell state.
 ///
@@ -510,15 +511,16 @@ pub fn elu(comptime m: usize, comptime alpha: f64, a: []const f64) [m]f64 {
 pub fn lstm_cell(
     comptime H: usize,
     comptime I: usize,
+    comptime TB: type,
     x: []const f64,
-    w: []const f64,
-    r: []const f64,
+    w: []const TB,
+    r: []const TB,
     b: []const f64,
     h_prev: []const f64,
     c_prev: []const f64,
 ) [2 * H]f64 {
-    const gx = matvec(4 * H, I, w, x); // x·Wᵀ
-    const gh = matvec(4 * H, H, r, h_prev); // h·Rᵀ
+    const gx = matvec(4 * H, I, TB, w, x); // x·Wᵀ
+    const gh = matvec(4 * H, H, TB, r, h_prev); // h·Rᵀ
 
     var out: [2 * H]f64 = undefined;
     for (0..H) |j| {
@@ -545,9 +547,9 @@ pub fn lstm_cell(
 ///
 /// Args:
 ///     x: Flat input `(I,)`.
-///     w: `(3H, I)` input weights (ONNX `W`).
-///     r: `(3H, H)` recurrent weights (ONNX `R`).
-///     b: `(6H,)` biases, `Wbz‖Wbr‖Wbh‖Rbz‖Rbr‖Rbh` (ONNX `B`).
+///     w: `(3H, I)` input weights (ONNX `W`); element type `TB`.
+///     r: `(3H, H)` recurrent weights (ONNX `R`); element type `TB`.
+///     b: `(6H,)` biases, `Wbz‖Wbr‖Wbh‖Rbz‖Rbr‖Rbh` (ONNX `B`); always f64.
 ///     h_prev: `(H,)` previous hidden state.
 ///
 /// Returns:
@@ -556,14 +558,15 @@ pub fn gru_cell(
     comptime H: usize,
     comptime I: usize,
     comptime lbr: bool,
+    comptime TB: type,
     x: []const f64,
-    w: []const f64,
-    r: []const f64,
+    w: []const TB,
+    r: []const TB,
     b: []const f64,
     h_prev: []const f64,
 ) [H]f64 {
-    const gx = matvec(3 * H, I, w, x); // x·Wᵀ
-    const gh = matvec(3 * H, H, r, h_prev); // h·Rᵀ
+    const gx = matvec(3 * H, I, TB, w, x); // x·Wᵀ
+    const gh = matvec(3 * H, H, TB, r, h_prev); // h·Rᵀ
 
     var z: [H]f64 = undefined;
     var r_g: [H]f64 = undefined;
@@ -587,7 +590,7 @@ pub fn gru_cell(
         var ghr: [H]f64 = undefined;
         for (0..H) |j| {
             var s: f64 = 0.0;
-            for (0..H) |p| s += r[(2 * H + j) * H + p] * rh[p];
+            for (0..H) |p| s += @as(f64, @floatCast(r[(2 * H + j) * H + p])) * rh[p];
             ghr[j] = s;
         }
         for (0..H) |j| {
@@ -602,8 +605,8 @@ pub fn gru_cell(
 ///
 /// Args:
 ///     x: Flat input `(I,)`.
-///     w: `(H, I)` input weights (ONNX `W`).
-///     r: `(H, H)` recurrent weights (ONNX `R`).
+///     w: `(H, I)` input weights (ONNX `W`); element type `TB`.
+///     r: `(H, H)` recurrent weights (ONNX `R`); element type `TB`.
 ///     b: `(2H,)` biases, `Wb(H) ‖ Rb(H)` (ONNX `B`); both halves are added.
 ///     h_prev: `(H,)` previous hidden state.
 ///
@@ -612,14 +615,15 @@ pub fn gru_cell(
 pub fn rnn_cell(
     comptime H: usize,
     comptime I: usize,
+    comptime TB: type,
     x: []const f64,
-    w: []const f64,
-    r: []const f64,
+    w: []const TB,
+    r: []const TB,
     b: []const f64,
     h_prev: []const f64,
 ) [H]f64 {
-    const gx = matvec(H, I, w, x); // x·Wᵀ
-    const gh = matvec(H, H, r, h_prev); // h·Rᵀ
+    const gx = matvec(H, I, TB, w, x); // x·Wᵀ
+    const gh = matvec(H, H, TB, r, h_prev); // h·Rᵀ
     var out: [H]f64 = undefined;
     for (0..H) |j| out[j] = std.math.tanh(gx[j] + gh[j] + b[j] + b[H + j]);
     return out;

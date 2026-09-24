@@ -79,17 +79,17 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
     @setEvalBranchQuota(1_000_000);
 
     inline for (g.nodes, 0..) |node, i| {
+        // Const nodes own no workspace slot: their data lives in the baked blob
+        // and consumers read it in place (node_input_at / the contraction arms).
+        // Skipping them keeps buf_len to the real working set and means no slice
+        // is ever taken at a const node's (unused) offset.
+        if (node.op == .cst or node.op == .cst_f32) continue;
+
         const out = workspace[g.offsets[i]..][0 .. node.rows * node.cols];
 
         switch (node.op) {
-            .cst, .cst_f32 => {
-                // Constants are NOT copied into the workspace: every consumer
-                // reads them in place — f64 consts from g.const_blob, f32
-                // weights from g.const_blob_f32 (the gemm arm) — so the
-                // per-tick weights memcpy is gone entirely. Copying each one
-                // was pure data movement with zero flops; for a policy the
-                // const slots are the bulk of buf_len.
-            },
+            // Unreachable (consts are skipped above); kept for exhaustiveness.
+            .cst, .cst_f32 => {},
             .inp => {
                 for (0..node.rows * node.cols) |j| out[j] = inputs[node.aux + j];
             },
@@ -112,7 +112,7 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
                     for (0..node.rows * node.cols) |j| out[j] = r[j];
                 } else if (right.vec) {
                     // matvec: (m, k) @ (k,) -> (m,)
-                    const r = la.matvec(node.rows, right.rows, a, b);
+                    const r = la.matvec(node.rows, right.rows, f64, a, b);
                     for (0..node.rows * node.cols) |j| out[j] = r[j];
                 } else {
                     // matmul: (m, k) @ (k, n) -> (m, n); also covers (m,1)@(1,n) (k=1)
@@ -391,12 +391,11 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
             // in aux bit 0.
             .lstm => {
                 const x = node_input(g.nodes[0..], node, &workspace);
-                const w = node_input_at(g.nodes[0..], node.inputs[1], &workspace);
-                const r = node_input_at(g.nodes[0..], node.inputs[2], &workspace);
                 const b = node_input_at(g.nodes[0..], node.inputs[3], &workspace);
                 const h_prev = node_input_at(g.nodes[0..], node.inputs[4], &workspace);
                 const c_prev = node_input_at(g.nodes[0..], node.inputs[5], &workspace);
                 const w_n = g.nodes[node.inputs[1]];
+                const r_n = g.nodes[node.inputs[2]];
                 const x_n = g.nodes[node.inputs[0]];
                 const H = comptime w_n.rows / 4;
                 const I = comptime x_n.rows * x_n.cols;
@@ -405,16 +404,26 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
                     if (w_n.cols != I) @compileError("lstm: W (4H, I) input width must match the activation width");
                     if (node.rows * node.cols != 2 * H) @compileError("lstm: output slot must be 2*H ([h_next ‖ c_next])");
                 }
-                const res = la.lstm_cell(H, I, x, w, r, b, h_prev, c_prev);
-                for (0..node.rows * node.cols) |j| out[j] = res[j];
+                // W and R always share a blob (the lowerer keeps them coherent),
+                // so one comptime dtype choice driven by W's op serves both.
+                if (w_n.op == .cst_f32) {
+                    const w32 = g.const_blob_f32[w_n.aux..][0 .. w_n.rows * w_n.cols];
+                    const r32 = g.const_blob_f32[r_n.aux..][0 .. r_n.rows * r_n.cols];
+                    const res = la.lstm_cell(H, I, f32, x, w32, r32, b, h_prev, c_prev);
+                    for (0..node.rows * node.cols) |j| out[j] = res[j];
+                } else {
+                    const w = node_input_at(g.nodes[0..], node.inputs[1], &workspace);
+                    const r = node_input_at(g.nodes[0..], node.inputs[2], &workspace);
+                    const res = la.lstm_cell(H, I, f64, x, w, r, b, h_prev, c_prev);
+                    for (0..node.rows * node.cols) |j| out[j] = res[j];
+                }
             },
             .gru => {
                 const x = node_input(g.nodes[0..], node, &workspace);
-                const w = node_input_at(g.nodes[0..], node.inputs[1], &workspace);
-                const r = node_input_at(g.nodes[0..], node.inputs[2], &workspace);
                 const b = node_input_at(g.nodes[0..], node.inputs[3], &workspace);
                 const h_prev = node_input_at(g.nodes[0..], node.inputs[4], &workspace);
                 const w_n = g.nodes[node.inputs[1]];
+                const r_n = g.nodes[node.inputs[2]];
                 const x_n = g.nodes[node.inputs[0]];
                 const H = comptime w_n.rows / 3;
                 const I = comptime x_n.rows * x_n.cols;
@@ -424,16 +433,24 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
                     if (w_n.cols != I) @compileError("gru: W (3H, I) input width must match the activation width");
                     if (node.rows * node.cols != H) @compileError("gru: output slot must be H");
                 }
-                const res = la.gru_cell(H, I, lbr, x, w, r, b, h_prev);
-                for (0..node.rows * node.cols) |j| out[j] = res[j];
+                if (w_n.op == .cst_f32) {
+                    const w32 = g.const_blob_f32[w_n.aux..][0 .. w_n.rows * w_n.cols];
+                    const r32 = g.const_blob_f32[r_n.aux..][0 .. r_n.rows * r_n.cols];
+                    const res = la.gru_cell(H, I, lbr, f32, x, w32, r32, b, h_prev);
+                    for (0..node.rows * node.cols) |j| out[j] = res[j];
+                } else {
+                    const w = node_input_at(g.nodes[0..], node.inputs[1], &workspace);
+                    const r = node_input_at(g.nodes[0..], node.inputs[2], &workspace);
+                    const res = la.gru_cell(H, I, lbr, f64, x, w, r, b, h_prev);
+                    for (0..node.rows * node.cols) |j| out[j] = res[j];
+                }
             },
             .rnn => {
                 const x = node_input(g.nodes[0..], node, &workspace);
-                const w = node_input_at(g.nodes[0..], node.inputs[1], &workspace);
-                const r = node_input_at(g.nodes[0..], node.inputs[2], &workspace);
                 const b = node_input_at(g.nodes[0..], node.inputs[3], &workspace);
                 const h_prev = node_input_at(g.nodes[0..], node.inputs[4], &workspace);
                 const w_n = g.nodes[node.inputs[1]];
+                const r_n = g.nodes[node.inputs[2]];
                 const x_n = g.nodes[node.inputs[0]];
                 const H = comptime w_n.rows;
                 const I = comptime x_n.rows * x_n.cols;
@@ -441,8 +458,17 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
                     if (w_n.cols != I) @compileError("rnn: W (H, I) input width must match the activation width");
                     if (node.rows * node.cols != H) @compileError("rnn: output slot must be H");
                 }
-                const res = la.rnn_cell(H, I, x, w, r, b, h_prev);
-                for (0..node.rows * node.cols) |j| out[j] = res[j];
+                if (w_n.op == .cst_f32) {
+                    const w32 = g.const_blob_f32[w_n.aux..][0 .. w_n.rows * w_n.cols];
+                    const r32 = g.const_blob_f32[r_n.aux..][0 .. r_n.rows * r_n.cols];
+                    const res = la.rnn_cell(H, I, f32, x, w32, r32, b, h_prev);
+                    for (0..node.rows * node.cols) |j| out[j] = res[j];
+                } else {
+                    const w = node_input_at(g.nodes[0..], node.inputs[1], &workspace);
+                    const r = node_input_at(g.nodes[0..], node.inputs[2], &workspace);
+                    const res = la.rnn_cell(H, I, f64, x, w, r, b, h_prev);
+                    for (0..node.rows * node.cols) |j| out[j] = res[j];
+                }
             },
             // .concat — join operands along `node.aux` (0 = leading axis,
             // 1 = trailing axis of a 2-D tensor) by copying into the output

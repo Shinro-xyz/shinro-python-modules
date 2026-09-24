@@ -84,7 +84,12 @@ def lower_zig(
     total = 0
     for n in g.nodes:
         offsets.append(total)
-        total += _size(n.shape)
+        # Const nodes are read from the baked blob, never the workspace, so they
+        # own no slot: not advancing keeps buf_len to the real working set (a
+        # policy's weights were ~99% of it). The const offsets are left in the
+        # table for indexing uniformity but are never sliced.
+        if n.op != "const":
+            total += _size(n.shape)
     buf_len = total
 
     # --- input port packing (cg.inputs order) ---
@@ -96,19 +101,33 @@ def lower_zig(
 
     # --- consumers, for the f32 weight-blob decision below ---
     # node index → [(consumer node index, input position)]. Bounds the f32 path
-    # to constants that only ever feed a gemm's weight operand.
+    # to constants that only ever feed a contraction's weight operand.
     consumers: dict[int, list[tuple[int, int]]] = {}
     for ci, cnode in enumerate(g.nodes):
         for pos, src in enumerate(cnode.inputs):
             consumers.setdefault(int(src), []).append((ci, pos))
 
     # --- constants and clip bounds ---
-    # A const node is baked into const_blob_f32 (instead of const_blob) when it
-    # is f32-exact and only consumed as a gemm weight — see _is_f32_weight.
-    # const_offsets carries the blob offset plus that dtype choice, so the VM's
-    # gemm arm selects the mixed-dtype kernel at comptime. This halves the
-    # per-tick weight bytes while the kernel widens each lane in a register, so
-    # the f64 result is unchanged.
+    # A const node is baked into const_blob_f32 (instead of const_blob) when it is
+    # f32-exact and only used as a contraction weight — a gemm's B (position 1)
+    # or a recurrent cell's W/R (positions 1/2). const_offsets carries the blob
+    # offset plus that dtype choice, so the VM selects the mixed-dtype kernel at
+    # comptime. This halves the per-tick weight bytes while the kernel widens
+    # each lane in a register, so the f64 result is unchanged.
+    #
+    # Coherence: a cell reads BOTH W and R from whichever blob they were baked
+    # into, so the two must agree on the dtype — if only one is f32-eligible,
+    # both stay f64 (otherwise one side would be read from the wrong blob).
+    f32_nodes = {
+        i for i, n in enumerate(g.nodes) if n.op == "const" and _is_f32_weight(i, n, consumers, g)
+    }
+    for n in g.nodes:
+        if n.op in ("lstm", "gru", "rnn"):
+            w_i, r_i = int(n.inputs[1]), int(n.inputs[2])
+            if (w_i in f32_nodes) != (r_i in f32_nodes):
+                f32_nodes.discard(w_i)
+                f32_nodes.discard(r_i)
+
     const_blob: list[float] = []
     const_blob_f32: list[float] = []
     const_offsets: dict[int, tuple[int, bool]] = {}
@@ -119,7 +138,7 @@ def lower_zig(
     for i, node in enumerate(g.nodes):
         if node.op == "const":
             vals = np.asarray(node.attrs["value"], dtype=np.float64).ravel()
-            if _is_f32_weight(i, consumers, g, vals):
+            if i in f32_nodes:
                 const_offsets[i] = (len(const_blob_f32), True)
                 const_blob_f32.extend(vals.tolist())
             else:
@@ -681,18 +700,25 @@ def _zig_f32s(vals: list[float]) -> str:
     return ", ".join(_zig_f32(x) for x in vals)
 
 
-def _is_f32_weight(node_index: int, consumers: dict[int, list[tuple[int, int]]], g: Graph, vals: np.ndarray) -> bool:
-    """Whether a constant can be baked as f32 (the gemm weight fast path).
+def _is_f32_weight(node_index: int, node: Node, consumers: dict[int, list[tuple[int, int]]], g: Graph) -> bool:
+    """Whether a constant can be baked as f32 (the contraction-weight fast path).
 
     True when every element round-trips through f32 exactly — the case for a
     model's float32 initializers, which the importer only widened — and every
-    consumer is a ``gemm`` reading it as the weight operand (input position 1).
-    The second condition bounds the mixed-dtype path to the gemm arm, so no
-    other VM arm ever receives an ``.cst_f32`` node.
+    consumer is a contraction reading it as a weight operand: a ``gemm``'s B
+    (input position 1) or a recurrent cell's W/R (positions 1/2). That bounds
+    the mixed-dtype path to those VM arms, so no other arm sees a ``cst_f32``
+    node. A cell's bias B (position 3) is left on the f64 blob — it is tiny.
     """
     uses = consumers.get(node_index)
     if not uses:
         return False
-    if not all(g.nodes[ci].op == "gemm" and pos == 1 for ci, pos in uses):
+    for ci, pos in uses:
+        cop = g.nodes[ci].op
+        if cop == "gemm" and pos == 1:
+            continue
+        if cop in ("lstm", "gru", "rnn") and pos in (1, 2):
+            continue
         return False
+    vals = np.asarray(node.attrs["value"], dtype=np.float64).ravel()
     return bool(np.array_equal(vals.astype(np.float32).astype(np.float64), vals))
