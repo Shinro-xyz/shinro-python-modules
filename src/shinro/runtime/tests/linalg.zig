@@ -234,6 +234,21 @@ test "gemm vector path is exact for a power-of-two contraction" {
     try std.testing.expectEqual(@as(f64, 60.0), r[0]);
 }
 
+test "matvec vector path is exact for a power-of-two contraction" {
+    // k = 16 >= SIMD_MIN_K drives the @Vector dot inside matvec — the recurrent
+    // cells' contraction (x·Wᵀ / h·Rᵀ). Powers of two sum exactly in any order.
+    const p2 = [_]f64{ 1, 2, 4, 8 };
+    var a: [32]f64 = undefined; // (m=2, k=16)
+    var v: [16]f64 = undefined;
+    for (0..16) |i| {
+        v[i] = p2[i % 4];
+        a[i] = 1.0; // row 0
+        a[16 + i] = 2.0; // row 1
+    }
+    const r = la.matvec(2, 16, &a, &v);
+    try std.testing.expectEqual([_]f64{ 60.0, 120.0 }, r);
+}
+
 // layernorm_rows: last-axis normalization over (rows, cols) = (samples,
 // features). Biased variance, rstd = 1/sqrt(var + eps).
 
