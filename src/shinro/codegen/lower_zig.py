@@ -146,6 +146,19 @@ def lower_zig(
             elu_aux[i] = len(elu_alpha)
             elu_alpha.append(float(node.attrs.get("alpha", 1.0)))
 
+    # --- baked layernorm epsilon (default 1e-5) ---
+    # Same f64-scalar problem as elu's alpha (the `aux: usize` field cannot hold a
+    # float): eps is baked into layernorm_eps with the table index in aux. The
+    # biased variance and the reciprocal-then-multiply order match
+    # linalg.layernorm_rows and the numpy handler exactly, so the three engines
+    # agree bit-for-bit rather than merely mathematically.
+    layernorm_eps: list[float] = []
+    layernorm_aux: dict[int, int] = {}
+    for i, node in enumerate(g.nodes):
+        if node.op == "layernorm":
+            layernorm_aux[i] = len(layernorm_eps)
+            layernorm_eps.append(float(node.attrs.get("eps", 1e-5)))
+
     # --- baked gru linear_before_reset flag ---
     # gru's `linear_before_reset` is a bool, so it rides directly in the node's
     # `aux` bit 0 (the gemm transB pattern) — no parallel table needed. The VM
@@ -180,7 +193,7 @@ def lower_zig(
     lines.append("    transpose, inv, reshape, clip, where_op, any,")
     lines.append("    copy, tanh, relu, exp, argmax, one_hot, slice,")
     lines.append("    sin, cos, stack, solve_qp,")
-    lines.append("    abs, sign, pow, lt, min, gemm, sigmoid, softmax, gelu, elu,")
+    lines.append("    abs, sign, pow, lt, min, gemm, sigmoid, softmax, gelu, elu, layernorm,")
     lines.append("    lstm, gru, rnn,")
     lines.append("    concat, gather,")
     lines.append("};")
@@ -206,7 +219,18 @@ def lower_zig(
     lines.append("pub const nodes = [_]Node{")
     for i, node in enumerate(g.nodes):
         rendered = _node_line(
-            g, i, node, const_offsets, clip_offsets, gemm_aux, elu_aux, gru_aux, input_offsets, cg.outputs, cg.state_outputs
+            g,
+            i,
+            node,
+            const_offsets,
+            clip_offsets,
+            gemm_aux,
+            elu_aux,
+            gru_aux,
+            layernorm_aux,
+            input_offsets,
+            cg.outputs,
+            cg.state_outputs,
         )
         lines.append("    " + rendered + ",")
     lines.append("};")
@@ -221,7 +245,7 @@ def lower_zig(
     lines.append("pub const gemm_alpha = [_]f64{" + _zig_floats(gemm_alpha) + "};")
     lines.append("pub const gemm_beta = [_]f64{" + _zig_floats(gemm_beta) + "};")
     lines.append("pub const elu_alpha = [_]f64{" + _zig_floats(elu_alpha) + "};")
-    lines.append("")
+    lines.append("pub const layernorm_eps = [_]f64{" + _zig_floats(layernorm_eps) + "};")
     lines.append("pub const output_offsets = [_]usize{" + ", ".join(str(o) for o in output_offsets) + "};")
     lines.append("pub const state_offsets = [_]usize{" + ", ".join(str(o) for o in state_offsets) + "};")
     lines.append("")
@@ -239,6 +263,7 @@ def lower_zig(
         gemm_aux,
         elu_aux,
         gru_aux,
+        layernorm_aux,
         input_offsets,
     )
     if provenance:
@@ -259,6 +284,7 @@ def _graph_manifest(
     gemm_aux: dict[int, int],
     elu_aux: dict[int, int],
     gru_aux: dict[int, int],
+    layernorm_aux: dict[int, int],
     input_offsets: dict[str, int],
 ) -> dict:
     """Build the deterministic graph manifest for a composed graph.
@@ -281,6 +307,7 @@ def _graph_manifest(
         clip_offsets: Maps clip node index → offset into ``clip_lo``/``hi``.
         gemm_aux: Maps gemm node index → packed aux (``(table_index << 1) | transB``).
         elu_aux: Maps elu node index → index into ``elu_alpha``.
+        layernorm_aux: Maps layernorm node index → index into ``layernorm_eps``.
         input_offsets: Maps input port name → offset into the packed input
             buffer.
 
@@ -307,7 +334,18 @@ def _graph_manifest(
     nodes = []
     for i, node in enumerate(g.nodes):
         vm_op, aux = _node_vm_info(
-            g, i, node, const_offsets, clip_offsets, gemm_aux, elu_aux, gru_aux, input_offsets, cg.outputs, cg.state_outputs
+            g,
+            i,
+            node,
+            const_offsets,
+            clip_offsets,
+            gemm_aux,
+            elu_aux,
+            gru_aux,
+            layernorm_aux,
+            input_offsets,
+            cg.outputs,
+            cg.state_outputs,
         )
         rows, cols = _rows_cols(node.shape)
         nodes.append(
@@ -380,6 +418,7 @@ def _node_line(
     gemm_aux: dict[int, int],
     elu_aux: dict[int, int],
     gru_aux: dict[int, int],
+    layernorm_aux: dict[int, int],
     input_offsets: dict[str, int],
     outputs: list[str],
     state_outputs: list[str],
@@ -401,6 +440,7 @@ def _node_line(
         clip_offsets: Maps clip node index → offset into ``clip_lo``/``hi``.
         gemm_aux: Maps gemm node index → packed aux.
         elu_aux: Maps elu node index → index into ``elu_alpha``.
+        layernorm_aux: Maps layernorm node index → index into ``layernorm_eps``.
         input_offsets: Maps input port name → offset into the packed input
             buffer.
         outputs: Names of the graph's non-state output ports.
@@ -411,7 +451,20 @@ def _node_line(
     """
     rows, cols = _rows_cols(node.shape)
     inputs = "&.{" + ", ".join(str(x) for x in node.inputs) + "}"
-    op, aux = _node_vm_info(g, i, node, const_offsets, clip_offsets, gemm_aux, elu_aux, gru_aux, input_offsets, outputs, state_outputs)
+    op, aux = _node_vm_info(
+        g,
+        i,
+        node,
+        const_offsets,
+        clip_offsets,
+        gemm_aux,
+        elu_aux,
+        gru_aux,
+        layernorm_aux,
+        input_offsets,
+        outputs,
+        state_outputs,
+    )
     vec = str(len(node.shape) == 1).lower()
 
     return f".{{ .op = .{op}, .inputs = {inputs}, .rows = {rows}, .cols = {cols}, .aux = {aux}, .vec = {vec} }}"
@@ -426,6 +479,7 @@ def _node_vm_info(
     gemm_aux: dict[int, int],
     elu_aux: dict[int, int],
     gru_aux: dict[int, int],
+    layernorm_aux: dict[int, int],
     input_offsets: dict[str, int],
     outputs: list[str],
     state_outputs: list[str],
@@ -450,6 +504,7 @@ def _node_vm_info(
         clip_offsets: Maps clip node index → offset into ``clip_lo``/``hi``.
         gemm_aux: Maps gemm node index → packed aux (``(table_index << 1) | transB``).
         elu_aux: Maps elu node index → index into ``elu_alpha``.
+        layernorm_aux: Maps layernorm node index → index into ``layernorm_eps``.
         input_offsets: Maps input port name → offset into the packed input
             buffer.
         outputs: Names of the graph's non-state output ports.
@@ -490,6 +545,10 @@ def _node_vm_info(
         # alpha is baked into elu_alpha; the VM reads g.elu_alpha[node.aux]
         # (comptime-folded inside the unrolled node loop).
         return "elu", elu_aux[i]
+    if node.op == "layernorm":
+        # eps is baked into layernorm_eps; the VM reads g.layernorm_eps[node.aux]
+        # (comptime-folded inside the unrolled node loop).
+        return "layernorm", layernorm_aux[i]
     if node.op == "gru":
         # linear_before_reset rides in aux bit 0; the VM reads it as a comptime
         # bool so the two reset placements constant-fold.

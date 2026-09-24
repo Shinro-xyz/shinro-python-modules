@@ -216,6 +216,49 @@ test "gemm broadcasts a full (m,n) bias" {
     try std.testing.expectEqual([_]f64{ 15, 33, 34, 79 }, r);
 }
 
+// layernorm_rows: last-axis normalization over (rows, cols) = (samples,
+// features). Biased variance, rstd = 1/sqrt(var + eps).
+
+test "layernorm_rows normalizes each row over the last axis" {
+    // Rows [1,2,3] and [4,5,6] share the same spread, so both rows map to
+    // [-rstd, 0, rstd] with rstd = 1/sqrt(2/3 + eps). The second row is the
+    // regression guard for the old in-loop `return out;`, which left every
+    // row after the first undefined.
+    const a = [_]f64{ 1, 2, 3, 4, 5, 6 };
+    const scale = [_]f64{ 1, 1, 1 };
+    const bias = [_]f64{ 0, 0, 0 };
+    const r = la.layernorm_rows(2, 3, &a, &scale, &bias, 1e-5);
+    const rstd = 1.0 / std.math.sqrt(2.0 / 3.0 + 1e-5);
+    try std.testing.expectApproxEqAbs(-rstd, r[0], 1e-12);
+    try std.testing.expectApproxEqAbs(0.0, r[1], 1e-12);
+    try std.testing.expectApproxEqAbs(rstd, r[2], 1e-12);
+    try std.testing.expectApproxEqAbs(-rstd, r[3], 1e-12);
+    try std.testing.expectApproxEqAbs(0.0, r[4], 1e-12);
+    try std.testing.expectApproxEqAbs(rstd, r[5], 1e-12);
+}
+
+test "layernorm_rows applies scale and bias to a single row" {
+    // A 1-D vector is one row: rows=1, cols=n. out = (x - mean) * rstd * scale + bias.
+    const a = [_]f64{ 1, 2, 3 };
+    const scale = [_]f64{ 2, 3, 4 };
+    const bias = [_]f64{ 0.5, -0.5, 1.0 };
+    const r = la.layernorm_rows(1, 3, &a, &scale, &bias, 1e-5);
+    const rstd = 1.0 / std.math.sqrt(2.0 / 3.0 + 1e-5);
+    try std.testing.expectApproxEqAbs(-1.0 * rstd * 2.0 + 0.5, r[0], 1e-12);
+    try std.testing.expectApproxEqAbs(0.0 * rstd * 3.0 - 0.5, r[1], 1e-12);
+    try std.testing.expectApproxEqAbs(1.0 * rstd * 4.0 + 1.0, r[2], 1e-12);
+}
+
+test "layernorm_rows of a constant row is exactly the bias (eps floor)" {
+    // var = 0, so (x - mean) = 0 annihilates the rstd term and eps keeps rstd
+    // finite: the normalized value is exactly the bias.
+    const a = [_]f64{ 5, 5, 5 };
+    const scale = [_]f64{ 2, 3, 4 };
+    const bias = [_]f64{ 0.5, -0.5, 1.0 };
+    const r = la.layernorm_rows(1, 3, &a, &scale, &bias, 1e-5);
+    try std.testing.expectEqual([_]f64{ 0.5, -0.5, 1.0 }, r);
+}
+
 // ─── recurrent cells ──────────────────────────────────────────────────────
 // Reference vectors are the ONNX formulas evaluated in f64 (and validated
 // against onnxruntime to ~1e-7 on real HF policies + synthetic nodes):

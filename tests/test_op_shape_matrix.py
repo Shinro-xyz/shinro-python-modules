@@ -268,6 +268,23 @@ def _pointwise_graph(g: Graph):
     outs["gelu_2d"] = g.emit("gelu", [am23], (2, 3))
     # 2-D elu (non-default alpha exercises the baked elu_alpha table).
     outs["elu_2d"] = g.emit("elu", [am23], (2, 3), alpha=0.5)
+    # layernorm: last-axis per-row normalization, shape-preserving. The 1-D cell
+    # is a single normalized row; the non-default-eps cell exercises the baked
+    # layernorm_eps table. scale/bias stand in for ONNX Scale/B (per feature).
+    ln_scale3 = g.emit("const", [], (3,), value=np.array([2.0, 3.0, 4.0]))
+    ln_bias3 = g.emit("const", [], (3,), value=np.array([0.5, -0.5, 1.0]))
+    outs["layernorm_2d"] = g.emit("layernorm", [am23, ln_scale3, ln_bias3], (2, 3))
+    outs["layernorm_2d_eps"] = g.emit("layernorm", [am23, ln_scale3, ln_bias3], (2, 3), eps=1e-2)
+    outs["layernorm_1d"] = g.emit(
+        "layernorm",
+        [am5, g.emit("const", [], (5,), value=np.ones(5)), g.emit("const", [], (5,), value=np.zeros(5))],
+        (5,),
+    )
+    # 2-D (1, cols) scale/bias operands: the VM gate accepts anything whose
+    # rows*cols == cols, and the kernel indexes the flat buffer by feature.
+    ln_scale_row = g.emit("const", [], (1, 3), value=np.array([[2.0, 3.0, 4.0]]))
+    ln_bias_row = g.emit("const", [], (1, 3), value=np.array([[0.5, -0.5, 1.0]]))
+    outs["layernorm_2d_row_operands"] = g.emit("layernorm", [am23, ln_scale_row, ln_bias_row], (2, 3))
 
     oh = g.input("oh_idx", (1,))
     outs["one_hot_4"] = g.emit("one_hot", [oh], (4,), depth=4)

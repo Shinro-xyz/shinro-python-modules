@@ -631,3 +631,49 @@ fn normalize_index(raw: f64, comptime len: usize) usize {
     const wrapped = if (k < 0) k + n else k;
     return @intCast(wrapped); // provably within [0, len-1]
 }
+
+
+/// Layer normalization over the last axis of a flat row-major matrix.
+///
+/// Treats the input as ``(rows, cols)`` = ``(samples, features)``: for each row
+/// ``i``, ``out[i][j] = (a[i][j] - mean_i) * rstd_i * scale[j] + bias[j]`` with
+/// ``mean_i = (1/cols) Σ_j a[i][j]``, ``var_i = (1/cols) Σ_j (a[i][j] - mean_i)²``
+/// and ``rstd_i = 1 / sqrt(var_i + eps)``. Shapes and ``eps`` are comptime, so
+/// every array is a fixed-size stack value and ``eps`` constant-folds.
+///
+/// This is the canonical torch ``nn.LayerNorm`` / ONNX ``LayerNormalization``
+/// form: the **biased** (population) variance — divide by ``cols``, not
+/// ``cols - 1`` — and ``eps`` added under the square root. ``scale``/``bias``
+/// are the ONNX ``Scale``/``B`` operands, one entry per feature (``(cols,)``).
+/// A 1-D vector is a single row: callers pass ``rows = 1, cols = n``.
+///
+/// The numpy mirror in ``shinro.codegen.ops._layernorm`` must evaluate the same
+/// expression in the same order (``(x - mean) * (1/sqrt(var + eps)) * scale +
+/// bias``) so the three-way oracle (numpy / interpreter / .so) agrees.
+pub fn layernorm_rows(comptime rows:usize, comptime cols:usize, a:[]const f64, scale:[]const f64, bias:[]const f64, comptime eps:f64) [rows*cols]f64 {
+    var out:[rows*cols]f64 = undefined;
+    for (0..rows) |i| {
+        //stride is the same as column lengths since matrices are row major
+        // finding the mean= sum(a)/n, where n is the col size
+        var sum: f64=0.0;
+        for (0..cols) |j| {
+            sum+=a[i*cols+j];
+        }
+        const mean:f64= sum/@as(f64, @floatFromInt(cols));
+
+        // finding the variance from the selected columns
+        var variance: f64=0.0;
+        for (0..cols) |j| {
+            const dev=a[i*cols+j]-mean;
+            variance+=dev*dev;
+        }
+        const rstd= 1/(std.math.sqrt(variance/@as(f64, @floatFromInt(cols))+eps));
+
+        // normalize maths done, now time to account for scale and bias
+
+        for (0..cols) |j| {
+            out[i*cols+j]=(a[i*cols+j]-mean)*rstd*scale[j]+bias[j];
+        }
+    }
+    return out;
+}
