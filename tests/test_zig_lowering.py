@@ -2197,11 +2197,14 @@ class TestBuildManifest:
         assert set(g["nodes"][0]) == {"i", "op", "vm_op", "inputs", "rows", "cols", "offset", "aux"}
         assert any(n["op"] == "const" and n["vm_op"] == "cst" for n in g["nodes"])
         assert any(n["op"] == "input" and n["vm_op"] == "inp" for n in g["nodes"])
-        # offsets are cumulative in node order (contiguous buffer slots)
+        # offsets are cumulative in node order for every node that owns a slot;
+        # const nodes own none — their data lives in the baked blob and is read
+        # in place — so they sit at the current end and do not advance it.
         prev_end = 0
         for n in g["nodes"]:
             assert n["offset"] == prev_end
-            prev_end += n["rows"] * n["cols"]
+            if n["op"] != "const":
+                prev_end += n["rows"] * n["cols"]
 
     def test_deltau_manifest_differs_op_wise(self, manifests):
         """DeltaU vs base reports differ op-wise: solve_qp present, n_vars pair."""

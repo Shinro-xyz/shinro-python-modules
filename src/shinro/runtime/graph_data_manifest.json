@@ -1,6 +1,6 @@
 {
-  "buf_bytes": 2544,
-  "buf_len": 318,
+  "buf_bytes": 1536,
+  "buf_len": 192,
   "clip_blob_bytes": 48,
   "clip_blob_len": 3,
   "const_blob_bytes": 1008,
@@ -142,7 +142,7 @@
         7,
         3
       ],
-      "offset": 36,
+      "offset": 27,
       "op": "matmul",
       "rows": 3,
       "vm_op": "matmul"
@@ -152,7 +152,7 @@
       "cols": 3,
       "i": 9,
       "inputs": [],
-      "offset": 39,
+      "offset": 30,
       "op": "const",
       "rows": 3,
       "vm_op": "cst"
@@ -165,7 +165,7 @@
         9,
         6
       ],
-      "offset": 48,
+      "offset": 30,
       "op": "matmul",
       "rows": 3,
       "vm_op": "matmul"
@@ -178,7 +178,7 @@
         8,
         10
       ],
-      "offset": 51,
+      "offset": 33,
       "op": "add",
       "rows": 3,
       "vm_op": "add"
@@ -188,7 +188,7 @@
       "cols": 3,
       "i": 12,
       "inputs": [],
-      "offset": 54,
+      "offset": 36,
       "op": "const",
       "rows": 3,
       "vm_op": "cst"
@@ -201,7 +201,7 @@
         12,
         4
       ],
-      "offset": 63,
+      "offset": 36,
       "op": "matmul",
       "rows": 3,
       "vm_op": "matmul"
@@ -211,7 +211,7 @@
       "cols": 3,
       "i": 14,
       "inputs": [],
-      "offset": 72,
+      "offset": 45,
       "op": "const",
       "rows": 3,
       "vm_op": "cst"
@@ -224,7 +224,7 @@
         13,
         14
       ],
-      "offset": 81,
+      "offset": 45,
       "op": "matmul",
       "rows": 3,
       "vm_op": "matmul"
@@ -234,7 +234,7 @@
       "cols": 3,
       "i": 16,
       "inputs": [],
-      "offset": 90,
+      "offset": 54,
       "op": "const",
       "rows": 3,
       "vm_op": "cst"
@@ -247,7 +247,7 @@
         15,
         16
       ],
-      "offset": 99,
+      "offset": 54,
       "op": "add",
       "rows": 3,
       "vm_op": "add"
@@ -257,7 +257,7 @@
       "cols": 3,
       "i": 18,
       "inputs": [],
-      "offset": 108,
+      "offset": 63,
       "op": "const",
       "rows": 3,
       "vm_op": "cst"
@@ -270,7 +270,7 @@
         18,
         17
       ],
-      "offset": 117,
+      "offset": 63,
       "op": "matmul",
       "rows": 3,
       "vm_op": "matmul"
@@ -280,7 +280,7 @@
       "cols": 3,
       "i": 20,
       "inputs": [],
-      "offset": 126,
+      "offset": 72,
       "op": "const",
       "rows": 3,
       "vm_op": "cst"
@@ -293,7 +293,7 @@
         19,
         20
       ],
-      "offset": 135,
+      "offset": 72,
       "op": "matmul",
       "rows": 3,
       "vm_op": "matmul"
@@ -303,7 +303,7 @@
       "cols": 3,
       "i": 22,
       "inputs": [],
-      "offset": 144,
+      "offset": 81,
       "op": "const",
       "rows": 3,
       "vm_op": "cst"
@@ -316,7 +316,7 @@
         21,
         22
       ],
-      "offset": 153,
+      "offset": 81,
       "op": "add",
       "rows": 3,
       "vm_op": "add"
@@ -326,7 +326,7 @@
       "cols": 3,
       "i": 24,
       "inputs": [],
-      "offset": 162,
+      "offset": 90,
       "op": "const",
       "rows": 3,
       "vm_op": "cst"
@@ -339,7 +339,7 @@
         17,
         24
       ],
-      "offset": 171,
+      "offset": 90,
       "op": "matmul",
       "rows": 3,
       "vm_op": "matmul"
@@ -351,7 +351,7 @@
       "inputs": [
         23
       ],
-      "offset": 180,
+      "offset": 99,
       "op": "inv",
       "rows": 3,
       "vm_op": "inv"
@@ -364,7 +364,7 @@
         25,
         26
       ],
-      "offset": 189,
+      "offset": 108,
       "op": "matmul",
       "rows": 3,
       "vm_op": "matmul"
@@ -374,7 +374,7 @@
       "cols": 3,
       "i": 28,
       "inputs": [],
-      "offset": 198,
+      "offset": 117,
       "op": "const",
       "rows": 3,
       "vm_op": "cst"
@@ -387,7 +387,7 @@
         28,
         11
       ],
-      "offset": 207,
+      "offset": 117,
       "op": "matmul",
       "rows": 3,
       "vm_op": "matmul"
@@ -397,7 +397,7 @@
       "cols": 3,
       "i": 30,
       "inputs": [],
-      "offset": 210,
+      "offset": 120,
       "op": "const",
       "rows": 3,
       "vm_op": "cst"
@@ -410,7 +410,7 @@
         30,
         6
       ],
-      "offset": 219,
+      "offset": 120,
       "op": "matmul",
       "rows": 3,
       "vm_op": "matmul"
@@ -423,7 +423,7 @@
         29,
         31
       ],
-      "offset": 222,
+      "offset": 123,
       "op": "add",
       "rows": 3,
       "vm_op": "add"
@@ -436,7 +436,7 @@
         5,
         32
       ],
-      "offset": 225,
+      "offset": 126,
       "op": "sub",
       "rows": 3,
       "vm_op": "sub"
@@ -449,7 +449,7 @@
         27,
         33
       ],
-      "offset": 228,
+      "offset": 129,
       "op": "matmul",
       "rows": 3,
       "vm_op": "matmul"
@@ -462,7 +462,7 @@
         11,
         34
       ],
-      "offset": 231,
+      "offset": 132,
       "op": "add",
       "rows": 3,
       "vm_op": "add"
@@ -472,7 +472,7 @@
       "cols": 3,
       "i": 36,
       "inputs": [],
-      "offset": 234,
+      "offset": 135,
       "op": "const",
       "rows": 3,
       "vm_op": "cst"
@@ -482,7 +482,7 @@
       "cols": 3,
       "i": 37,
       "inputs": [],
-      "offset": 243,
+      "offset": 135,
       "op": "const",
       "rows": 3,
       "vm_op": "cst"
@@ -495,7 +495,7 @@
         27,
         37
       ],
-      "offset": 252,
+      "offset": 135,
       "op": "matmul",
       "rows": 3,
       "vm_op": "matmul"
@@ -508,7 +508,7 @@
         36,
         38
       ],
-      "offset": 261,
+      "offset": 144,
       "op": "sub",
       "rows": 3,
       "vm_op": "sub"
@@ -521,7 +521,7 @@
         39,
         17
       ],
-      "offset": 270,
+      "offset": 153,
       "op": "matmul",
       "rows": 3,
       "vm_op": "matmul"
@@ -533,7 +533,7 @@
       "inputs": [
         35
       ],
-      "offset": 279,
+      "offset": 162,
       "op": "reshape",
       "rows": 3,
       "vm_op": "reshape"
@@ -546,7 +546,7 @@
         1,
         41
       ],
-      "offset": 282,
+      "offset": 165,
       "op": "sub",
       "rows": 3,
       "vm_op": "sub"
@@ -556,7 +556,7 @@
       "cols": 3,
       "i": 43,
       "inputs": [],
-      "offset": 285,
+      "offset": 168,
       "op": "const",
       "rows": 3,
       "vm_op": "cst"
@@ -569,7 +569,7 @@
         43,
         42
       ],
-      "offset": 294,
+      "offset": 168,
       "op": "matmul",
       "rows": 3,
       "vm_op": "matmul"
@@ -581,7 +581,7 @@
       "inputs": [
         44
       ],
-      "offset": 297,
+      "offset": 171,
       "op": "clip",
       "rows": 3,
       "vm_op": "clip"
@@ -593,7 +593,7 @@
       "inputs": [
         45
       ],
-      "offset": 300,
+      "offset": 174,
       "op": "output",
       "rows": 3,
       "vm_op": "out"
@@ -605,7 +605,7 @@
       "inputs": [
         35
       ],
-      "offset": 303,
+      "offset": 177,
       "op": "output",
       "rows": 3,
       "vm_op": "out"
@@ -617,7 +617,7 @@
       "inputs": [
         40
       ],
-      "offset": 306,
+      "offset": 180,
       "op": "output",
       "rows": 3,
       "vm_op": "out"
@@ -629,7 +629,7 @@
       "inputs": [
         45
       ],
-      "offset": 315,
+      "offset": 189,
       "op": "output",
       "rows": 3,
       "vm_op": "out"
@@ -668,14 +668,6 @@
       ]
     }
   ],
-  "provenance": {
-    "configs": {
-      "samples/controllers/lqr_base.toml": "9b40568f90bd8d9644c6b2b897cb7be6b0ab4a3cda6407b0f5ffd70574499833",
-      "samples/estimators/kalman_base.toml": "693a1a66de459581014b981b35e5ed634ecf84223f67c8a2f89b05c94d61b428"
-    },
-    "numpy_version": "2.4.6",
-    "python_version": "3.12.3"
-  },
   "solve_qp": null,
   "state_bytes": 120,
   "state_outputs": [

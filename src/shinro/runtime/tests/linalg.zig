@@ -28,7 +28,7 @@ test "matmul 3x3" {
 test "matvec: (m,k) @ (k,) -> (m,)" {
     const m = [_]f64{ 1, 2, 3, 4, 5, 6 };
     const v = [_]f64{ 2, 1, 3 };
-    const r = la.matvec(2, 3, &m, &v);
+    const r = la.matvec(2, 3, f64, &m, &v);
     try std.testing.expectEqual([_]f64{ 13, 31 }, r);
 }
 
@@ -245,7 +245,7 @@ test "matvec vector path is exact for a power-of-two contraction" {
         a[i] = 1.0; // row 0
         a[16 + i] = 2.0; // row 1
     }
-    const r = la.matvec(2, 16, &a, &v);
+    const r = la.matvec(2, 16, f64, &a, &v);
     try std.testing.expectEqual([_]f64{ 60.0, 120.0 }, r);
 }
 
@@ -378,13 +378,13 @@ const rc_Rr = [_]f64{ 0.45352447884290509, 0.0088278054549194851, -0.30760926651
 const rc_Br = [_]f64{ -0.49671589512592867, 0.024059491994919288, 0.53440834687478289, -0.16252604940318935 };
 
 test "rnn_cell matches the ONNX Elman recurrence" {
-    const r = la.rnn_cell(2, 3, &rc_x, &rc_Wr, &rc_Rr, &rc_Br, &rc_h);
+    const r = la.rnn_cell(2, 3, f64, &rc_x, &rc_Wr, &rc_Rr, &rc_Br, &rc_h);
     try std.testing.expectApproxEqAbs(-0.29485798096491211, r[0], 1e-12);
     try std.testing.expectApproxEqAbs(-0.65687879956822692, r[1], 1e-12);
 }
 
 test "lstm_cell matches the ONNX cell, emitting [h ; c]" {
-    const r = la.lstm_cell(2, 3, &rc_x, &rc_Wl, &rc_Rl, &rc_Bl, &rc_h, &rc_c);
+    const r = la.lstm_cell(2, 3, f64, &rc_x, &rc_Wl, &rc_Rl, &rc_Bl, &rc_h, &rc_c);
     // h_next in the first H slots, c_next in the second H.
     try std.testing.expectApproxEqAbs(0.010529203082467157, r[0], 1e-12);
     try std.testing.expectApproxEqAbs(-0.21702325008521592, r[1], 1e-12);
@@ -393,13 +393,13 @@ test "lstm_cell matches the ONNX cell, emitting [h ; c]" {
 }
 
 test "gru_cell lbr=1 resets after the recurrent matmul" {
-    const r = la.gru_cell(2, 3, true, &rc_x, &rc_Wg, &rc_Rg, &rc_Bg, &rc_h);
+    const r = la.gru_cell(2, 3, true, f64, &rc_x, &rc_Wg, &rc_Rg, &rc_Bg, &rc_h);
     try std.testing.expectApproxEqAbs(0.55471399880159933, r[0], 1e-12);
     try std.testing.expectApproxEqAbs(-0.10987029168348694, r[1], 1e-12);
 }
 
 test "gru_cell lbr=0 resets before the recurrent matmul" {
-    const r = la.gru_cell(2, 3, false, &rc_x, &rc_Wg, &rc_Rg, &rc_Bg, &rc_h);
+    const r = la.gru_cell(2, 3, false, f64, &rc_x, &rc_Wg, &rc_Rg, &rc_Bg, &rc_h);
     try std.testing.expectApproxEqAbs(0.49531383719362443, r[0], 1e-12);
     try std.testing.expectApproxEqAbs(-0.10725928371552693, r[1], 1e-12);
 }
@@ -407,9 +407,53 @@ test "gru_cell lbr=0 resets before the recurrent matmul" {
 test "gru_cell lbr is not a no-op (the two variants differ)" {
     // Guards against the classic silent bug: implementing lbr as only a bias
     // placement makes both branches identical. They must differ.
-    const a = la.gru_cell(2, 3, true, &rc_x, &rc_Wg, &rc_Rg, &rc_Bg, &rc_h);
-    const b = la.gru_cell(2, 3, false, &rc_x, &rc_Wg, &rc_Rg, &rc_Bg, &rc_h);
+    const a = la.gru_cell(2, 3, true, f64, &rc_x, &rc_Wg, &rc_Rg, &rc_Bg, &rc_h);
+    const b = la.gru_cell(2, 3, false, f64, &rc_x, &rc_Wg, &rc_Rg, &rc_Bg, &rc_h);
     try std.testing.expect(@abs(a[0] - b[0]) > 1e-3);
+}
+
+test "rnn_cell accepts f32 weights and matches the f64 path" {
+    // The cell weights are baked as f32 when their source const is f32-exact;
+    // the kernel widens each per lane, so the f64 accumulation is unchanged and
+    // the two dtypes must agree exactly.
+    const x = [_]f64{ 0.5, -0.25, 1.0 };
+    const w64 = [_]f64{ 0.5, -0.25, 1.0, 0.75, -0.5, 0.25 };
+    const w32 = [_]f32{ 0.5, -0.25, 1.0, 0.75, -0.5, 0.25 };
+    const rr64 = [_]f64{ 0.25, -0.75, 0.5, 1.0 };
+    const rr32 = [_]f32{ 0.25, -0.75, 0.5, 1.0 };
+    const b = [_]f64{ 0.125, -0.125, 0.25, -0.25 };
+    const h = [_]f64{ 0.5, -0.5 };
+    const a = la.rnn_cell(2, 3, f64, &x, &w64, &rr64, &b, &h);
+    const c = la.rnn_cell(2, 3, f32, &x, &w32, &rr32, &b, &h);
+    try std.testing.expectEqual(a, c);
+}
+
+test "gru_cell accepts f32 weights in both lbr branches and matches f64" {
+    // H=2, I=3: W is (3H, I) = 18, R is (3H, H) = 12, B is (6H,) = 12. The
+    // lbr=0 branch has its own explicit per-element widening, so cover both.
+    var w64: [18]f64 = undefined;
+    var w32: [18]f32 = undefined;
+    var rr64: [12]f64 = undefined;
+    var rr32: [12]f32 = undefined;
+    var b: [12]f64 = undefined;
+    for (0..18) |i| {
+        const v: f32 = @floatCast(@as(f64, @floatFromInt(i + 1)) / 16.0);
+        w64[i] = @floatCast(v);
+        w32[i] = v;
+    }
+    for (0..12) |i| {
+        const v: f32 = @floatCast(@as(f64, @floatFromInt(i + 1)) / 32.0);
+        rr64[i] = @floatCast(v);
+        rr32[i] = v;
+        b[i] = @as(f64, @floatFromInt(i % 3)) / 8.0;
+    }
+    const x = [_]f64{ 0.5, -0.25, 1.0 };
+    const h = [_]f64{ 0.5, -0.5 };
+    inline for (.{ true, false }) |lbr| {
+        const a = la.gru_cell(2, 3, lbr, f64, &x, &w64, &rr64, &b, &h);
+        const c = la.gru_cell(2, 3, lbr, f32, &x, &w32, &rr32, &b, &h);
+        try std.testing.expectEqual(a, c);
+    }
 }
 
 // ─── gather ───────────────────────────────────────────────────────────────
