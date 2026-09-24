@@ -64,7 +64,7 @@ pub fn matmul(comptime m: usize, comptime k: usize, comptime n: usize, a: []cons
 /// `SIMD_MIN_K`.
 pub fn matvec(comptime m: usize, comptime k: usize, a: []const f64, v: []const f64) [m]f64 {
     var out: [m]f64 = undefined;
-    for (0..m) |i| out[i] = dot(k, a[i * k ..][0..k], v);
+    for (0..m) |i| out[i] = dot(k, f64, a[i * k ..][0..k], v);
     return out;
 }
 
@@ -325,21 +325,39 @@ const SIMD_MIN_K = @max(2 * SIMD_VL, 8);
 /// The result differs from the scalar order only in the final reduction
 /// (relative ~1e-15 — well inside the oracle's 1e-12), so `len < SIMD_MIN_K`
 /// deliberately stays on the scalar loop and remains bit-identical.
-fn dot(comptime len: usize, a: []const f64, b: []const f64) f64 {
+/// Vector dot product of `a` (always f64) with `b`, whose element type is
+/// **inferred from the argument** — `f64` normally, `f32` when the weights were
+/// baked into the f32 blob. One function serves both: Zig monomorphizes per
+/// call site.
+///
+/// An f32 weight is widened to f64 **per vector lane** (one `@floatCast` per
+/// `SIMD_VL` elements, not per element), so the accumulation stays f64 and the
+/// result is identical to the f64 path while the weight bytes are halved.
+/// Vector dot product of `a` (always f64) with `b`, whose element type is the
+/// explicit comptime `TB` — `f64` normally, `f32` when the source node is a
+/// constant that was baked into the f32 weight blob. The VM picks `TB` from the
+/// node's op at comptime, so there is exactly one kernel and no inferred
+/// argument type: passing a `[]const f32` where `TB = f64` is a compile error.
+///
+/// An f32 weight is widened to f64 **per vector lane** (one `@floatCast` per
+/// `SIMD_VL` elements, not per element), so the accumulation stays f64 and the
+/// result is identical to the f64 path while the weight bytes are halved.
+fn dot(comptime len: usize, comptime TB: type, a: []const f64, b: []const TB) f64 {
     if (len < SIMD_MIN_K or SIMD_VL <= 1) {
         var s: f64 = 0.0;
-        for (0..len) |p| s += a[p] * b[p];
+        for (0..len) |p| s += a[p] * @as(f64, @floatCast(b[p]));
         return s;
     }
     var acc: @Vector(SIMD_VL, f64) = @splat(0.0);
     var p: usize = 0;
     while (p + SIMD_VL <= len) : (p += SIMD_VL) {
         const av: @Vector(SIMD_VL, f64) = a[p..][0..SIMD_VL].*;
-        const bv: @Vector(SIMD_VL, f64) = b[p..][0..SIMD_VL].*;
+        const bw: @Vector(SIMD_VL, TB) = b[p..][0..SIMD_VL].*;
+        const bv: @Vector(SIMD_VL, f64) = @floatCast(bw);
         acc = @mulAdd(@Vector(SIMD_VL, f64), av, bv, acc);
     }
     var s: f64 = @reduce(.Add, acc);
-    while (p < len) : (p += 1) s += a[p] * b[p];
+    while (p < len) : (p += 1) s += a[p] * @as(f64, @floatCast(b[p]));
     return s;
 }
 
@@ -357,8 +375,9 @@ fn dot(comptime len: usize, a: []const f64, b: []const f64) f64 {
 /// runs at m = 1.
 pub fn gemm (
      comptime m: usize,comptime k: usize,comptime n: usize,comptime alpha:f64,comptime beta:f64,comptime transB: bool,
+     comptime TB: type,
      a:[]const f64,
-     b:[]const f64,
+     b:[]const TB,
      c:[]const f64,
      comptime c_len:usize
  ) [m*n]f64 {
@@ -366,13 +385,13 @@ pub fn gemm (
      for (0..m) |i| {
          for (0..n) |j| {
              const s: f64 = if (transB)
-                 dot(k, a[i * k ..][0..k], b[j * k ..][0..k])
+                 dot(k, TB, a[i * k ..][0..k], b[j * k ..][0..k])
              else blk: {
                  // transB=false walks B with stride n (column-major over a
                  // row-major weight), so the contraction is not contiguous and
                  // stays scalar.
                  var t: f64 = 0.0;
-                 for (0..k) |p| t += a[i * k + p] * b[p * n + j];
+                 for (0..k) |p| t += a[i * k + p] * @as(f64, @floatCast(b[p * n + j]));
                  break :blk t;
              };
              const cj= if (c_len==1) c[0] else if (c_len==n) c[j] else c[i*n+j];

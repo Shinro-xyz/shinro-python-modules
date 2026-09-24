@@ -180,7 +180,7 @@ test "gemm transB=1 with (n,) bias" {
     const a = [_]f64{ 1, 2, 3 }; // (m=1, k=3)
     const w = [_]f64{ 1, 2, 3, 4, 5, 6 }; // (n=2, k=3)
     const c = [_]f64{ 0.5, -0.5 };
-    const r = la.gemm(1, 3, 2, 1.0, 1.0, true, &a, &w, &c, 2);
+    const r = la.gemm(1, 3, 2, 1.0, 1.0, true, f64, &a, &w, &c, 2);
     try std.testing.expectEqual([_]f64{ 14.5, 31.5 }, r);
 }
 
@@ -188,7 +188,7 @@ test "gemm transB=0 with scalar (zero) bias" {
     const a = [_]f64{ 1, 2, 3 };
     const w = [_]f64{ 1, 2, 3, 4, 5, 6 }; // (k=3, n=2)
     const c = [_]f64{0.0};
-    const r = la.gemm(1, 3, 2, 1.0, 1.0, false, &a, &w, &c, 1);
+    const r = la.gemm(1, 3, 2, 1.0, 1.0, false, f64, &a, &w, &c, 1);
     try std.testing.expectEqual([_]f64{ 22, 28 }, r);
 }
 
@@ -196,7 +196,7 @@ test "gemm applies alpha and beta" {
     const a = [_]f64{ 1, 2, 3 };
     const w = [_]f64{ 1, 2, 3, 4, 5, 6 };
     const c = [_]f64{ 0.5, -0.5 };
-    const r = la.gemm(1, 3, 2, 0.5, 2.0, true, &a, &w, &c, 2);
+    const r = la.gemm(1, 3, 2, 0.5, 2.0, true, f64, &a, &w, &c, 2);
     try std.testing.expectEqual([_]f64{ 8, 15 }, r);
 }
 
@@ -204,7 +204,7 @@ test "gemm 2-D activation (m,k) @ (n,k)'.T" {
     const a = [_]f64{ 1, 2, 3, 4, 5, 6 }; // (m=2, k=3)
     const w = [_]f64{ 1, 2, 3, 4, 5, 6 }; // (n=2, k=3)
     const c = [_]f64{0.0};
-    const r = la.gemm(2, 3, 2, 1.0, 1.0, true, &a, &w, &c, 1);
+    const r = la.gemm(2, 3, 2, 1.0, 1.0, true, f64, &a, &w, &c, 1);
     try std.testing.expectEqual([_]f64{ 14, 32, 32, 77 }, r);
 }
 
@@ -212,7 +212,7 @@ test "gemm broadcasts a full (m,n) bias" {
     const a = [_]f64{ 1, 2, 3, 4, 5, 6 }; // (m=2, k=3)
     const w = [_]f64{ 1, 2, 3, 4, 5, 6 }; // (n=2, k=3)
     const c = [_]f64{ 1, 1, 2, 2 }; // (m=2, n=2)
-    const r = la.gemm(2, 3, 2, 1.0, 1.0, true, &a, &w, &c, 4);
+    const r = la.gemm(2, 3, 2, 1.0, 1.0, true, f64, &a, &w, &c, 4);
     try std.testing.expectEqual([_]f64{ 15, 33, 34, 79 }, r);
 }
 
@@ -229,7 +229,7 @@ test "gemm vector path is exact for a power-of-two contraction" {
         b[i] = p2[i % 4];
     }
     const c = [_]f64{0.0};
-    const r = la.gemm(1, 16, 1, 1.0, 1.0, true, &a, &b, &c, 1);
+    const r = la.gemm(1, 16, 1, 1.0, 1.0, true, f64, &a, &b, &c, 1);
     // sum_{i=0..15} 2^(i%4) = 4 * (1+2+4+8) = 60
     try std.testing.expectEqual(@as(f64, 60.0), r[0]);
 }
@@ -247,6 +247,35 @@ test "matvec vector path is exact for a power-of-two contraction" {
     }
     const r = la.matvec(2, 16, &a, &v);
     try std.testing.expectEqual([_]f64{ 60.0, 120.0 }, r);
+}
+
+test "gemm with f32 weights matches the f64 path" {
+    // The weight element type is inferred; f32 weights are widened per lane, so
+    // both the scalar (k=3) and vector (k=16) paths must reproduce the f64
+    // result exactly.
+    const a = [_]f64{ 1, 2, 3 };
+    const w64 = [_]f64{ 1, 2, 3, 4, 5, 6 };
+    const w32 = [_]f32{ 1, 2, 3, 4, 5, 6 };
+    const c = [_]f64{ 0.5, -0.5 };
+    try std.testing.expectEqual(
+        la.gemm(1, 3, 2, 1.0, 1.0, true, f64, &a, &w64, &c, 2),
+        la.gemm(1, 3, 2, 1.0, 1.0, true, f32, &a, &w32, &c, 2),
+    );
+    // Powers of two sum exactly in any order, so the k=16 vector path is exact.
+    const p2 = [_]f64{ 1, 2, 4, 8 };
+    var a16: [16]f64 = undefined;
+    var w64_16: [16]f64 = undefined;
+    var w32_16: [16]f32 = undefined;
+    for (0..16) |i| {
+        a16[i] = 1.0;
+        w64_16[i] = p2[i % 4];
+        w32_16[i] = @floatCast(p2[i % 4]);
+    }
+    const one = [_]f64{0.0};
+    try std.testing.expectEqual(
+        la.gemm(1, 16, 1, 1.0, 1.0, true, f64, &a16, &w64_16, &one, 1),
+        la.gemm(1, 16, 1, 1.0, 1.0, true, f32, &a16, &w32_16, &one, 1),
+    );
 }
 
 // layernorm_rows: last-axis normalization over (rows, cols) = (samples,

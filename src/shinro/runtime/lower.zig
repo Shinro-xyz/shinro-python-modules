@@ -82,13 +82,13 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
         const out = workspace[g.offsets[i]..][0 .. node.rows * node.cols];
 
         switch (node.op) {
-            .cst => {
+            .cst, .cst_f32 => {
                 // Constants are NOT copied into the workspace: every consumer
-                // reads them in place from g.const_blob via node_input_at.
-                // Copying each one per tick was pure data movement with zero
-                // flops — for an MLP policy the const slots are the bulk of
-                // buf_len, so this was a full weights memcpy every tick before
-                // any arithmetic.
+                // reads them in place — f64 consts from g.const_blob, f32
+                // weights from g.const_blob_f32 (the gemm arm) — so the
+                // per-tick weights memcpy is gone entirely. Copying each one
+                // was pure data movement with zero flops; for a policy the
+                // const slots are the bulk of buf_len.
             },
             .inp => {
                 for (0..node.rows * node.cols) |j| out[j] = inputs[node.aux + j];
@@ -353,23 +353,31 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
             // 1-D activation (vec) is treated as a single row (m = 1).
             .gemm => {
                 const a = node_input(g.nodes[0..], node, &workspace);
-                const b = node_input_at(g.nodes[0..], node.inputs[1], &workspace);
                 const c = node_input_at(g.nodes[0..], node.inputs[2], &workspace);
                 const a_n = g.nodes[node.inputs[0]];
+                const b_n = g.nodes[node.inputs[1]];
                 const c_n = g.nodes[node.inputs[2]];
-                const r = la.gemm(
-                    if (node.vec) 1 else node.rows,
-                    if (a_n.vec) a_n.rows else a_n.cols,
-                    if (node.vec) node.rows else node.cols,
-                    g.gemm_alpha[node.aux / 2],
-                    g.gemm_beta[node.aux / 2],
-                    node.aux % 2 == 1,
-                    a,
-                    b,
-                    c,
-                    c_n.rows * c_n.cols,
-                );
-                for (0..node.rows * node.cols) |j| out[j] = r[j];
+                const alpha = g.gemm_alpha[node.aux / 2];
+                const beta = g.gemm_beta[node.aux / 2];
+                const rb = node.aux % 2 == 1;
+                const clen = c_n.rows * c_n.cols;
+                const m = if (node.vec) 1 else node.rows;
+                const k = if (a_n.vec) a_n.rows else a_n.cols;
+                const n = if (node.vec) node.rows else node.cols;
+                // The weight operand's dtype is a comptime property of its
+                // source node: an f32-exact weight baked into const_blob_f32
+                // selects the mixed-dtype kernel, which widens each weight to
+                // f64 inside the vector lane. The accumulation is still f64, so
+                // the result is unchanged while the weight bytes are halved.
+                if (b_n.op == .cst_f32) {
+                    const b32 = g.const_blob_f32[b_n.aux..][0 .. b_n.rows * b_n.cols];
+                    const r = la.gemm(m, k, n, alpha, beta, rb, f32, a, b32, c, clen);
+                    for (0..node.rows * node.cols) |j| out[j] = r[j];
+                } else {
+                    const b = node_input_at(g.nodes[0..], node.inputs[1], &workspace);
+                    const r = la.gemm(m, k, n, alpha, beta, rb, f64, a, b, c, clen);
+                    for (0..node.rows * node.cols) |j| out[j] = r[j];
+                }
             },
             // .lstm / .gru / .rnn — one fused recurrent step each
             // (linalg.lstm_cell / gru_cell / rnn_cell). Operands are
