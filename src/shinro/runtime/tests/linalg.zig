@@ -216,6 +216,24 @@ test "gemm broadcasts a full (m,n) bias" {
     try std.testing.expectEqual([_]f64{ 15, 33, 34, 79 }, r);
 }
 
+test "gemm vector path is exact for a power-of-two contraction" {
+    // k = 16 is >= SIMD_MIN_K on every target, so this drives the @Vector dot.
+    // Powers of two sum exactly in any order, so the vector path's reduction
+    // reordering cannot show up here — it pins the path's correctness without
+    // a tolerance (the policy oracle covers the ~1e-15 reordering).
+    const p2 = [_]f64{ 1, 2, 4, 8 };
+    var a: [16]f64 = undefined;
+    var b: [16]f64 = undefined;
+    for (0..16) |i| {
+        a[i] = 1.0;
+        b[i] = p2[i % 4];
+    }
+    const c = [_]f64{0.0};
+    const r = la.gemm(1, 16, 1, 1.0, 1.0, true, &a, &b, &c, 1);
+    // sum_{i=0..15} 2^(i%4) = 4 * (1+2+4+8) = 60
+    try std.testing.expectEqual(@as(f64, 60.0), r[0]);
+}
+
 // layernorm_rows: last-axis normalization over (rows, cols) = (samples,
 // features). Biased variance, rstd = 1/sqrt(var + eps).
 

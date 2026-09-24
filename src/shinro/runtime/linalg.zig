@@ -302,12 +302,57 @@ pub fn onehot (comptime depth: usize, idx:usize) [depth]f64{
      return out;
  }
 
+/// The target's suggested f64 vector width, in lanes: 2 on NEON (the Pi),
+/// 4 on AVX, and 1 (scalar) on a target with no vector suggestion. Computed
+/// once at comptime from the target; every use is the same value.
+const SIMD_VL = std.simd.suggestVectorLength(f64) orelse 1;
+
+/// Contraction length below which the vector dot product is not worth its
+/// horizontal reduce. Small (classical-sized) matrices therefore keep the
+/// scalar loop and its exact bit-for-bit accumulation order.
+const SIMD_MIN_K = SIMD_VL * 2;
+
+/// Lane-parallel dot product of two contiguous length-`len` vectors.
+///
+/// The scalar form is a serial `s += a[p]*b[p]` chain: Zig's strict FP model
+/// forbids reassociation, so it compiles to one scalar FMA per element on a
+/// `len`-long dependency chain — and `len` is small enough (see SIMD_MIN_K)
+/// that nothing else hides it. Accumulating into a `@Vector(VL, f64)` splits
+/// that chain into VL independent ones and drives the FP units at full width,
+/// with one horizontal reduce at the end; a scalar tail handles `len % VL`.
+/// The result differs from the scalar order only in the final reduction
+/// (relative ~1e-15 — well inside the oracle's 1e-12), so `len < SIMD_MIN_K`
+/// deliberately stays on the scalar loop and remains bit-identical.
+fn dot(comptime len: usize, a: []const f64, b: []const f64) f64 {
+    if (len < SIMD_MIN_K or SIMD_VL <= 1) {
+        var s: f64 = 0.0;
+        for (0..len) |p| s += a[p] * b[p];
+        return s;
+    }
+    var acc: @Vector(SIMD_VL, f64) = @splat(0.0);
+    var p: usize = 0;
+    while (p + SIMD_VL <= len) : (p += SIMD_VL) {
+        const av: @Vector(SIMD_VL, f64) = a[p..][0..SIMD_VL].*;
+        const bv: @Vector(SIMD_VL, f64) = b[p..][0..SIMD_VL].*;
+        acc = @mulAdd(@Vector(SIMD_VL, f64), av, bv, acc);
+    }
+    var s: f64 = @reduce(.Add, acc);
+    while (p < len) : (p += 1) s += a[p] * b[p];
+    return s;
+}
+
 /// Fused dense layer: `out = alpha * (A @ B') + beta * C`, flat row-major.
 ///
 /// `A` is `(m, k)`; `B` is `(n, k)` when `transB` (torch `nn.Linear` weight
 /// layout, read by striding) and `(k, n)` otherwise. `C` broadcasts like
 /// numpy: `c_len == 1` a scalar, `c_len == n` a row, else a full `(m, n)`
 /// bias. `alpha`, `beta`, and `transB` are comptime and constant-fold.
+///
+/// `transB` makes both operands contiguous along the contraction (A row `i`
+/// and B row `j`), so the inner product routes through the vector `dot`; a
+/// non-transB weight is read with stride `n` and stays scalar. This is where a
+/// policy's matmuls are: an ONNX `nn.Linear` export is transB, and a policy
+/// runs at m = 1.
 pub fn gemm (
      comptime m: usize,comptime k: usize,comptime n: usize,comptime alpha:f64,comptime beta:f64,comptime transB: bool,
      a:[]const f64,
@@ -318,11 +363,16 @@ pub fn gemm (
      var out: [m*n]f64 = undefined;
      for (0..m) |i| {
          for (0..n) |j| {
-             var s:f64=0.0;
-             for (0..k) |p| {
-                 const bv= if (transB) b[j*k+p] else b[p*n+j];
-                 s+=a[i*k+p]*bv;
-             }
+             const s: f64 = if (transB)
+                 dot(k, a[i * k ..][0..k], b[j * k ..][0..k])
+             else blk: {
+                 // transB=false walks B with stride n (column-major over a
+                 // row-major weight), so the contraction is not contiguous and
+                 // stays scalar.
+                 var t: f64 = 0.0;
+                 for (0..k) |p| t += a[i * k + p] * b[p * n + j];
+                 break :blk t;
+             };
              const cj= if (c_len==1) c[0] else if (c_len==n) c[j] else c[i*n+j];
              out[i*n+j]= alpha*s+beta*cj;
          }
