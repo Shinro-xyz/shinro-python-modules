@@ -295,7 +295,7 @@ class OnnxRLAdapter(Controller):
         x = np.asarray(self.bk.to_numpy(state), dtype=np.float64).ravel()
         if x.size != self.policy.state_size:
             raise ValueError(f"onnx_rl: expected a state of {self.policy.state_size} elements, got {x.size}")
-        feed = {self.policy.state_port: x}
+        feed: dict[str, np.ndarray] = {self.policy.state_port: x}
         if self.policy.noise_port is not None:
             feed[self.policy.noise_port] = self._draw_noise(self.policy.noise_size)
         for name, size in self.policy.noise_ports:
