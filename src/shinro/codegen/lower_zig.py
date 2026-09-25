@@ -187,6 +187,16 @@ def lower_zig(
             elu_aux[i] = len(elu_alpha)
             elu_alpha.append(float(node.attrs.get("alpha", 1.0)))
 
+    # --- baked leaky_relu alpha (default 0.01) ---
+    # Same f64-scalar problem as elu's alpha: baked into leaky_relu_alpha with
+    # the table index in aux, so the VM reads a comptime-known slope.
+    leaky_relu_alpha: list[float] = []
+    leaky_relu_aux: dict[int, int] = {}
+    for i, node in enumerate(g.nodes):
+        if node.op == "leaky_relu":
+            leaky_relu_aux[i] = len(leaky_relu_alpha)
+            leaky_relu_alpha.append(float(node.attrs.get("alpha", 0.01)))
+
     # --- baked layernorm epsilon (default 1e-5) ---
     # Same f64-scalar problem as elu's alpha (the `aux: usize` field cannot hold a
     # float): eps is baked into layernorm_eps with the table index in aux. The
@@ -236,7 +246,7 @@ def lower_zig(
     lines.append("    sin, cos, stack, solve_qp,")
     lines.append("    abs, sign, pow, lt, min, gemm, sigmoid, softmax, gelu, elu, layernorm,")
     lines.append("    lstm, gru, rnn,")
-    lines.append("    concat, gather,")
+    lines.append("    concat, gather, sqrt, log, mod, leaky_relu,")
     lines.append("};")
     lines.append("")
     lines.append("pub const Node = struct {")
@@ -267,6 +277,7 @@ def lower_zig(
             clip_offsets,
             gemm_aux,
             elu_aux,
+            leaky_relu_aux,
             gru_aux,
             layernorm_aux,
             input_offsets,
@@ -287,6 +298,7 @@ def lower_zig(
     lines.append("pub const gemm_alpha = [_]f64{" + _zig_floats(gemm_alpha) + "};")
     lines.append("pub const gemm_beta = [_]f64{" + _zig_floats(gemm_beta) + "};")
     lines.append("pub const elu_alpha = [_]f64{" + _zig_floats(elu_alpha) + "};")
+    lines.append("pub const leaky_relu_alpha = [_]f64{" + _zig_floats(leaky_relu_alpha) + "};")
     lines.append("pub const layernorm_eps = [_]f64{" + _zig_floats(layernorm_eps) + "};")
     lines.append("pub const output_offsets = [_]usize{" + ", ".join(str(o) for o in output_offsets) + "};")
     lines.append("pub const state_offsets = [_]usize{" + ", ".join(str(o) for o in state_offsets) + "};")
@@ -305,6 +317,7 @@ def lower_zig(
         clip_offsets,
         gemm_aux,
         elu_aux,
+        leaky_relu_aux,
         gru_aux,
         layernorm_aux,
         input_offsets,
@@ -327,6 +340,7 @@ def _graph_manifest(
     clip_offsets: dict[int, int],
     gemm_aux: dict[int, int],
     elu_aux: dict[int, int],
+    leaky_relu_aux: dict[int, int],
     gru_aux: dict[int, int],
     layernorm_aux: dict[int, int],
     input_offsets: dict[str, int],
@@ -386,6 +400,7 @@ def _graph_manifest(
             clip_offsets,
             gemm_aux,
             elu_aux,
+            leaky_relu_aux,
             gru_aux,
             layernorm_aux,
             input_offsets,
@@ -464,6 +479,7 @@ def _node_line(
     clip_offsets: dict[int, int],
     gemm_aux: dict[int, int],
     elu_aux: dict[int, int],
+    leaky_relu_aux: dict[int, int],
     gru_aux: dict[int, int],
     layernorm_aux: dict[int, int],
     input_offsets: dict[str, int],
@@ -506,6 +522,7 @@ def _node_line(
         clip_offsets,
         gemm_aux,
         elu_aux,
+        leaky_relu_aux,
         gru_aux,
         layernorm_aux,
         input_offsets,
@@ -525,6 +542,7 @@ def _node_vm_info(
     clip_offsets: dict[int, int],
     gemm_aux: dict[int, int],
     elu_aux: dict[int, int],
+    leaky_relu_aux: dict[int, int],
     gru_aux: dict[int, int],
     layernorm_aux: dict[int, int],
     input_offsets: dict[str, int],
@@ -596,6 +614,10 @@ def _node_vm_info(
         # alpha is baked into elu_alpha; the VM reads g.elu_alpha[node.aux]
         # (comptime-folded inside the unrolled node loop).
         return "elu", elu_aux[i]
+    if node.op == "leaky_relu":
+        # alpha is baked into leaky_relu_alpha; the VM reads
+        # g.leaky_relu_alpha[node.aux] (comptime-folded).
+        return "leaky_relu", leaky_relu_aux[i]
     if node.op == "layernorm":
         # eps is baked into layernorm_eps; the VM reads g.layernorm_eps[node.aux]
         # (comptime-folded inside the unrolled node loop).
@@ -609,6 +631,10 @@ def _node_vm_info(
         # negative ONNX axis before emitting, and a Tracer axis is validated at
         # emit time.
         return node.op, int(node.attrs.get("axis", 0))
+    if node.op == "mod":
+        # fmod (C fmod vs Python %) rides in aux bit 0, read at comptime inside
+        # the VM's shared ew2 element loop.
+        return "mod", (1 if node.attrs.get("fmod", False) else 0)
     return node.op, 0
 
 

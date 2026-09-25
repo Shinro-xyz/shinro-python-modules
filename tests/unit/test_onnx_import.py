@@ -627,6 +627,157 @@ class TestExpandedOps:
             import_onnx_policy(path)
 
 
+class TestSqrtLogMod:
+    """Sqrt/Log map onto the VM's std.math elementwise ops; Mod folds or runs."""
+
+    def test_sqrt(self, tmp_path):
+        from onnx import helper
+
+        path = _save(
+            [helper.make_node("Sqrt", ["state"], ["y"])],
+            [_vi("state", [None, 4])],
+            [_vi("y", [None, 4])],
+            [],
+            tmp_path,
+        )
+        cg = import_onnx_policy(path)
+        assert "sqrt" in _op_names(cg)
+        x = np.array([1.0, 4.0, 9.0, 2.25])
+        np.testing.assert_allclose(_run(cg, x), np.sqrt(x), rtol=1e-12)
+
+    def test_log(self, tmp_path):
+        from onnx import helper
+
+        path = _save(
+            [helper.make_node("Log", ["state"], ["y"])],
+            [_vi("state", [None, 4])],
+            [_vi("y", [None, 4])],
+            [],
+            tmp_path,
+        )
+        cg = import_onnx_policy(path)
+        assert "log" in _op_names(cg)
+        x = np.array([0.5, 1.0, 2.0, np.e])
+        np.testing.assert_allclose(_run(cg, x), np.log(x), rtol=1e-12)
+
+    def test_mod_constant_folds(self, tmp_path):
+        """The DT attention idiom ``2 % 3`` is import-time const arithmetic."""
+        from onnx import helper
+
+        path = _save(
+            [
+                helper.make_node("Constant", [], ["c2"], value=helper.make_tensor("v2", 1, [], [2.0])),
+                helper.make_node("Constant", [], ["c3"], value=helper.make_tensor("v3", 1, [], [3.0])),
+                helper.make_node("Mod", ["c2", "c3"], ["m"]),
+                helper.make_node("Mul", ["state", "m"], ["y"]),
+            ],
+            [_vi("state", [None, 3])],
+            [_vi("y", [None, 3])],
+            [],
+            tmp_path,
+        )
+        cg = import_onnx_policy(path)
+        assert "mod" not in _op_names(cg)  # folded to a const
+        x = np.array([1.0, 2.0, 3.0])
+        np.testing.assert_allclose(_run(cg, x), x * np.mod(2.0, 3.0), rtol=1e-12)
+
+    def test_mod_runtime_fmod_sign(self, tmp_path):
+        """fmod=1 is C fmod (sign of the dividend) and stays a runtime op."""
+        from onnx import helper
+
+        path = _save(
+            [helper.make_node("Mod", ["state", "d"], ["y"], fmod=1)],
+            [_vi("state", [None, 4])],
+            [_vi("y", [None, 4])],
+            [_init("d", np.full(4, 2.0))],
+            tmp_path,
+        )
+        cg = import_onnx_policy(path)
+        assert "mod" in _op_names(cg)
+        node = next(n for n in cg.graph.nodes if n.op == "mod")
+        assert node.attrs.get("fmod") is True
+        x = np.array([-7.5, 7.5, -3.0, 3.0])
+        np.testing.assert_allclose(_run(cg, x), np.fmod(x, 2.0), rtol=1e-12)
+
+    def test_mod_runtime_fmod_default_is_python_mod(self, tmp_path):
+        from onnx import helper
+
+        path = _save(
+            [helper.make_node("Mod", ["state", "d"], ["y"])],
+            [_vi("state", [None, 4])],
+            [_vi("y", [None, 4])],
+            [_init("d", np.full(4, 2.0))],
+            tmp_path,
+        )
+        cg = import_onnx_policy(path)
+        node = next(n for n in cg.graph.nodes if n.op == "mod")
+        assert node.attrs.get("fmod") is False
+        x = np.array([-7.5, 7.5, -3.0, 3.0])
+        np.testing.assert_allclose(_run(cg, x), np.mod(x, 2.0), rtol=1e-12)
+
+    def test_mod_unknown_attribute_rejected(self, tmp_path):
+        from onnx import helper
+
+        path = _save(
+            [helper.make_node("Mod", ["state", "state"], ["y"], bogus=1)],
+            [_vi("state", [None, 3])],
+            [_vi("y", [None, 3])],
+            [],
+            tmp_path,
+        )
+        with pytest.raises(NotImplementedError, match="bogus"):
+            import_onnx_policy(path)
+
+
+class TestLeakyRelu:
+    """LeakyRelu maps onto a fused VM op with a baked slope."""
+
+    def test_default_alpha(self, tmp_path):
+        from onnx import helper
+
+        path = _save(
+            [helper.make_node("LeakyRelu", ["state"], ["y"])],
+            [_vi("state", [None, 4])],
+            [_vi("y", [None, 4])],
+            [],
+            tmp_path,
+        )
+        cg = import_onnx_policy(path)
+        assert "leaky_relu" in _op_names(cg)
+        x = np.array([-4.0, -1.0, 0.0, 2.0])
+        np.testing.assert_allclose(_run(cg, x), np.where(x >= 0.0, x, 0.01 * x), rtol=1e-12)
+
+    def test_explicit_alpha(self, tmp_path):
+        from onnx import helper
+
+        path = _save(
+            [helper.make_node("LeakyRelu", ["state"], ["y"], alpha=0.2)],
+            [_vi("state", [None, 4])],
+            [_vi("y", [None, 4])],
+            [],
+            tmp_path,
+        )
+        cg = import_onnx_policy(path)
+        node = next(n for n in cg.graph.nodes if n.op == "leaky_relu")
+        alpha = float(node.attrs["alpha"])
+        assert alpha == pytest.approx(0.2, abs=1e-6)  # ONNX FLOAT attr is f32
+        x = np.array([-4.0, -1.0, 0.0, 2.0])
+        np.testing.assert_allclose(_run(cg, x), np.where(x >= 0.0, x, alpha * x), rtol=1e-12)
+
+    def test_unknown_attribute_rejected(self, tmp_path):
+        from onnx import helper
+
+        path = _save(
+            [helper.make_node("LeakyRelu", ["state"], ["y"], bogus=1)],
+            [_vi("state", [None, 4])],
+            [_vi("y", [None, 4])],
+            [],
+            tmp_path,
+        )
+        with pytest.raises(NotImplementedError, match="bogus"):
+            import_onnx_policy(path)
+
+
 class TestPointwiseGraphs:
     def test_matmul_add(self, tmp_path):
         from onnx import helper
@@ -759,13 +910,13 @@ class TestRejections:
         from onnx import helper
 
         path = _save(
-            [helper.make_node("Sqrt", ["state"], ["y"])],
+            [helper.make_node("Conv", ["state"], ["y"])],
             [_vi("state", [None, 3])],
             [_vi("y", [None, 3])],
             [],
             tmp_path,
         )
-        with pytest.raises(NotImplementedError, match="Sqrt"):
+        with pytest.raises(NotImplementedError, match="Conv"):
             import_onnx_policy(path)
 
     def test_unreachable_unsupported_node_ignored(self, tmp_path):
@@ -773,7 +924,7 @@ class TestRejections:
 
         path = _save(
             [
-                helper.make_node("Sqrt", ["state"], ["junk"]),
+                helper.make_node("Conv", ["state"], ["junk"]),
                 helper.make_node("MatMul", ["state", "w"], ["y"]),
             ],
             [_vi("state", [None, 2])],
@@ -782,7 +933,7 @@ class TestRejections:
             tmp_path,
         )
         cg = import_onnx_policy(path)
-        assert "sqrt" not in _op_names(cg)
+        assert "conv" not in _op_names(cg)
         np.testing.assert_allclose(_run(cg, [1.0, 2.0]), [1.0, 2.0], rtol=1e-6)
 
     def test_multi_input_policy_rejected(self, tmp_path):

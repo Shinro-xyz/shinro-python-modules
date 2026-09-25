@@ -263,6 +263,19 @@ def _elu(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray
     return np.where(x > 0.0, x, alpha * (np.exp(x) - 1.0))
 
 
+@register_op("leaky_relu")
+def _leaky_relu(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
+    """LeakyReLU: ``x if x >= 0 else alpha * x``; ``alpha`` defaults to 0.01.
+
+    The linear sibling of ``elu`` — no exp, so the VM computes it inline with a
+    select (there is no ``linalg`` kernel). At ``x == 0`` both branches give 0,
+    so the ``>=`` / ``>`` boundary cannot diverge.
+    """
+    x = values[node.inputs[0]]
+    alpha = float(node.attrs.get("alpha", 0.01))
+    return np.where(x >= 0.0, x, alpha * x)
+
+
 @register_op("layernorm")
 def _layernorm(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     """Layer normalization over the last axis, the torch/ONNX canonical form.
@@ -423,6 +436,36 @@ def _div(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray
 @register_op("exp")
 def _exp(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     return np.exp(values[node.inputs[0]])
+
+
+@register_op("sqrt")
+def _sqrt(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
+    """Elementwise square root (ONNX ``Sqrt``); a negative operand is NaN."""
+    return np.sqrt(values[node.inputs[0]])
+
+
+@register_op("log")
+def _log(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
+    """Elementwise natural logarithm (ONNX ``Log``, the C ``log``)."""
+    return np.log(values[node.inputs[0]])
+
+
+@register_op("mod")
+def _mod(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
+    """Elementwise modulo (ONNX ``Mod``), numpy semantics.
+
+    ``fmod=False`` (ONNX default, integer-modulo semantics) is ``np.mod`` — the
+    result takes the sign of the divisor; ``fmod=True`` is ``np.fmod`` — the
+    sign of the dividend (C ``fmod``). The VM's ``mod`` arm selects ``@mod`` /
+    ``@rem`` on the same bit. Note ONNX constrains ``fmod=0`` to integer types;
+    onnxruntime rejects a float ``fmod=0``, while this f64 machine extends
+    Python's ``%`` to floats and the ONNX Python reference instead falls back to
+    ``np.fmod`` (+ ``nan_to_num``) — matched here to onnxruntime, not the
+    reference, since onnxruntime is the deployment target.
+    """
+    a = values[node.inputs[0]]
+    b = values[node.inputs[1]]
+    return np.fmod(a, b) if node.attrs.get("fmod", False) else np.mod(a, b)
 
 
 @register_op("abs")

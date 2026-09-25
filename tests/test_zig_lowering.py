@@ -111,8 +111,13 @@ def _build_lowered_ops_graph():
     gelu_id = g.emit("gelu", [x], (4,))
     elu_id = g.emit("elu", [x], (4,), alpha=1.0)
     elu_half_id = g.emit("elu", [x], (4,), alpha=0.5)
+    leaky_id = g.emit("leaky_relu", [x], (4,), alpha=0.1)
     relu_id = g.emit("relu", [x], (4,))
     exp_id = g.emit("exp", [x], (4,))
+    sqrt_id = g.emit("sqrt", [g.emit("abs", [x], (4,))], (4,))
+    log_id = g.emit("log", [g.emit("abs", [x], (4,))], (4,))
+    mod_c = g.const(np.array([1.5, -2.0, 3.5, -0.5]))
+    mod_id = g.emit("mod", [x, mod_c], (4,), fmod=True)
     copy_id = g.emit("copy", [x], (4,))
     slice_id = g.emit("slice", [x], (2,), start=1, stop=3)
     argmax_id = g.emit("argmax", [x], ())
@@ -130,8 +135,12 @@ def _build_lowered_ops_graph():
         ("gelu", gelu_id),
         ("elu", elu_id),
         ("elu_half", elu_half_id),
+        ("leaky_relu", leaky_id),
         ("relu", relu_id),
         ("exp", exp_id),
+        ("sqrt", sqrt_id),
+        ("log", log_id),
+        ("mod", mod_id),
         ("copy", copy_id),
         ("slice", slice_id),
         ("argmax", argmax_id),
@@ -153,8 +162,12 @@ def _build_lowered_ops_graph():
             "gelu",
             "elu",
             "elu_half",
+            "leaky_relu",
             "relu",
             "exp",
+            "sqrt",
+            "log",
+            "mod",
             "copy",
             "slice",
             "argmax",
@@ -1272,7 +1285,7 @@ class TestLoweredOpsOracle:
         assert n_state == 0
 
         exact_ops = {"copy", "slice", "relu", "argmax", "one_hot", "stack", "ne_zero", "ne_one"}
-        transcendental = {"exp", "tanh", "sigmoid", "softmax", "gelu", "elu", "elu_half", "sin", "cos"}
+        transcendental = {"exp", "tanh", "sigmoid", "softmax", "gelu", "elu", "elu_half", "leaky_relu", "sin", "cos", "sqrt", "log", "mod"}
 
         for _ in range(20):
             x = rng.normal(0.0, 1.0, (4,))

@@ -102,8 +102,8 @@ _OBS_KEYS = frozenset({"input_name", "state_keys", "normalize", "obs_mean", "obs
 _SUPPORTED_OPS = frozenset(
     {
         "Gemm", "MatMul", "Add", "Mul", "Sub", "Div", "Pow",
-        "Relu", "Tanh", "Sigmoid", "Elu", "Gelu", "Softmax", "LayerNormalization",
-        "Neg", "Abs", "Exp",
+        "Relu", "Tanh", "Sigmoid", "Elu", "LeakyRelu", "Gelu", "Softmax", "LayerNormalization",
+        "Neg", "Abs", "Exp", "Sqrt", "Log", "Mod",
         "Clip", "Constant", "Identity", "Flatten", "Reshape", "Transpose",
         "Squeeze", "Unsqueeze", "Cast", "Shape", "ConstantOfShape", "Gather", "Concat", "Slice",
         "ArgMax",
@@ -163,7 +163,7 @@ _RECURRENT_GATES = {"LSTM": 4, "GRU": 3, "RNN": 1}
 #: Binary elementwise ONNX ops translated to a same-named shinro op.
 _BINARY_OPS = {"Add": "add", "Mul": "mul", "Sub": "sub", "Div": "div", "Pow": "pow"}
 #: Unary ONNX ops translated straight to a same-named shinro op.
-_UNARY_OPS = {"Relu": "relu", "Tanh": "tanh", "Sigmoid": "sigmoid", "Neg": "neg", "Abs": "abs", "Exp": "exp"}
+_UNARY_OPS = {"Relu": "relu", "Tanh": "tanh", "Sigmoid": "sigmoid", "Neg": "neg", "Abs": "abs", "Exp": "exp", "Sqrt": "sqrt", "Log": "log"}
 #: Attributes Gemm may carry; any other attribute is rejected.
 _GEMM_ATTRS = frozenset({"alpha", "beta", "transA", "transB"})
 #: ONNX Slice attributes (the opset-1 form; opset 10+ passes the same values
@@ -171,6 +171,8 @@ _GEMM_ATTRS = frozenset({"alpha", "beta", "transA", "transB"})
 _SLICE_ATTRS = frozenset({"starts", "ends", "axes", "steps"})
 #: Attributes ArgMax may carry; any other attribute is rejected.
 _ARGMAX_ATTRS = frozenset({"axis", "keepdims", "select_last_index"})
+#: Attributes Mod may carry (``fmod``); any other attribute is rejected.
+_MOD_ATTRS = frozenset({"fmod"})
 
 
 class _OnnxImporter:
@@ -546,6 +548,10 @@ class _OnnxImporter:
             result = self.emit_clip(inputs, attrs)
         elif op_type == "ArgMax":
             result = self.emit_argmax(self.tensor(inputs[0]), attrs)
+        elif op_type == "Mod":
+            result = self.emit_mod(inputs, attrs)
+        elif op_type == "LeakyRelu":
+            result = self.emit_leaky_relu(self.tensor(inputs[0]), attrs)
         elif op_type == "Constant":
             result = self.emit_constant(attrs)
         elif op_type == "Identity":
@@ -1193,6 +1199,37 @@ class _OnnxImporter:
             return result
         return self._reshape_to(result, tuple(out_shape))
 
+    def emit_mod(self, inputs: list[str], attrs: dict[str, Any]) -> int:
+        """Translate ONNX ``Mod`` (elementwise modulo).
+
+        The ``fmod`` attribute selects the flavour: ``0`` (default) is Python's
+        ``%`` (sign of the divisor) and ``1`` is C ``fmod`` (sign of the
+        dividend). A constant-only ``Mod`` — the Decision-Transformer attention
+        indexing idiom ``2 % 3`` — folds to a ``const`` at import; otherwise it
+        becomes the VM's ``mod`` op with the bit baked into its ``aux``.
+
+        Note ONNX constrains ``fmod=0`` to integer types, and onnxruntime
+        rejects a float ``fmod=0``; this f64 machine extends Python's ``%`` to
+        floats. The ONNX Python reference instead uses ``np.fmod`` for floats
+        (+ ``nan_to_num``) — deliberately not replicated, since onnxruntime is
+        the deployment target and the corpus' only ``Mod`` is integer-valued.
+
+        Raises:
+            NotImplementedError: On an unknown attribute or wrong arity.
+        """
+        unknown = set(attrs) - _MOD_ATTRS
+        if unknown:
+            raise NotImplementedError(f"ONNX Mod carries unsupported attribute(s): {sorted(unknown)}")
+        if len(inputs) != 2:
+            raise NotImplementedError(f"ONNX Mod must have two inputs (got {len(inputs)})")
+        a = self.tensor(inputs[0])
+        b = self.tensor(inputs[1])
+        fmod = bool(int(attrs.get("fmod", 0)))
+        if self.g.nodes[a].op == "const" and self.g.nodes[b].op == "const":
+            va, vb = self.value_of(a), self.value_of(b)
+            return self.const(np.fmod(va, vb) if fmod else np.mod(va, vb))
+        return self.emit("mod", [a, b], fmod=fmod)
+
     def emit_layernorm(self, inputs: list[str], attrs: dict[str, Any]) -> int:
         """Emit the fused ``layernorm`` op for ONNX ``LayerNormalization``.
 
@@ -1278,6 +1315,13 @@ class _OnnxImporter:
         if unknown:
             raise NotImplementedError(f"ONNX Elu carries unsupported attribute(s): {sorted(unknown)}")
         return self.emit("elu", [x_id], alpha=float(attrs.get("alpha", 1.0)))
+
+    def emit_leaky_relu(self, x_id: int, attrs: dict[str, Any]) -> int:
+        """Emit the fused ``leaky_relu`` op; ``alpha`` (default 0.01) is baked per node."""
+        unknown = set(attrs) - {"alpha"}
+        if unknown:
+            raise NotImplementedError(f"ONNX LeakyRelu carries unsupported attribute(s): {sorted(unknown)}")
+        return self.emit("leaky_relu", [x_id], alpha=float(attrs.get("alpha", 0.01)))
 
     def emit_clip(self, inputs: list[str], attrs: dict[str, Any]) -> int:
         """Emit ``clip`` for ONNX ``Clip``.

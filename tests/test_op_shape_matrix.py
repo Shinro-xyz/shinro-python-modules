@@ -156,6 +156,15 @@ def _elementwise_graph(g: Graph):
         # (4,) vs (4,1): numpy right-aligns the 1-D operand as a row -> (4,4)
         outs[f"{oname}_1d_col"] = g.emit(op, [v4, v4b], (4, 4))
 
+    # mod: the fmod bit rides in aux; both flavours on a well-conditioned
+    # divisor (a free divisor near 0 would make the cell nan-vs-nan and hide a
+    # sign/index bug), same-shape 2-D and a 1-D cell.
+    mod_b = g.emit("const", [], (3, 2), value=np.array([[2.5, -3.0], [4.0, 7.5], [-2.0, 1.25]]))
+    mod_v = g.emit("const", [], (4,), value=np.array([1.5, -2.0, 3.5, -0.5]))
+    outs["mod_py"] = g.emit("mod", [x, mod_b], (3, 2), fmod=False)
+    outs["mod_c"] = g.emit("mod", [x, mod_b], (3, 2), fmod=True)
+    outs["mod_1d_c"] = g.emit("mod", [v4, mod_v], (4,), fmod=True)
+
     neg2 = g.input("neg2", (3, 2))
     specs["neg2"] = ((3, 2), "free")
     outs["neg_2d"] = g.emit("neg", [neg2], (3, 2))
@@ -244,7 +253,7 @@ def _pointwise_graph(g: Graph):
     outs = {}
     x1 = g.input("p1", (1,))
     x8 = g.input("p8", (8,))
-    for op in ("tanh", "relu", "exp", "sigmoid", "softmax", "gelu", "elu", "sin", "cos", "abs", "sign"):
+    for op in ("tanh", "relu", "exp", "sigmoid", "softmax", "gelu", "elu", "leaky_relu", "sin", "cos", "abs", "sign", "sqrt", "log"):
         outs[f"{op}_1"] = g.emit(op, [x1], (1,))
         outs[f"{op}_8"] = g.emit(op, [x8], (8,))
 
@@ -268,6 +277,8 @@ def _pointwise_graph(g: Graph):
     outs["gelu_2d"] = g.emit("gelu", [am23], (2, 3))
     # 2-D elu (non-default alpha exercises the baked elu_alpha table).
     outs["elu_2d"] = g.emit("elu", [am23], (2, 3), alpha=0.5)
+    # 2-D leaky_relu with a non-default slope exercises leaky_relu_alpha.
+    outs["leaky_relu_2d_alpha"] = g.emit("leaky_relu", [am23], (2, 3), alpha=0.2)
     # layernorm: last-axis per-row normalization, shape-preserving. The 1-D cell
     # is a single normalized row; the non-default-eps cell exercises the baked
     # layernorm_eps table. scale/bias stand in for ONNX Scale/B (per feature).

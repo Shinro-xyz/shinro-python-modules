@@ -295,7 +295,7 @@ listing available ops. The current set (from `ops.py`):
 `const`, `input`, `output`, `matmul`, `add`, `sub`, `mul`, `div`, `ne`, `lt`,
 `neg`, `transpose`, `inv`, `reshape`, `clip`, `where`, `copy`, `any`, `stack`,
 `tanh`, `relu`, `sigmoid`, `softmax`, `gelu`, `exp`, `abs`, `sign`, `pow`, `sin`, `cos`, `min`, `argmax`,
-`one_hot`, `slice`, `solve_qp`.
+`sqrt`, `log`, `mod`, `leaky_relu`, `one_hot`, `slice`, `solve_qp`.
 
 ## Lowering to Zig (shipped)
 
@@ -490,8 +490,8 @@ enum in `graph_data.zig`; `cst`/`inp`/`out`/`where_op` are the Zig spellings of
 
 `const`, `input`, `output`, `matmul`, `add`, `sub`, `mul`, `div`, `ne`, `lt`,
 `neg`, `transpose`, `inv`, `reshape`, `clip`, `where`, `any`, `copy`, `tanh`,
-`relu`, `sigmoid`, `softmax`, `gelu`, `exp`, `abs`, `sign`, `pow`, `min`, `argmax`, `one_hot`, `slice`, `sin`,
-`cos`, `stack`, `solve_qp`.
+`relu`, `sigmoid`, `softmax`, `gelu`, `exp`, `abs`, `sign`, `pow`, `min`, `argmax`, `sqrt`, `log`, `mod`, `leaky_relu`,
+`one_hot`, `slice`, `sin`, `cos`, `stack`, `solve_qp`.
 
 Every interpreter op has a VM switch case. `solve_qp` is special: the
 interpreter handler solves with the Python `osqp` (eps=1e-6), while the VM
