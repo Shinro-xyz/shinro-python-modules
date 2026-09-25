@@ -105,7 +105,8 @@ _SUPPORTED_OPS = frozenset(
         "Relu", "Tanh", "Sigmoid", "Elu", "Gelu", "Softmax", "LayerNormalization",
         "Neg", "Abs", "Exp",
         "Clip", "Constant", "Identity", "Flatten", "Reshape", "Transpose",
-        "Squeeze", "Unsqueeze", "Cast", "Shape", "ConstantOfShape", "Gather", "Concat",
+        "Squeeze", "Unsqueeze", "Cast", "Shape", "ConstantOfShape", "Gather", "Concat", "Slice",
+        "ArgMax",
         "RandomNormalLike", "RandomNormal",
         "LSTM", "GRU", "RNN",
     }
@@ -119,7 +120,7 @@ _NOISE_OPS = frozenset({"RandomNormalLike", "RandomNormal"})
 #: Shape/metadata ops. The VM is an f64 arithmetic machine with a flat 1-D/2-D
 #: layout, so ONNX's integer-tensor shape algebra has no runtime representation;
 #: these are folded to a constant or rewritten as a reshape at import time.
-_SHAPE_GLUE_OPS = frozenset({"Shape", "ConstantOfShape", "Squeeze", "Unsqueeze", "Cast", "Gather", "Concat"})
+_SHAPE_GLUE_OPS = frozenset({"Shape", "ConstantOfShape", "Squeeze", "Unsqueeze", "Cast", "Gather", "Concat", "Slice"})
 #: ONNX TensorProto element types → numpy dtypes (for the metadata `Cast`).
 _ONNX_DTYPES = {
     1: np.float32,
@@ -165,6 +166,11 @@ _BINARY_OPS = {"Add": "add", "Mul": "mul", "Sub": "sub", "Div": "div", "Pow": "p
 _UNARY_OPS = {"Relu": "relu", "Tanh": "tanh", "Sigmoid": "sigmoid", "Neg": "neg", "Abs": "abs", "Exp": "exp"}
 #: Attributes Gemm may carry; any other attribute is rejected.
 _GEMM_ATTRS = frozenset({"alpha", "beta", "transA", "transB"})
+#: ONNX Slice attributes (the opset-1 form; opset 10+ passes the same values
+#: as input tensors instead, so this set only gates the attribute spelling).
+_SLICE_ATTRS = frozenset({"starts", "ends", "axes", "steps"})
+#: Attributes ArgMax may carry; any other attribute is rejected.
+_ARGMAX_ATTRS = frozenset({"axis", "keepdims", "select_last_index"})
 
 
 class _OnnxImporter:
@@ -538,6 +544,8 @@ class _OnnxImporter:
             result = self.emit_elu(self.tensor(inputs[0]), attrs)
         elif op_type == "Clip":
             result = self.emit_clip(inputs, attrs)
+        elif op_type == "ArgMax":
+            result = self.emit_argmax(self.tensor(inputs[0]), attrs)
         elif op_type == "Constant":
             result = self.emit_constant(attrs)
         elif op_type == "Identity":
@@ -649,6 +657,9 @@ class _OnnxImporter:
           ``reshape``: only size-1 axes move, so the flat order is unchanged;
         - a ``Transpose``/``Gather``/single-input ``Concat`` that only moves
           size-1 axes becomes a ``reshape`` for the same reason;
+        - a ``Slice`` of constant data folds to one ``const`` (any axes/steps);
+          a single-axis step-1 slice of runtime data becomes the VM's
+          ``slice`` (axis 0) or ``gather`` (axis 1);
         - anything else is rejected loudly (until a real runtime op exists).
 
         Raises:
@@ -659,6 +670,8 @@ class _OnnxImporter:
 
         op_type = node.op_type
         inputs = [n for n in node.input if n]
+        if op_type == "Slice":
+            return self.emit_slice(node, attrs)
         ids = [self.tensor(n) for n in inputs]
 
         # Shape depends only on its input's shape, which is static — fold it
@@ -750,6 +763,144 @@ class _OnnxImporter:
         out_shape = list(x.shape)
         out_shape[axis : axis + 1] = list(idx.shape)
         return self._reshape_to(ids[0], tuple(out_shape))
+
+    def emit_slice(self, node: Any, attrs: dict[str, Any]) -> int:
+        """Translate one ONNX ``Slice`` into a const fold, a ``slice``, or a ``gather``.
+
+        The lowered VM has no general slicing kernel, so a Slice is resolved in
+        two tiers, most-specific first:
+
+        - a slice of **constant** data is pure import-time arithmetic and folds
+          to one ``const`` — any axes, steps, and negative bounds (this is how a
+          torch ``nn.GRU`` export's reordered gate weights import);
+        - a slice of **runtime** data must be a single step-1 axis range on a
+          rank <= 2 operand: axis 0 becomes the VM's ``slice`` (a contiguous
+          flat/row offset) and axis 1 becomes a ``gather`` with a baked index.
+
+        Anything else is rejected loudly: silently mis-slicing a weight would
+        corrupt the policy with no error.
+
+        Args:
+            node: The ``onnx.NodeProto`` to translate.
+            attrs: Pre-extracted node attributes (the opset-1 spelling).
+
+        Returns:
+            Node id of the sliced result.
+
+        Raises:
+            NotImplementedError: On a scalar operand, a runtime slice over more
+                than one axis (or a stepped/rank-3 one), or a non-constant
+                ``starts``/``ends``/``axes``/``steps`` operand.
+            ValueError: On malformed or out-of-range slice parameters.
+        """
+        inputs = [n for n in node.input if n]
+        if not inputs:
+            raise NotImplementedError("ONNX Slice needs a data input")
+        data_id = self.tensor(inputs[0])
+        x = self.value_of(data_id)
+        if x.ndim == 0:
+            raise NotImplementedError("ONNX Slice on a scalar operand is not supported")
+        starts, ends, axes, steps = self._slice_params(inputs, attrs, x.ndim)
+
+        if self.g.nodes[data_id].op == "const":
+            # Match the ONNX reference exactly: raw bounds into numpy indexing
+            # (negative wrap, out-of-range clamp, negative-step reversal — the
+            # reference is literally ``data[tuple(slices)]``).
+            index: list[slice] = [slice(None)] * x.ndim
+            for axis, s, e, st in zip(axes, starts, ends, steps):
+                index[axis] = slice(s, e, st)
+            folded = np.asarray(x[tuple(index)], dtype=np.float64)
+            if folded.ndim > 2:
+                folded = folded.reshape(_collapse_leading_singletons(folded.shape))
+            return self.const(folded)
+
+        # Runtime data: normalize the bounds, then keep only the axes that
+        # actually move. Only a positive step-1 range is representable.
+        moved = []
+        for axis, s, e, st in zip(axes, starts, ends, steps):
+            n_start, n_stop, n_step = slice(s, e, st).indices(x.shape[axis])
+            if (n_start, n_stop, n_step) != (0, x.shape[axis], 1):
+                moved.append((axis, n_start, n_stop, n_step))
+        if not moved:
+            # A full slice leaves the flat order untouched.
+            return data_id
+        if len(moved) > 1:
+            raise NotImplementedError(
+                f"ONNX Slice of a runtime rank-{x.ndim} tensor over axes {[a for a, *_ in moved]} "
+                f"is not representable: the VM slices one axis at a time"
+            )
+        axis, n_start, n_stop, n_step = moved[0]
+        if n_step != 1:
+            raise NotImplementedError(f"ONNX Slice step={n_step} on runtime data is not supported (step 1 only)")
+        if n_start >= n_stop:
+            raise NotImplementedError("ONNX Slice produced an empty runtime tensor, which the VM cannot represent")
+        if x.ndim > 2:
+            raise NotImplementedError(
+                f"ONNX Slice of a runtime rank-{x.ndim} tensor is not supported (the VM is 1-D/2-D)"
+            )
+        if axis == 0 or x.ndim == 1:
+            return self.emit("slice", [data_id], start=n_start, stop=n_stop)
+        idx = self.const(np.arange(n_start, n_stop, dtype=np.float64))
+        return self.emit("gather", [data_id, idx], axis=1)
+
+    def _slice_params(
+        self, inputs: list[str], attrs: dict[str, Any], rank: int
+    ) -> tuple[list[int], list[int], list[int], list[int]]:
+        """Resolve ONNX Slice's ``starts``/``ends``/``axes``/``steps`` to int lists.
+
+        Accepts both spellings: the opset-1 attributes and the opset-10+ input
+        tensors. Every bound must be import-time constant (the VM has no runtime
+        shape algebra), and negative axes are resolved against ``rank``.
+
+        Raises:
+            NotImplementedError: On an unsupported attribute or a non-constant
+                bound tensor.
+            ValueError: On mismatched lengths, a repeated/out-of-range axis, or
+                a zero step.
+        """
+        unknown = set(attrs) - _SLICE_ATTRS
+        if unknown:
+            raise NotImplementedError(f"ONNX Slice carries unsupported attribute(s): {sorted(unknown)}")
+        if "starts" in attrs or "ends" in attrs:
+            if "starts" not in attrs or "ends" not in attrs:
+                raise ValueError("ONNX Slice attribute form needs both starts and ends")
+            starts = [int(v) for v in attrs["starts"]]
+            ends = [int(v) for v in attrs["ends"]]
+            axes = [int(v) for v in attrs.get("axes", range(len(starts)))]
+            steps = [int(v) for v in attrs.get("steps", [1] * len(starts))]
+        else:
+            if len(inputs) < 3:
+                raise NotImplementedError("ONNX Slice needs starts and ends")
+            starts = self._static_int_vector(inputs[1], "starts")
+            ends = self._static_int_vector(inputs[2], "ends")
+            axes = self._static_int_vector(inputs[3], "axes") if len(inputs) > 3 else list(range(len(starts)))
+            steps = self._static_int_vector(inputs[4], "steps") if len(inputs) > 4 else [1] * len(starts)
+        if not (len(starts) == len(ends) == len(axes) == len(steps)):
+            raise ValueError(
+                f"ONNX Slice has mismatched starts/ends/axes/steps lengths: "
+                f"{len(starts)}/{len(ends)}/{len(axes)}/{len(steps)}"
+            )
+        if any(st == 0 for st in steps):
+            raise ValueError("ONNX Slice step must be non-zero")
+        axes = [a + rank if a < 0 else a for a in axes]
+        if any(a < 0 or a >= rank for a in axes):
+            raise ValueError(f"ONNX Slice axes {axes} out of range for a rank-{rank} operand")
+        if len(set(axes)) != len(axes):
+            raise ValueError(f"ONNX Slice repeats an axis: {axes}")
+        return starts, ends, axes, steps
+
+    def _static_int_vector(self, name: str, label: str) -> list[int]:
+        """Read a Slice parameter tensor, requiring it to be import-time constant.
+
+        Raises:
+            NotImplementedError: If the tensor is not a baked constant.
+        """
+        node_id = self.tensor(name)
+        if self.g.nodes[node_id].op != "const":
+            raise NotImplementedError(
+                f"ONNX Slice {label} tensor {name!r} is not a constant; the VM requires import-time slice bounds"
+            )
+        return [int(v) for v in np.asarray(self.value_of(node_id)).ravel()]
 
     def _reshape_to(self, src_id: int, shape: Any) -> int:
         """Alias a shape-only op as a ``reshape`` (skipped when it is a no-op).
@@ -873,10 +1024,25 @@ class _OnnxImporter:
         ONNX stores W/R as ``[num_dir, ngates*H, I]`` and B as
         ``[num_dir, 2*ngates*H]``; only a single forward layer is supported, so
         the leading axis must be 1 when present.
+
+        The weight may be a baked initializer or a **constant the importer has
+        already produced** — a torch ``nn.GRU`` export slices and re-concatenates
+        its gate blocks (a Slice/Concat subtree the shape-glue fold turns into a
+        ``const``), so the recurrent op's W/R are not always initializer names.
+
+        Raises:
+            ValueError: If the tensor is neither an initializer nor a
+                constant, or its rank/shape is wrong.
         """
-        value = self.initializers.get(name)
-        if value is None:
-            raise ValueError(f"{label} must be an initializer (got tensor {name!r})")
+        produced = self.tensors.get(name)
+        if produced is not None:
+            value = self.value_of(produced)
+            if self.g.nodes[produced].op != "const":
+                raise ValueError(f"{label} must be a constant (got runtime tensor {name!r})")
+        else:
+            value = self.initializers.get(name)
+            if value is None:
+                raise ValueError(f"{label} must be an initializer or a produced constant (got tensor {name!r})")
         if value.ndim == target_ndim + 1:
             if value.shape[0] != 1:
                 raise NotImplementedError(f"{label}: num_layers/num_directions must be 1 (got shape {value.shape})")
@@ -980,6 +1146,52 @@ class _OnnxImporter:
                 "only last-axis softmax is supported"
             )
         return self.emit("softmax", [x_id])
+
+    def emit_argmax(self, x_id: int, attrs: dict[str, Any]) -> int:
+        """Translate ONNX ``ArgMax`` onto the VM's whole-tensor ``argmax``.
+
+        The VM reduction collapses the whole flattened operand, so the ONNX
+        reduction axis must be the only non-singleton dimension — a 1-D logits
+        vector, or the batch-1 ``(1, n)`` logits of an ML-Agents policy. The
+        result is a scalar index, reshaped to the ONNX output shape so
+        ``keepdims`` is honored. ``select_last_index=1`` (ties resolve to the
+        highest index) is rejected because the kernel resolves ties to the
+        first index, like numpy.
+
+        Raises:
+            NotImplementedError: On a scalar operand, a non-collapsible axis, or
+                ``select_last_index=1``.
+            ValueError: On an out-of-range axis.
+        """
+        unknown = set(attrs) - _ARGMAX_ATTRS
+        if unknown:
+            raise NotImplementedError(f"ONNX ArgMax carries unsupported attribute(s): {sorted(unknown)}")
+        if int(attrs.get("select_last_index", 0)):
+            raise NotImplementedError(
+                "ONNX ArgMax select_last_index=1 is not supported (the VM resolves ties to the first index)"
+            )
+        x = self.value_of(x_id)
+        if x.ndim == 0:
+            raise NotImplementedError("ONNX ArgMax on a scalar operand is not supported")
+        axis = int(attrs.get("axis", 0))
+        if axis < 0:
+            axis += x.ndim
+        if not 0 <= axis < x.ndim:
+            raise ValueError(f"ONNX ArgMax axis={attrs.get('axis', 0)} out of range for a rank-{x.ndim} operand")
+        if any(d != 1 for a, d in enumerate(x.shape) if a != axis):
+            raise NotImplementedError(
+                f"ONNX ArgMax over axis {axis} of shape {x.shape} is not representable: the VM argmax "
+                f"collapses the whole tensor, so every other axis must be 1"
+            )
+        out_shape = list(x.shape)
+        if int(attrs.get("keepdims", 1)):
+            out_shape[axis] = 1
+        else:
+            del out_shape[axis]
+        result = self.emit("argmax", [x_id])
+        if not out_shape:
+            return result
+        return self._reshape_to(result, tuple(out_shape))
 
     def emit_layernorm(self, inputs: list[str], attrs: dict[str, Any]) -> int:
         """Emit the fused ``layernorm`` op for ONNX ``LayerNormalization``.
