@@ -1256,6 +1256,61 @@ class TestRecurrentGruFlag:
         assert not np.allclose(outs[0], outs[1])
 
 
+class TestRecurrentProducedWeights:
+    def test_gru_weight_sliced_from_a_larger_initializer(self, tmp_path):
+        """A torch GRU export slices/reorders its gate blocks into W.
+
+        The shape-glue fold turns that Slice subtree into a constant, so the
+        cell's weight is a *produced* constant rather than an initializer name;
+        ``_cell_weight`` must resolve it.
+        """
+        from onnx import helper
+
+        H, I, OBS, ACT = 3, 4, 5, 2
+        ng = 3
+        rng = np.random.default_rng(11)
+        w_real = rng.normal(0, 0.3, (ng * H, I))
+        w_pad = rng.normal(0, 0.3, (ng * H, I))
+        w_src = np.concatenate([w_real, w_pad], axis=0).astype(np.float32)
+        r = rng.normal(0, 0.3, (ng * H, H)).astype(np.float32)
+        b = rng.normal(0, 0.3, (2 * ng * H,)).astype(np.float32)
+        inits = [
+            _init("Win", rng.normal(0, 0.3, (OBS, I))),
+            _init("Whead", rng.normal(0, 0.3, (H, ACT))),
+            _init("Wsrc", w_src),
+            _init("R", r),
+            _init("B", b),
+            _int_init("sx", [1, 1, I]),
+            _int_init("sh", [1, H]),
+            _int_init("sl", [0]),
+            _int_init("se", [ng * H]),
+            _int_init("sax", [0]),
+        ]
+        nodes = [
+            helper.make_node("MatMul", ["obs", "Win"], ["x2"]),
+            helper.make_node("Reshape", ["x2", "sx"], ["X"]),
+            helper.make_node("Slice", ["Wsrc", "sl", "se", "sax"], ["W"]),
+            helper.make_node("GRU", ["X", "W", "R", "B", "", "h_in"], ["Y", "h_out"], hidden_size=H),
+            helper.make_node("Reshape", ["h_out", "sh"], ["hf"]),
+            helper.make_node("MatMul", ["hf", "Whead"], ["action"]),
+        ]
+        ins = [_vi("obs", [1, OBS]), _vi("h_in", [1, 1, H])]
+        outs = [_vi("action", [1, ACT]), _vi("h_out", [1, 1, H])]
+        path = _save(nodes, ins, outs, inits, tmp_path, name="gru_sliced.onnx", opset=14)
+
+        cg = import_onnx_policy(path)
+        assert cg.inputs == [STATE_PORT, "state_h_0"]
+        rng2 = np.random.default_rng(5)
+        obs = rng2.normal(0, 0.5, OBS)
+        h0 = rng2.normal(0, 0.5, H)
+        got = interpret(cg.graph, {STATE_PORT: obs, "state_h_0": h0})
+        w1 = np.asarray([t for t in inits if t.name == "Win"][0].float_data).reshape(OBS, I).astype(np.float64)
+        w2 = np.asarray([t for t in inits if t.name == "Whead"][0].float_data).reshape(H, ACT).astype(np.float64)
+        h_next, _ = _ref_cell("GRU", obs @ w1, h0, None, w_real.astype(np.float64), r.astype(np.float64), b.astype(np.float64), H)
+        np.testing.assert_allclose(got[OUTPUT_PORT], h_next @ w2, atol=1e-12)
+        np.testing.assert_allclose(got["state_h_0"], h_next, atol=1e-12)
+
+
 class TestRecurrentMlAgentsLayout:
     def test_recurrent_in_and_out_are_intercepted(self, tmp_path):
         """An ML-Agents LSTM slices ``recurrent_in`` and concats ``recurrent_out``.
@@ -1612,6 +1667,289 @@ class TestShapeGlue:
         x = np.array([4.0, 5.0, 6.0])
         np.testing.assert_allclose(_run(cg, x), np.concatenate([x, x]), rtol=1e-12)
 
+
+# ─── Slice / ArgMax (decomposed attention & gate reordering) ────────────────
+
+
+class TestSlice:
+    """ONNX ``Slice`` folds to a const, or becomes a single-axis VM slice."""
+
+    def test_constant_weight_slice_folds_to_const(self, tmp_path):
+        """Slicing an initializer is import-time arithmetic (torch GRU gates)."""
+        from onnx import helper
+
+        w = np.arange(12, dtype=np.float32).reshape(6, 2)
+        path = _save(
+            [
+                helper.make_node("Slice", ["w", "st", "en", "ax"], ["ws"]),
+                helper.make_node("MatMul", ["state", "ws"], ["y"]),
+            ],
+            [_vi("state", [None, 3])],
+            [_vi("y", [None, 2])],
+            [_init("w", w), _int_init("st", [3]), _int_init("en", [6]), _int_init("ax", [0])],
+            tmp_path,
+        )
+        cg = import_onnx_policy(path)
+        assert "slice" not in _op_names(cg)
+        x = np.array([1.0, 2.0, 3.0])
+        np.testing.assert_allclose(_run(cg, x), x @ w[3:6].astype(np.float64), rtol=1e-6)
+
+    def test_constant_slice_negative_step_reverses(self, tmp_path):
+        """A negative step and negative bounds follow numpy indexing exactly."""
+        from onnx import helper
+
+        w = np.arange(12, dtype=np.float32).reshape(6, 2)
+        path = _save(
+            [
+                helper.make_node("Slice", ["w", "st", "en", "ax", "sp"], ["ws"]),
+                helper.make_node("MatMul", ["state", "ws"], ["y"]),
+            ],
+            [_vi("state", [None, 3])],
+            [_vi("y", [None, 2])],
+            [
+                _init("w", w),
+                _int_init("st", [-1]),
+                _int_init("en", [2]),
+                _int_init("ax", [0]),
+                _int_init("sp", [-1]),
+            ],
+            tmp_path,
+        )
+        cg = import_onnx_policy(path)
+        x = np.array([1.0, 2.0, 3.0])
+        np.testing.assert_allclose(_run(cg, x), x @ w[5:2:-1].astype(np.float64), rtol=1e-6)
+
+    def test_opset1_attribute_form(self, tmp_path):
+        """The opset-1 spelling carries starts/ends/axes as attributes."""
+        from onnx import helper
+
+        path = _save(
+            [helper.make_node("Slice", ["state"], ["s"], starts=[1], ends=[3], axes=[0])],
+            [_vi("state", [None, 4])],
+            [_vi("s", [None, 2])],
+            [],
+            tmp_path,
+        )
+        cg = import_onnx_policy(path)
+        assert "slice" in _op_names(cg)
+        np.testing.assert_allclose(_run(cg, np.array([1.0, 2.0, 3.0, 4.0])), [2.0, 3.0], rtol=1e-12)
+
+    def test_runtime_1d_slice_normalizes_negative_bounds(self, tmp_path):
+        from onnx import helper
+
+        path = _save(
+            [helper.make_node("Slice", ["state", "st", "en"], ["s"])],
+            [_vi("state", [None, 5])],
+            [_vi("s", [None, 3])],
+            [_int_init("st", [-2]), _int_init("en", [2**63 - 1])],
+            tmp_path,
+        )
+        cg = import_onnx_policy(path)
+        assert "slice" in _op_names(cg)
+        np.testing.assert_allclose(_run(cg, np.arange(5.0)), [3.0, 4.0], rtol=1e-12)
+
+    def test_runtime_2d_column_slice_becomes_gather(self, tmp_path):
+        """A single-axis step-1 slice on axis 1 reuses the gather kernel."""
+        from onnx import helper
+
+        path = _save(
+            [
+                helper.make_node("Reshape", ["state", "sh2"], ["x"]),
+                helper.make_node("Slice", ["x", "st", "en", "ax"], ["s"]),
+                helper.make_node("Reshape", ["s", "sh1"], ["s1"]),
+                helper.make_node("MatMul", ["s1", "w"], ["y"]),
+            ],
+            [_vi("state", [None, 4])],
+            [_vi("y", [None, 2])],
+            [
+                _init("w", np.ones((2, 2))),
+                _int_init("sh2", [1, 4]),
+                _int_init("sh1", [2]),
+                _int_init("st", [1]),
+                _int_init("en", [3]),
+                _int_init("ax", [1]),
+            ],
+            tmp_path,
+        )
+        cg = import_onnx_policy(path)
+        assert "gather" in _op_names(cg)
+        np.testing.assert_allclose(_run(cg, np.array([10.0, 20.0, 30.0, 40.0])), [50.0, 50.0], rtol=1e-12)
+
+    def test_full_slice_is_a_noop(self, tmp_path):
+        from onnx import helper
+
+        path = _save(
+            [helper.make_node("Slice", ["state", "st", "en"], ["s"])],
+            [_vi("state", [None, 3])],
+            [_vi("s", [None, 3])],
+            [_int_init("st", [0]), _int_init("en", [3])],
+            tmp_path,
+        )
+        cg = import_onnx_policy(path)
+        assert "slice" not in _op_names(cg) and "gather" not in _op_names(cg)
+        np.testing.assert_allclose(_run(cg, np.array([1.0, 2.0, 3.0])), [1.0, 2.0, 3.0], rtol=1e-12)
+
+    def test_stepped_runtime_slice_rejected(self, tmp_path):
+        from onnx import helper
+
+        path = _save(
+            [helper.make_node("Slice", ["state", "st", "en", "ax", "sp"], ["s"])],
+            [_vi("state", [None, 6])],
+            [_vi("s", [None, 3])],
+            [_int_init("st", [0]), _int_init("en", [6]), _int_init("ax", [0]), _int_init("sp", [2])],
+            tmp_path,
+        )
+        with pytest.raises(NotImplementedError, match="step"):
+            import_onnx_policy(path)
+
+    def test_multi_axis_runtime_slice_rejected(self, tmp_path):
+        from onnx import helper
+
+        path = _save(
+            [
+                helper.make_node("Reshape", ["state", "sh2"], ["x"]),
+                helper.make_node("Slice", ["x", "st", "en", "ax"], ["s"]),
+            ],
+            [_vi("state", [None, 4])],
+            [_vi("s", [None, 1])],
+            [
+                _int_init("sh2", [2, 2]),
+                _int_init("st", [0, 0]),
+                _int_init("en", [1, 1]),
+                _int_init("ax", [0, 1]),
+            ],
+            tmp_path,
+        )
+        with pytest.raises(NotImplementedError, match="one axis at a time"):
+            import_onnx_policy(path)
+
+    def test_non_constant_bounds_rejected(self, tmp_path):
+        from onnx import helper
+
+        path = _save(
+            [
+                helper.make_node("Abs", ["state"], ["st"]),
+                helper.make_node("Slice", ["state", "st", "en"], ["s"]),
+            ],
+            [_vi("state", [None, 4])],
+            [_vi("s", [None, 2])],
+            [_int_init("en", [2])],
+            tmp_path,
+        )
+        with pytest.raises(NotImplementedError, match="not a constant"):
+            import_onnx_policy(path)
+
+    def test_unknown_attribute_rejected(self, tmp_path):
+        from onnx import helper
+
+        path = _save(
+            [helper.make_node("Slice", ["state"], ["s"], starts=[0], ends=[2], bogus=1)],
+            [_vi("state", [None, 4])],
+            [_vi("s", [None, 2])],
+            [],
+            tmp_path,
+        )
+        with pytest.raises(NotImplementedError, match="bogus"):
+            import_onnx_policy(path)
+
+
+class TestArgMax:
+    """ONNX ``ArgMax`` maps onto the VM's whole-tensor ``argmax``."""
+
+    def test_1d_default_keepdims(self, tmp_path):
+        from onnx import helper
+
+        path = _save(
+            [helper.make_node("ArgMax", ["state"], ["idx"], axis=0)],
+            [_vi("state", [None, 4])],
+            [_vi("idx", [1])],
+            [],
+            tmp_path,
+        )
+        cg = import_onnx_policy(path)
+        assert "argmax" in _op_names(cg)
+        np.testing.assert_allclose(_run(cg, np.array([1.0, 5.0, 2.0, 0.0])), [1.0], rtol=1e-12)
+
+    def test_1d_no_keepdims_is_scalar(self, tmp_path):
+        from onnx import helper
+
+        path = _save(
+            [
+                helper.make_node("ArgMax", ["state"], ["idx"], axis=0, keepdims=0),
+                helper.make_node("Reshape", ["idx", "sh1"], ["i1"]),
+            ],
+            [_vi("state", [None, 4])],
+            [_vi("i1", [1])],
+            [_int_init("sh1", [1])],
+            tmp_path,
+        )
+        cg = import_onnx_policy(path)
+        np.testing.assert_allclose(_run(cg, np.array([1.0, 5.0, 2.0, 0.0])), [1.0], rtol=1e-12)
+
+    def test_2d_batch1_last_axis(self, tmp_path):
+        """An ML-Agents ``(1, n)`` logits block reduces over the last axis."""
+        from onnx import helper
+
+        path = _save(
+            [
+                helper.make_node("Reshape", ["state", "sh2"], ["x"]),
+                helper.make_node("ArgMax", ["x"], ["idx"], axis=1, keepdims=1),
+                helper.make_node("Reshape", ["idx", "sh1"], ["i1"]),
+                helper.make_node("MatMul", ["i1", "w"], ["y"]),
+            ],
+            [_vi("state", [None, 4])],
+            [_vi("y", [None, 2])],
+            [
+                _init("w", np.ones((1, 2))),
+                _int_init("sh2", [1, 4]),
+                _int_init("sh1", [1]),
+            ],
+            tmp_path,
+        )
+        cg = import_onnx_policy(path)
+        np.testing.assert_allclose(_run(cg, np.array([1.0, 5.0, 2.0, 0.0])), [1.0, 1.0], rtol=1e-12)
+
+    def test_non_collapsible_axis_rejected(self, tmp_path):
+        from onnx import helper
+
+        path = _save(
+            [
+                helper.make_node("Reshape", ["state", "sh2"], ["x"]),
+                helper.make_node("ArgMax", ["x"], ["idx"], axis=1),
+            ],
+            [_vi("state", [None, 4])],
+            [_vi("idx", [None, 2])],
+            [_int_init("sh2", [2, 2])],
+            tmp_path,
+        )
+        with pytest.raises(NotImplementedError, match="every other axis must be 1"):
+            import_onnx_policy(path)
+
+    def test_select_last_index_rejected(self, tmp_path):
+        from onnx import helper
+
+        path = _save(
+            [helper.make_node("ArgMax", ["state"], ["idx"], axis=0, select_last_index=1)],
+            [_vi("state", [None, 4])],
+            [_vi("idx", [1])],
+            [],
+            tmp_path,
+        )
+        with pytest.raises(NotImplementedError, match="select_last_index"):
+            import_onnx_policy(path)
+
+    def test_unknown_attribute_rejected(self, tmp_path):
+        from onnx import helper
+
+        path = _save(
+            [helper.make_node("ArgMax", ["state"], ["idx"], axis=0, bogus=1)],
+            [_vi("state", [None, 4])],
+            [_vi("idx", [1])],
+            [],
+            tmp_path,
+        )
+        with pytest.raises(NotImplementedError, match="bogus"):
+            import_onnx_policy(path)
 
 
 # ─── host-supplied randomness ───────────────────────────────────────────────
