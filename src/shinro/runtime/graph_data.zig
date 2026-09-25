@@ -8,7 +8,7 @@ pub const Op = enum {
     sin, cos, stack, solve_qp,
     abs, sign, pow, lt, min, gemm, sigmoid, softmax, gelu, elu, layernorm,
     lstm, gru, rnn,
-    concat, gather,
+    concat, gather, sqrt, log, mod, leaky_relu,
 };
 
 pub const Node = struct {
@@ -91,6 +91,7 @@ pub const clip_hi = [_]f64{0x1.0000000000000p-1, 0x1.0000000000000p-1, 0x1.00000
 pub const gemm_alpha = [_]f64{};
 pub const gemm_beta = [_]f64{};
 pub const elu_alpha = [_]f64{};
+pub const leaky_relu_alpha = [_]f64{};
 pub const layernorm_eps = [_]f64{};
 pub const output_offsets = [_]usize{0};
 pub const state_offsets = [_]usize{0, 3, 12};

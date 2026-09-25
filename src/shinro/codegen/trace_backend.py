@@ -254,6 +254,10 @@ class TraceBackend:
         # ELU; alpha is baked per node by the lowerer.
         return self._emit("elu", [x], x.shape, alpha=alpha)
 
+    def leaky_relu(self, x: Tracer, *, alpha: float = 0.01) -> Tracer:
+        # LeakyReLU; alpha is baked per node by the lowerer (the elu pattern).
+        return self._emit("leaky_relu", [x], x.shape, alpha=alpha)
+
     def layernorm(self, x: Tracer, scale: Tracer, bias: Tracer, *, eps: float = 1e-5) -> Tracer:
         # Layer normalization over the last axis (numpy axis=-1), shape-preserving.
         # scale/bias are the ONNX Scale/B operands (one entry per feature); eps is
@@ -321,6 +325,19 @@ class TraceBackend:
 
     def exp(self, x: Tracer) -> Tracer:
         return self._emit("exp", [x], x.shape)
+
+    def sqrt(self, x: Tracer) -> Tracer:
+        return self._emit("sqrt", [x], x.shape)
+
+    def log(self, x: Tracer) -> Tracer:
+        return self._emit("log", [x], x.shape)
+
+    def mod(self, a: Tracer, b: Tracer, *, fmod: bool = False) -> Tracer:
+        # Elementwise modulo; fmod picks C fmod (@rem, sign of dividend) over
+        # Python % (@mod, sign of divisor). The bit is baked into the node aux.
+        a = _lift(self.g, a)
+        b = _lift(self.g, b)
+        return self._emit("mod", [a, b], a.shape, fmod=fmod)
 
     def abs(self, x: Tracer) -> Tracer:
         return self._emit("abs", [x], x.shape)

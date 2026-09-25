@@ -127,6 +127,7 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
             .ne => ew2(g.nodes[0..], node, i, &workspace, .ne),
             .lt => ew2(g.nodes[0..], node, i, &workspace, .lt),
             .pow => ew2(g.nodes[0..], node, i, &workspace, .pow),
+            .mod => ew2(g.nodes[0..], node, i, &workspace, .mod),
             .neg => {
                 const s = node_input(g.nodes[0..], node, &workspace);
                 for (0..node.rows * node.cols) |j| out[j] = -s[j];
@@ -239,6 +240,14 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
                 const r = la.elu(node.rows * node.cols, g.elu_alpha[node.aux], s);
                 for (0..node.rows * node.cols) |j| out[j] = r[j];
             },
+            // .leaky_relu — x if x >= 0 else alpha*x. No linalg kernel (no exp):
+            // alpha is baked into g.leaky_relu_alpha (aux = table index), like
+            // elu's slope. At x == 0 both branches give 0.
+            .leaky_relu => {
+                const s = node_input(g.nodes[0..], node, &workspace);
+                const alpha = g.leaky_relu_alpha[node.aux];
+                for (0..node.rows * node.cols) |j| out[j] = if (s[j] >= 0.0) s[j] else alpha * s[j];
+            },
             // .layernorm — last-axis normalization (the canonical torch
             // nn.LayerNorm / ONNX LayerNormalization form): per row
             // (a - mean) * rstd * scale + bias with the biased variance. The
@@ -277,6 +286,17 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
                 const s = node_input(g.nodes[0..], node, &workspace);
                 const r = la.elementwise_exponential(node.rows * node.cols, s);
                 for (0..node.rows * node.cols) |j| out[j] = r[j];
+            },
+            // .sqrt / .log — elementwise maps of the std builtins, so they need
+            // no linalg kernel (like .pow's std.math.pow). Negative sqrt / log
+            // operands are NaN on both engines (numpy and Zig agree).
+            .sqrt => {
+                const s = node_input(g.nodes[0..], node, &workspace);
+                for (0..node.rows * node.cols) |j| out[j] = @sqrt(s[j]);
+            },
+            .log => {
+                const s = node_input(g.nodes[0..], node, &workspace);
+                for (0..node.rows * node.cols) |j| out[j] = @log(s[j]);
             },
             .sin => {
                 const s = node_input(g.nodes[0..], node, &workspace);
@@ -557,7 +577,7 @@ export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) 
 
 // --- helpers ---------------------------------------------------------------
 
-const BinOp = enum { add, sub, mul, div, ne, lt, pow };
+const BinOp = enum { add, sub, mul, div, ne, lt, pow, mod };
 
 /// Flat index of operand element (i, j) under numpy broadcasting.
 ///
@@ -615,6 +635,10 @@ inline fn ew2(nodes: []const g.Node, node: g.Node, self_idx: usize, buf: *[g.buf
                 // numpy's power semantics (np.power); SMC raises the abs'd
                 // sliding variable to a fractional alpha, so no negative base.
                 .pow => std.math.pow(f64, av, bv),
+                // ONNX Mod: aux bit 0 selects C fmod (sign of the dividend,
+                // @rem) over Python % (sign of the divisor, @mod) — a comptime
+                // branch, since aux is known in the unrolled node loop.
+                .mod => if (node.aux == 1) @rem(av, bv) else @mod(av, bv),
             };
         }
     }
