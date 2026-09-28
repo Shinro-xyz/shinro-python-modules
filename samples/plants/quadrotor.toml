@@ -1,22 +1,54 @@
 # FILE: samples/plants/quadrotor.toml
-# Example config for the Quadrotor plant (placeholder).
+# Example config for the Quadrotor plant.
 #
-# NOTE: The Quadrotor plant is NOT yet implemented — from_config raises
-# NotImplementedError. This config documents the intended parameter surface
-# (12D state [x, y, z, vx, vy, vz, roll, pitch, yaw, p, q, r], 4D control
-# [thrust, tx, ty, tz]) so the TOML contract is in place for the future port.
+# 12-state [x, y, z, roll, pitch, yaw, vx, vy, vz, p, q, r] and 4D control
+# [w1, w2, w3, w4] — the four rotor angular speeds. The rotor placement is a
+# configurable mixer: each rotor sits at body (x, y) (x forward, y left) with a
+# spin sign (+1 CCW seen from above, -1 CW). See src/shinro/plants/quadrotor.py.
 #
-# Usage (once implemented):
-#   plant = _PLANT_REGISTRY["Quadrotor"].from_config(cfg)
-#   plant.step([9.81, 0.0, 0.0, 0.0])
+# With no [[rotors]] table the default "+" layout is used:
+#   1: (+radius, 0), spin +1      3: (-radius, 0), spin +1
+#   2: (0, +radius), spin -1      4: (0, -radius), spin -1
+# giving tau_x = k*l*(w2^2 - w4^2), tau_y = k*l*(w3^2 - w1^2),
+#        tau_z = b*(w2^2 + w4^2 - w1^2 - w3^2).
+#
+# MuJoCo engine mode is not implemented yet; standalone `dynamics`/`step` are.
 type = "Quadrotor"
 name = "quadrotor"
 
 # Physical parameters (SI units).
 mass = 0.5       # Total mass (kg)
-radius = 0.1     # Rotor-to-center distance (m)
-inertia = [0.005, 0.005, 0.01]  # Body-frame moments of inertia (kg*m^2)
-thrust_coeff = 1.0   # Thrust per unit of motor command
-torque_coeff = 0.1   # Torque per unit of motor command
+radius = 0.1     # Rotor-to-center arm length for the default mixer (m)
+inertia = [0.005, 0.005, 0.01]  # Body-frame principal moments [I_xx, I_yy, I_zz] (kg*m^2)
+thrust_coeff = 1.0   # Rotor thrust coefficient k (N*s^2/rad^2)
+torque_coeff = 0.1   # Rotor drag/yaw coefficient b (N*m*s^2/rad^2)
 dt = 0.01        # Integration step (s)
 g = 9.81         # Gravitational acceleration (m/s^2)
+
+# Optional explicit mixer table. Each [[rotors]] entry is one rotor in control
+# order; when present it replaces the default layout entirely (radius is then
+# unused). The example below is the same "+" airframe, just renumbered so the
+# lateral rotors are 1/3 (roll from (1,3)) and the fore/aft rotors are 2/4
+# (pitch from (2,4)):
+# [[rotors]]
+# x = 0.0
+# y = -0.1
+# spin = 1
+# [[rotors]]
+# x = -0.1
+# y = 0.0
+# spin = -1
+# [[rotors]]
+# x = 0.0
+# y = 0.1
+# spin = 1
+# [[rotors]]
+# x = 0.1
+# y = 0.0
+# spin = -1
+
+# Optional state clipping after each step (min/max are 12-element lists; omit
+# either bound to use the per-plant default).
+# [state_bounds]
+# min = [-10, -10, -10, -3.14, -1.57, -3.14, -10, -10, -10, -10, -10, -10]
+# max = [ 10,  10,  10,  3.14,  1.57,  3.14,  10,  10,  10,  10,  10,  10]

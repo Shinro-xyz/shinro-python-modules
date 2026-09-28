@@ -652,10 +652,12 @@ class TestBatchCapableDynamics:
         from shinro.plants.cartpole import CartPole
         from shinro.plants.double_pendulum import DoublePendulum
         from shinro.plants.inverted_pendulum import InvertedPendulum
+        from shinro.plants.quadrotor import Quadrotor
         return {
             "inverted_pendulum": (InvertedPendulum(backend=bk), 2, 1),
             "cartpole": (CartPole(backend=bk), 4, 1),
             "double_pendulum": (DoublePendulum(backend=bk), 4, 2),
+            "quadrotor": (Quadrotor(backend=bk), 12, 4),
         }
 
     def test_single_state_returns_single_derivative(self, bk):
@@ -684,3 +686,240 @@ class TestBatchCapableDynamics:
             scalar = _to_np(plant.dynamics(x, 0.7), bk)
             vector = _to_np(plant.dynamics(x, bk.array([0.7] + [0.0] * (n_u - 1))), bk)
             assert np.allclose(scalar, vector, atol=1e-12), name
+
+
+class TestQuadrotor:
+    """Verify quadrotor: rotor mixing, hover equilibrium, 12-state dynamics, linearization, step, from_config."""
+
+    def _make(self, bk, **kw):
+        from shinro.plants.quadrotor import Quadrotor
+        return Quadrotor(backend=bk, **kw)
+
+    def test_dynamics_shape(self, bk):
+        q = self._make(bk)
+        dx = q.dynamics(bk.zeros(12), bk.array([1.0, 1.0, 1.0, 1.0]))
+        assert _to_np(dx, bk).shape == (12,)
+
+    def test_hover_is_equilibrium(self, bk):
+        """Collective thrust balancing gravity at level attitude is a fixed point."""
+        q = self._make(bk)
+        w = np.sqrt(q.m * q.g / (4.0 * q.k))
+        dx = _to_np(q.dynamics(bk.zeros(12), bk.array([w, w, w, w])), bk)
+        assert np.allclose(dx, 0.0, atol=1e-10)
+
+    def test_collective_thrust_lifts(self, bk):
+        """Level attitude: only vertical acceleration is nonzero, above hover it is up."""
+        q = self._make(bk)
+        w = np.sqrt(q.m * q.g / (4.0 * q.k))
+        dx = _to_np(q.dynamics(bk.zeros(12), bk.array([1.4 * w] * 4)), bk)
+        assert np.allclose(dx[:8], 0.0, atol=1e-10)
+        assert np.allclose(dx[9:], 0.0, atol=1e-10)
+        assert dx[8] > 0.0
+
+    def test_pitch_tilts_thrust_forward(self, bk):
+        """Positive pitch accelerates along world +x (zero roll/yaw)."""
+        q = self._make(bk)
+        w = np.sqrt(q.m * q.g / (4.0 * q.k))
+        x = bk.zeros(12)
+        x[4] = 0.2
+        dx = _to_np(q.dynamics(x, bk.array([w] * 4)), bk)
+        assert dx[6] > 0.0
+        assert abs(dx[7]) < 1e-10
+
+    def test_roll_tilts_thrust_sideways(self, bk):
+        """Positive roll accelerates along world -y (zero pitch/yaw)."""
+        q = self._make(bk)
+        w = np.sqrt(q.m * q.g / (4.0 * q.k))
+        x = bk.zeros(12)
+        x[3] = 0.2
+        dx = _to_np(q.dynamics(x, bk.array([w] * 4)), bk)
+        assert abs(dx[6]) < 1e-10
+        assert dx[7] < 0.0
+
+    def test_euler_rate_map(self, bk):
+        """Euler rates follow eta_dot = T(roll, pitch) @ [p, q, r] (the T helper)."""
+        q = self._make(bk)
+        roll, pitch, p, qrate, rrate = 0.3, 0.2, 0.5, -0.4, 0.7
+        x = bk.zeros(12)
+        x[3], x[4], x[9], x[10], x[11] = roll, pitch, p, qrate, rrate
+        dx = _to_np(q.dynamics(x, bk.array([0.0] * 4)), bk)
+        T = np.asarray(q._angular_transformation_matrix(roll, pitch))
+        assert np.allclose(dx[3:6], T @ np.array([p, qrate, rrate]), atol=1e-10)
+
+    def test_thrust_direction_matches_rotation_matrix(self, bk):
+        """The closed-form thrust components equal R(roll, pitch, yaw) @ [0, 0, F]."""
+        q = self._make(bk)
+        roll, pitch, yaw = 0.3, -0.2, 0.7
+        w = np.sqrt(q.m * q.g / (4.0 * q.k))
+        x = bk.zeros(12)
+        x[3], x[4], x[5] = roll, pitch, yaw
+        dx = _to_np(q.dynamics(x, bk.array([w] * 4)), bk)
+        thrust = q.k * 4.0 * w * w
+        R = np.asarray(q._rotation_matrix(roll, pitch, yaw))
+        expected = (R @ np.array([0.0, 0.0, thrust])) / q.m - np.array([0.0, 0.0, q.g])
+        assert np.allclose(dx[6:9], expected, atol=1e-9)
+
+    def test_rotor_torques(self, bk):
+        """At zero rates, angular accelerations equal the rotor-mixed torques over inertia."""
+        q = self._make(bk)
+        u = bk.array([1.0, 2.0, 3.0, 4.0])
+        dx = _to_np(q.dynamics(bk.zeros(12), u), bk)
+        s1, s2, s3, s4 = 1.0**2, 2.0**2, 3.0**2, 4.0**2
+        assert np.allclose(dx[9], q.k * q.r * (s2 - s4) / q.I[0], atol=1e-12)
+        assert np.allclose(dx[10], q.k * q.r * (s3 - s1) / q.I[1], atol=1e-12)
+        assert np.allclose(dx[11], q.b * (s2 + s4 - s1 - s3) / q.I[2], atol=1e-12)
+
+    def test_gyroscopic_coupling(self, bk):
+        """Zero rotor speeds: the omega x I omega term drives the body rates."""
+        q = self._make(bk)
+        p, qrate, rrate = 0.4, -0.3, 0.6
+        x = bk.zeros(12)
+        x[9], x[10], x[11] = p, qrate, rrate
+        dx = _to_np(q.dynamics(x, bk.array([0.0] * 4)), bk)
+        i_xx, i_yy, i_zz = q.I
+        assert np.allclose(dx[9], qrate * rrate * (i_yy - i_zz) / i_xx, atol=1e-12)
+        assert np.allclose(dx[10], rrate * p * (i_zz - i_xx) / i_yy, atol=1e-12)
+        assert np.allclose(dx[11], p * qrate * (i_xx - i_yy) / i_zz, atol=1e-12)
+
+    def test_position_derivative_is_velocity(self, bk):
+        q = self._make(bk)
+        x = bk.zeros(12)
+        x[6], x[7], x[8] = 1.0, -2.0, 0.5
+        dx = _to_np(q.dynamics(x, bk.array([0.0] * 4)), bk)
+        assert np.allclose(dx[:3], [1.0, -2.0, 0.5], atol=1e-12)
+
+    def test_batch_matches_single(self, bk):
+        rng = np.random.default_rng(3)
+        q = self._make(bk)
+        x_batch = bk.array(rng.normal(size=(6, 12)))
+        u_batch = bk.array(rng.normal(size=(6, 4)))
+        f_batch = _to_np(q.dynamics(x_batch, u_batch), bk)
+        for i in range(6):
+            assert np.allclose(f_batch[i], _to_np(q.dynamics(x_batch[i], u_batch[i]), bk), atol=1e-12)
+
+    def test_get_model_shapes(self, bk):
+        q = self._make(bk)
+        A, B = q.get_model()
+        assert _to_np(A, bk).shape == (12, 12)
+        assert _to_np(B, bk).shape == (12, 4)
+
+    def test_get_model_hover_input_jacobian(self, bk):
+        """At hover: collective thrust drives z, rotor differences drive the body torques."""
+        q = self._make(bk)
+        _, B = q.get_model()
+        B = _to_np(B, bk)
+        w = np.sqrt(q.m * q.g / (4.0 * q.k))
+        assert np.allclose(B[8], (2.0 * q.k * w / q.m) * q.dt, atol=1e-6)
+        assert np.allclose(B[9, [0, 2]], 0.0, atol=1e-6)
+        assert B[9, 1] > 0.0 and B[9, 3] < 0.0
+        assert B[10, 2] > 0.0 and B[10, 0] < 0.0
+        assert B[11, 1] > 0.0 and B[11, 3] > 0.0
+        assert B[11, 0] < 0.0 and B[11, 2] < 0.0
+
+    def test_get_model_default_matches_explicit_hover(self, bk):
+        q = self._make(bk)
+        w = np.sqrt(q.m * q.g / (4.0 * q.k))
+        A_default, B_default = q.get_model()
+        A_explicit, B_explicit = q.get_model(bk.zeros(12), bk.array([w] * 4))
+        assert np.allclose(_to_np(A_default, bk), _to_np(A_explicit, bk), atol=1e-9)
+        assert np.allclose(_to_np(B_default, bk), _to_np(B_explicit, bk), atol=1e-9)
+
+    def test_get_state_returns_copy(self, bk):
+        q = self._make(bk)
+        state = q.get_state()
+        state[0] = 99.0
+        assert _to_np(q.get_state(), bk)[0] != 99.0
+
+    def test_step_integrates_velocity_into_position(self, bk):
+        q = self._make(bk)
+        w = np.sqrt(q.m * q.g / (4.0 * q.k))
+        q.state = bk.zeros(12)
+        q.state[6] = 1.0
+        new = _to_np(q.step(bk.array([w] * 4)), bk)
+        assert new.shape == (12,)
+        assert np.isclose(new[0], 1.0 * q.dt, atol=1e-12)
+        assert np.isclose(new[6], 1.0, atol=1e-12)
+
+    def test_step_engine_not_implemented(self, bk):
+        import pytest
+
+        q = self._make(bk)
+        q._engine = object()  # type: ignore[assignment]  # pretend an engine was attached
+        with pytest.raises(NotImplementedError):
+            q.step(bk.array([1.0, 1.0, 1.0, 1.0]))
+
+    def test_from_config(self, bk):
+        from shinro.plants.quadrotor import Quadrotor
+        config = {
+            "mass": 0.8,
+            "radius": 0.2,
+            "inertia": [0.01, 0.02, 0.03],
+            "thrust_coeff": 1.5,
+            "torque_coeff": 0.2,
+            "dt": 0.02,
+            "g": 9.8,
+        }
+        q = Quadrotor.from_config(config, backend=bk)
+        assert q.m == 0.8
+        assert q.r == 0.2
+        assert q.I == [0.01, 0.02, 0.03]
+        assert q.k == 1.5
+        assert q.b == 0.2
+        assert q.dt == 0.02
+        assert q.g == 9.8
+
+    def test_from_config_state_bounds(self, bk):
+        from shinro.plants.quadrotor import Quadrotor
+        q = Quadrotor.from_config({"state_bounds": {"min": [-1.0] * 12, "max": [1.0] * 12}}, backend=bk)
+        assert q.state_bounds is not None
+        assert _to_np(q.state_bounds[0], bk).shape == (12,)
+
+    def test_default_rotor_table_is_plus(self, bk):
+        """With no ``rotors`` the mixer is the documented ``+`` layout."""
+        q = self._make(bk, radius=0.2)
+        assert q.rotors == ((0.2, 0.0, 1.0), (0.0, 0.2, -1.0), (-0.2, 0.0, 1.0), (0.0, -0.2, -1.0))
+
+    def test_custom_rotor_table_drives_torques(self, bk):
+        """A user mixer table relabels which rotors produce roll vs pitch.
+
+        Here 1/3 sit on +/-y and 2/4 on +/-x, so roll comes from (1,3) and
+        pitch from (2,4) — the opposite pairing to the default table.
+        """
+        r = 0.1
+        q = self._make(bk, rotors=[(0.0, -r, 1.0), (-r, 0.0, -1.0), (0.0, r, 1.0), (r, 0.0, -1.0)])
+        u = bk.array([1.0, 2.0, 3.0, 4.0])
+        dx = _to_np(q.dynamics(bk.zeros(12), u), bk)
+        s1, s2, s3, s4 = 1.0, 4.0, 9.0, 16.0
+        # tau_x = k*sum(y_i w_i^2) -> (1,3); tau_y = -k*sum(x_i w_i^2) -> (2,4)
+        assert np.allclose(dx[9], q.k * r * (s3 - s1) / q.I[0], atol=1e-12)
+        assert np.allclose(dx[10], q.k * r * (s2 - s4) / q.I[1], atol=1e-12)
+        assert np.allclose(dx[11], q.b * (s2 + s4 - s1 - s3) / q.I[2], atol=1e-12)
+
+    def test_from_config_rotors(self, bk):
+        from shinro.plants.quadrotor import Quadrotor
+        config = {
+            "rotors": [
+                {"x": 0.0, "y": -0.1, "spin": 1},
+                {"x": -0.1, "y": 0.0, "spin": -1},
+                {"x": 0.0, "y": 0.1, "spin": 1},
+                {"x": 0.1, "y": 0.0, "spin": -1},
+            ]
+        }
+        q = Quadrotor.from_config(config, backend=bk)
+        assert q.rotors == ((0.0, -0.1, 1.0), (-0.1, 0.0, -1.0), (0.0, 0.1, 1.0), (0.1, 0.0, -1.0))
+
+    def test_invalid_rotor_count_raises(self, bk):
+        import pytest
+
+        from shinro.plants.quadrotor import Quadrotor
+        with pytest.raises(ValueError, match="four rotors"):
+            Quadrotor(rotors=[(0.1, 0.0, 1.0), (0.0, 0.1, -1.0), (-0.1, 0.0, 1.0)], backend=bk)
+
+    def test_invalid_config_raises(self, bk):
+        import pytest
+
+        from shinro.plants.quadrotor import Quadrotor
+        with pytest.raises(ValueError, match="inertia"):
+            Quadrotor(inertia=[0.01, 0.02], backend=bk)
+        with pytest.raises(ValueError, match="mass"):
+            Quadrotor(mass=-1.0, backend=bk)

@@ -55,7 +55,7 @@ linearization set `input_dim` and expose `dynamics(x, u)` (see
 | `InvertedPendulum` | `InvertedPendulum` | `plants/inverted_pendulum.py` | `samples/plants/inverted_pendulum.toml` |
 | `CartPole` | `CartPole` | `plants/cartpole.py` | `samples/plants/cartpole.toml` |
 | `DoublePendulum` | `DoublePendulum` | `plants/double_pendulum.py` | `samples/plants/double_pendulum.toml` |
-| `Quadrotor` | `Quadrotor` | `plants/quadrotor.py` | `samples/plants/quadrotor.toml` (placeholder) |
+| `Quadrotor` | `Quadrotor` | `plants/quadrotor.py` | `samples/plants/quadrotor.toml` |
 
 > `cartpole.toml` and `inverted_pendulum.toml` are parameter-only configs
 > (they carry physical constants like mass/length/gravity and no `type`
