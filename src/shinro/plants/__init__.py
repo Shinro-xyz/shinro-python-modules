@@ -10,7 +10,7 @@ Available plants:
     InvertedPendulum       — 2D inverted pendulum with analytical dynamics
     CartPole               — 4D cart-pole with coupled dynamics
     DoublePendulum         — 4D planar double pendulum with analytical dynamics
-    Quadrotor              — 12D quadrotor (placeholder)
+    Quadrotor              — 12D quadrotor with 4 rotor-speed inputs
 """
 from .armrobot import ArmRobot
 from .cartpole import CartPole
