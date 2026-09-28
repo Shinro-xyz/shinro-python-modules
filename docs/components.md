@@ -82,6 +82,7 @@ implement `generate(...)` and `position_at(t)`.
 | `quintic_segments` | `QuinticPolynomial` / `QuinticPolynomialConfigAdapter` | `trajectories/quintic_polynomial.py` | `samples/trajectories/arm_quintic.toml` |
 | `waypoints` | `WaypointSchedule` | `trajectories/quintic_polynomial.py` | `samples/trajectories/arm_lift.toml`, `base_straight.toml`, `base_triangle.toml` |
 | `phase_list` | `PhaseSchedule` | `trajectories/quintic_polynomial.py` | `samples/trajectories/pick_and_place.toml` |
+| `lissajous` | `Lissajous` | `trajectories/lissajous.py` | `samples/trajectories/lissajous_figure8.toml` |
 
 ## Physics engines
 
