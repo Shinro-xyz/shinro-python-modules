@@ -46,8 +46,10 @@ const SIMD_MIN_K = @max(2 * SIMD_VL, 8);
 pub fn matmul(comptime m: usize, comptime k: usize, comptime n: usize, a: []const f64, b: []const f64) [m * n]f64 {
     var out: [m * n]f64 = undefined;
 
-    //scalar route if simd is unnecessary
-    if (SIMD_VL<1 or n<SIMD_MIN_K) {
+    // Scalar route: no vector unit, or fewer than one full vector of output
+    // columns. Guard is on `n` (the axis we vectorize over) — if n < SIMD_VL
+    // then n_full == 0 and the vector write below would run past a row.
+    if (SIMD_VL <= 1 or n < SIMD_VL) {
         for (0..m) |i| {
             for (0..n) |j| {
                 var s: f64 = 0.0;
@@ -60,32 +62,37 @@ pub fn matmul(comptime m: usize, comptime k: usize, comptime n: usize, a: []cons
         return out;
     }
 
-    // SIMD route
-    const v= @Vector(SIMD_VL, f64); //defining the vector type
-    const n_full= n-(n%SIMD_VL); // how many columns are left post vectorization
+    // SIMD route: row-major A and B, so the contraction is strided but the
+    // OUTPUT column axis `j` is contiguous in B. Sweep `j`: broadcast
+    // a[i][p] and FMA it against the SIMD_VL-wide slice of B. Each lane sums
+    // `p` in the same order as the scalar loop, so no reassociation is
+    // introduced (only the mul+add fusion differs, matching `dot`).
+    const v = @Vector(SIMD_VL, f64); // the vector type
+    const n_full = n - (n % SIMD_VL); // columns covered by whole vectors
 
     for (0..m) |i| {
-        const a_row= a[i*k..][0..k];
-        var j0:usize=0;
+        const a_row = a[i * k ..][0..k];
+        var j0: usize = 0;
 
-        while (j0<n_full) : (j0+=SIMD_VL) {
-            var acc:v=@splat(0.0);
+        while (j0 < n_full) : (j0 += SIMD_VL) {
+            var acc: v = @splat(0.0);
             for (0..k) |p| {
-                const bv:v = b[p*n+j0][0..SIMD_VL].*;
-                acc= @mulAdd(v, @splat(a_row[p]), bv,acc);
+                const bv: v = b[p * n + j0 ..][0..SIMD_VL].*;
+                acc = @mulAdd(v, @splat(a_row[p]), bv, acc);
             }
+            out[i * n + j0 ..][0..SIMD_VL].* = acc;
         }
-        out[i*n+j0..][0..SIMD_VL].*=acc;
 
-        // remaining columns remain scalar
-
+        // Remaining columns stay scalar.
         for (n_full..n) |j| {
-            
+            var s: f64 = 0.0;
+            for (0..k) |p| {
+                s += a_row[p] * b[p * n + j];
+            }
+            out[i * n + j] = s;
         }
-        
-        
     }
-    
+    return out;
 }
 
 /// Matrix-vector multiply: (m, k) @ (k,) -> (m,), flat output.

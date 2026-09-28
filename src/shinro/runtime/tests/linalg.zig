@@ -25,6 +25,30 @@ test "matmul 3x3" {
     try std.testing.expectEqual([_]f64{ 4, 9, 13, 13, 21, 28, 22, 34, 47 }, r);
 }
 
+test "matmul (m,k)@(k,n) with a wide n: SIMD columns + scalar tail" {
+    // n = 19 >= any suggested f64 width here: it exercises the vectorized
+    // column sweep (n_full) AND the `n % SIMD_VL` scalar tail. All operands are
+    // small integers, exact in f64, so the fused (@mulAdd) vector path and the
+    // plain scalar reference must agree bit-for-bit.
+    const m = 3;
+    const k = 5;
+    const n = 19;
+    var a: [m * k]f64 = undefined;
+    var b: [k * n]f64 = undefined;
+    for (&a, 0..) |*x, i| x.* = @floatFromInt(@as(isize, @intCast((i * 7) % 11)) - 5);
+    for (&b, 0..) |*x, i| x.* = @floatFromInt(@as(isize, @intCast((i * 3) % 7)) - 3);
+    var want: [m * n]f64 = undefined;
+    for (0..m) |i| {
+        for (0..n) |j| {
+            var s: f64 = 0.0;
+            for (0..k) |p| s += a[i * k + p] * b[p * n + j];
+            want[i * n + j] = s;
+        }
+    }
+    const got = la.matmul(m, k, n, &a, &b);
+    try std.testing.expectEqualSlices(f64, &want, &got);
+}
+
 test "matvec: (m,k) @ (k,) -> (m,)" {
     const m = [_]f64{ 1, 2, 3, 4, 5, 6 };
     const v = [_]f64{ 2, 1, 3 };
