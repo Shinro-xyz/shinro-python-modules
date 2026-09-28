@@ -15,6 +15,20 @@
 
 const std= @import("std");
 
+
+/// The target's suggested f64 vector width, in lanes: 2 on NEON (the Pi),
+/// 4 on AVX, and 1 (scalar) on a target with no vector suggestion. Computed
+/// once at comptime from the target; every use is the same value.
+const SIMD_VL = std.simd.suggestVectorLength(f64) orelse 1;
+
+/// Contraction length below which the vector dot product is not worth its
+/// horizontal reduce. The floor of 8, independent of the target's vector
+/// width, keeps every small/classical-sized contraction on the exact scalar
+/// order on *every* target — so a result never depends on the build target's
+/// SIMD width — while every policy-sized contraction still takes the vector
+/// path.
+const SIMD_MIN_K = @max(2 * SIMD_VL, 8);
+
 /// Matrix multiply: (m, k) @ (k, n) -> (m, n), row-major, flat output.
 ///
 /// Mirrors numpy's 2D @ 2D convention. All dimensions are comptime so the
@@ -31,16 +45,47 @@ const std= @import("std");
 ///     The flat `m*n` row-major result.
 pub fn matmul(comptime m: usize, comptime k: usize, comptime n: usize, a: []const f64, b: []const f64) [m * n]f64 {
     var out: [m * n]f64 = undefined;
-    for (0..m) |i| {
-        for (0..n) |j| {
-            var s: f64 = 0.0;
-            for (0..k) |p| {
-                s += a[i * k + p] * b[p * n + j];
+
+    //scalar route if simd is unnecessary
+    if (SIMD_VL<1 or n<SIMD_MIN_K) {
+        for (0..m) |i| {
+            for (0..n) |j| {
+                var s: f64 = 0.0;
+                for (0..k) |p| {
+                    s += a[i * k + p] * b[p * n + j];
+                }
+                out[i * n + j] = s;
             }
-            out[i * n + j] = s;
         }
+        return out;
     }
-    return out;
+
+    // SIMD route
+    const v= @Vector(SIMD_VL, f64); //defining the vector type
+    const n_full= n-(n%SIMD_VL); // how many columns are left post vectorization
+
+    for (0..m) |i| {
+        const a_row= a[i*k..][0..k];
+        var j0:usize=0;
+
+        while (j0<n_full) : (j0+=SIMD_VL) {
+            var acc:v=@splat(0.0);
+            for (0..k) |p| {
+                const bv:v = b[p*n+j0][0..SIMD_VL].*;
+                acc= @mulAdd(v, @splat(a_row[p]), bv,acc);
+            }
+        }
+        out[i*n+j0..][0..SIMD_VL].*=acc;
+
+        // remaining columns remain scalar
+
+        for (n_full..n) |j| {
+            
+        }
+        
+        
+    }
+    
 }
 
 /// Matrix-vector multiply: (m, k) @ (k,) -> (m,), flat output.
@@ -301,18 +346,6 @@ pub fn onehot (comptime depth: usize, idx:usize) [depth]f64{
      return out;
  }
 
-/// The target's suggested f64 vector width, in lanes: 2 on NEON (the Pi),
-/// 4 on AVX, and 1 (scalar) on a target with no vector suggestion. Computed
-/// once at comptime from the target; every use is the same value.
-const SIMD_VL = std.simd.suggestVectorLength(f64) orelse 1;
-
-/// Contraction length below which the vector dot product is not worth its
-/// horizontal reduce. The floor of 8, independent of the target's vector
-/// width, keeps every small/classical-sized contraction on the exact scalar
-/// order on *every* target — so a result never depends on the build target's
-/// SIMD width — while every policy-sized contraction still takes the vector
-/// path.
-const SIMD_MIN_K = @max(2 * SIMD_VL, 8);
 
 /// Lane-parallel dot product of two contiguous length-`len` vectors.
 ///
