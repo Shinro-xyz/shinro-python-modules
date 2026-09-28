@@ -82,13 +82,14 @@ pub fn build(b: *std.Build) void {
     });
 
     // base.so — the C-ABI graph VM the Python host dlopen-s via ctypes.
-    // lower.zig is the module root; @import("linalg.zig") and @import("qp.zig")
-    // resolve next to it, while the generated graph and the bake's n_vars
-    // arrive as anonymous imports selected by -Dgraph / -Dsolver_dir. The
-    // `.solve_qp` op compiles the codegen static solver into the library,
-    // but only when the lowered graph contains that op.
+    // entry.zig is the module root: it binds the generated graph (selected by
+    // -Dgraph) and the bake (selected by -Dsolver_dir) into the VM's context
+    // and exports shinro_step. lower.zig itself is graph-agnostic; the VM is
+    // instantiated through entry.zig's Ctx. The `.solve_qp` op compiles the
+    // codegen static solver into the library, but only when the lowered graph
+    // contains that op.
     const lib_mod = b.createModule(.{
-        .root_source_file = b.path("lower.zig"),
+        .root_source_file = b.path("entry.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
@@ -158,6 +159,27 @@ pub fn build(b: *std.Build) void {
     const tests = b.addTest(.{ .root_module = test_mod });
     const run_tests = b.addRunArtifact(tests);
 
+    // Zig-native C-ABI test of the VM: the graph-agnostic lower.zig exposed to
+    // tests/lower.zig as the `lower` module, plus the small committed fixture
+    // graph (tests/lower_fixture_graph.zig) as its `graph_data`. Because the VM
+    // now takes the graph via `Vm(Ctx)`, the test binds the fixture itself —
+    // nothing here is the deployed graph_data.zig, so no .so/ctypes/Python and
+    // no OSQP bake are needed.
+    const vm_mod = b.createModule(.{
+        .root_source_file = b.path("lower.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const lower_driver_mod = b.createModule(.{
+        .root_source_file = b.path("tests/lower.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lower", .module = vm_mod }},
+    });
+    lower_driver_mod.addAnonymousImport("graph_data", .{ .root_source_file = b.path("tests/lower_fixture_graph.zig") });
+    const lower_tests = b.addTest(.{ .root_module = lower_driver_mod });
+    const run_lower_tests = b.addRunArtifact(lower_tests);
+
     // OSQP codegen static solver test — compiles the generated C
     // (runtime/codegen/emosqp/) into the test and drives the static solver.
     // This remains in the test step even when the deployment graph is
@@ -178,6 +200,7 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run Zig unit tests");
     test_step.dependOn(&run_tests.step);
     test_step.dependOn(&run_emosqp_tests.step);
+    test_step.dependOn(&run_lower_tests.step);
 
     // Build manifest (audit trail): a deterministic report of what this .so
     // contains, written next to the artifact after every build, plus a

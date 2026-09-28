@@ -12,14 +12,17 @@ pipeline narrative and the XLA-fidelity model.
 
 | File | Role |
 |------|------|
-| `build.zig` | Build script. Produces `libbase.so` from `lower.zig` + `graph_data.zig`; it links the generated OSQP codegen solver **only when the graph contains `.solve_qp`**. |
+| `build.zig` | Build script. Produces `libbase.so` from `entry.zig` (+ the graph-agnostic `lower.zig`); it links the generated OSQP codegen solver **only when the graph contains `.solve_qp`**. |
 | `build.zig.zon` | Package/dependency manifest for the Zig build. |
-| `lower.zig` | The comptime VM. Exports the `shinro_step` C-ABI function: one `inline for` over the node table, dispatching each node's op with `rows`/`cols` as comptime constants. |
+| `entry.zig` | The deployment entry point: the **only** file that imports `graph_data` (and, for QP graphs, `solver_meta`/`qp.zig`), binds them into the VM's context, and exports the `shinro_step` C-ABI symbol. |
+| `lower.zig` | The comptime VM, graph-agnostic. `pub fn Vm(Ctx)` instantiates it over an injected graph context; its `step` runs one tick by one `inline for` over the node table, dispatching each node's op with `rows`/`cols` as comptime constants. |
 | `linalg.zig` | Shared linear-algebra kernels (matmul, elementwise ops, `inv`, ...) used by the VM. |
 | `qp.zig` | The `.solve_qp` op wrapper: drives the generated static OSQP solver (update q → solve → copy solution out). |
 | `graph_data.zig` | **Generated** — the graph as Zig constants (op enum, node table, offsets, `const_blob`, `has_solve_qp`). Produced by `scripts/gen_base.py` / `shinro.codegen.lower_zig`. Not hand-edited. |
 | `codegen/emosqp/` | **Generated** — the statically-allocated OSQP solver for the base MPC problem (no malloc, no libosqp). Emitted by `scripts/gen_emosqp_test.py`. |
 | `tests/linalg.zig` | Zig unit tests for the linear-algebra kernels. |
+| `tests/lower.zig` | Zig-native C-ABI tests for `lower.zig`: drives `shinro_step` in-process, no `.so`/ctypes/Python. |
+| `tests/lower_fixture_graph.zig` | Hand-authored fixture `graph_data.zig` (tiny node table) compiled into the `tests/lower.zig` test module. |
 | `tests/emosqp.zig` | Handwritten Zig test driving the codegen static solver, compared against the Python oracle. |
 | `tests/emosqp_data.zig` | **Generated** — the oracle test vectors (sample `q` + expected solution, hex floats). Emitted by `scripts/gen_emosqp_test.py`. |
 
@@ -71,6 +74,14 @@ against the Python interpreter lives in `tests/test_zig_lowering.py` (the
 `.solve_qp` op is exercised by the MPC graph fixture, which traces
 `MPC_LTI` and compares `shinro_step` against `interpret()`).
 
+`zig build test` also runs `tests/lower.zig`, which instantiates the VM with
+`lower.Vm(Ctx).step(...)` and drives the C-ABI entry path **natively** —
+directly in the test process, compiled against the committed fixture graph
+`tests/lower_fixture_graph.zig` (bound by `build.zig` as the test module's
+`graph_data` anonymous import). It needs no shared-library build, no ctypes,
+and no Python, so a VM/ABI regression surfaces in the Zig test step alone. The
+fixture is solver-free, so it pulls in no OSQP bake.
+
 ## Generated artifacts — shared paths, last build wins
 
 Three paths feed `zig build`, and all of them are **generated, single-instance,
@@ -96,7 +107,7 @@ zig build --build-file src/shinro/runtime/build.zig --prefix build/ \
     -Dgraph=<path-to-graph_data.zig> -Dsolver_dir=<path-to-bake-dir>
 ```
 
-- `-Dgraph` — the generated graph (default `graph_data.zig`). `lower.zig`
+- `-Dgraph` — the generated graph (default `graph_data.zig`). `entry.zig`
   imports it as an anonymous module, so a build can consume a graph from any
   path (e.g. a pytest tmp dir).
 - `-Dsolver_dir` — the baked OSQP codegen solver tree (default

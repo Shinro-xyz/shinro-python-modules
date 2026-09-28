@@ -46,11 +46,11 @@ The pipeline lives in `src/shinro/codegen/`; the Zig VM lives in `src/shinro/run
 3. **Interpret** (`interpret`). Replay the graph on real numpy inputs as a
    correctness oracle. If the interpreter's output matches a live
    `NumpyBackend` run to float-exactness, the tracer is sound.
-4. **Lower** (`lower_zig`). Walk the graph and emit Zig — a `src/shinro/runtime/`
-   module exposing a `shinro_step` C-ABI function with baked constants,
-   compiled to a `.so`. The generated graph is written to
-   `src/shinro/runtime/graph_data.zig`; the comptime VM that executes it is
-   `src/shinro/runtime/lower.zig`.
+4. **Lower** (`lower_zig`). Walk the graph and emit Zig — the generated graph is
+   written to `src/shinro/runtime/graph_data.zig`; the comptime VM that executes
+   it is `src/shinro/runtime/lower.zig` (graph-agnostic, instantiated via
+   `Vm(Ctx)`), and `src/shinro/runtime/entry.zig` binds that graph and exposes
+   the `shinro_step` C-ABI function, compiled to a `.so`.
 
 ## Module map
 
@@ -65,7 +65,7 @@ The pipeline lives in `src/shinro/codegen/`; the Zig VM lives in `src/shinro/run
 | `codegen/compose.py` | `compose` — merge per-component graphs into one closed-loop step graph, auto-inserting `reshape`/`clip`. |
 | `codegen/lower_zig.py` | Emit `src/shinro/runtime/graph_data.zig` (the graph as Zig constants) from a composed graph. |
 | `demos/demo_codegen.py` | Runnable demo: traces KF+LQR for the base and cartpole plants, composes, and verifies each stage against a live numpy loop. |
-| `src/shinro/runtime/` (Zig) | `build.zig` (build script), `lower.zig` (comptime-unrolled VM), `linalg.zig` (shared linear-algebra kernels), `graph_data.zig` (generated graph). |
+| `src/shinro/runtime/` (Zig) | `build.zig` (build script), `entry.zig` (deployment entry: binds the graph and exports `shinro_step`), `lower.zig` (graph-agnostic comptime-unrolled VM), `linalg.zig` (shared linear-algebra kernels), `graph_data.zig` (generated graph). |
 | `codegen/recipes.py` | The graph-recipe registry (`@register_graph` / `build_recipe`) + the shipped recipes (`closed_loop_tracking`, `policy_only`) and the two shipped default graphs (`build_base_graph` / `build_mpc_composed_graph`). |
 | `scripts/gen_base.py` / `scripts/gen_mpc.py` | Shims over `codegen/recipes.py` (`make zig-gen` / `make zig-mpc-gen` run them). |
 | `codegen/component_cli.py` | The "does my component trace?" gate (`shinro check` / `shinro trace`, plus the kept `scripts/trace_component.py` shim): inventory of registered components, inferred trace contract (`--list`), and trace + interpret-vs-live oracle check (bit-exact) for any config TOML. |
