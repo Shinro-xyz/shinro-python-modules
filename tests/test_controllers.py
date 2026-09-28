@@ -1,3 +1,5 @@
+from typing import Any
+
 import numpy as np
 import pytest
 
@@ -285,9 +287,11 @@ class TestPID:
         )
         target = bk.array([10.0])
         x = bk.array([0.0])
+        u = None
         for _ in range(200):
             u = pid.compute(x, target)
             x = x + 0.01 * u
+        assert u is not None
         assert np.allclose(_to_np(u, bk)[0], 0.5, atol=1e-3)
 
     def test_pid_reset(self, bk):
@@ -773,7 +777,7 @@ class TestMPPI:
         """Build a minimal MPPI controller with identity dynamics and quadratic cost."""
         from shinro.controllers.mppi import MPPIController
 
-        params = dict(
+        params: dict[str, Any] = dict(
             dynamics_fn=lambda x, u, dt: bk.copy(x),
             cost_fn=lambda x, u: bk.sum(u**2, axis=1),
             num_samples=8,
@@ -839,6 +843,7 @@ class TestMPPI:
         N, K = 8, 1
         ctrl = self._ctrl(bk, num_samples=N, horizon=K, noise_sigma=[1.0], seed=123)
         u = ctrl.compute(bk.array([0.0, 0.0]))
+        assert ctrl._last_epsilon is not None
         eps = ctrl._last_epsilon[:, 0, 0]
         costs = eps**2
         beta = costs.min()
@@ -865,6 +870,8 @@ class TestMPPI:
         )
         ctrl.u = np.array([[2.0]])
         ctrl.compute(bk.array([0.0, 0.0]))
+        assert ctrl._last_epsilon is not None
+        assert ctrl._last_costs is not None
         eps = ctrl._last_epsilon[:, 0, 0]
         expected = ctrl.lam * (2.0 / (0.5**2)) * eps
         assert np.allclose(ctrl._last_costs, expected, atol=1e-10)
@@ -875,6 +882,8 @@ class TestMPPI:
         ctrl.u = np.arange(3, dtype=np.float64).reshape(3, 1) * 0.5
         u_before = ctrl.u.copy()
         u0 = ctrl.compute(bk.array([0.0, 0.0]))
+        assert ctrl._last_epsilon is not None
+        assert ctrl._last_costs is not None
         eps = ctrl._last_epsilon
         costs = ctrl._last_costs
         beta = costs.min()
@@ -891,6 +900,8 @@ class TestMPPI:
         ctrl.u = np.arange(K, dtype=np.float64).reshape(K, 1) * 0.5
         u_before = ctrl.u.copy()
         ctrl.compute(bk.array([0.0, 0.0]))
+        assert ctrl._last_epsilon is not None
+        assert ctrl._last_costs is not None
         eps = ctrl._last_epsilon
         costs = ctrl._last_costs
         beta = costs.min()
@@ -1128,6 +1139,181 @@ class TestMPPI:
         # the batched dynamics runs a torch matmul: verify a known rollout
         x = bk.array([[1.0, 2.0, 0.0], [0.0, 0.0, 0.0]])
         u_b = bk.zeros((2, 3))
+        assert ctrl.dynamics_fn is not None
         x_next = ctrl.dynamics_fn(x, u_b, 0.02)
         assert isinstance(x_next, bk.torch.Tensor)
         assert _to_np(x_next, bk).shape == (2, 3)
+
+
+class TestQuadrotorControllers:
+    """Pair the Quadrotor plant with the controllers that consume a plant model.
+
+    ``LQR``/``MPC`` take the discrete model from ``Quadrotor.get_model()``;
+    ``MPPI``/``SMC`` take the continuous dynamics from ``Quadrotor.dynamics``.
+    ``PIDController`` is a per-channel law (state-dim output), so it is
+    exercised on the four actuated axes ``[z, roll, pitch, yaw]`` — the standard
+    cascaded use — rather than as a 12 -> 4 map. The policy adapters
+    (``onnx_rl``, ``lerobot``) are excluded: their dimensions come from a model
+    file, not the plant.
+    """
+
+    def _plant(self, bk):
+        from shinro.plants.quadrotor import Quadrotor
+
+        return Quadrotor(backend=bk)
+
+    def _hover_speed(self, plant) -> float:
+        return float((plant.m * plant.g / (4.0 * plant.k)) ** 0.5)
+
+    def _perturbed(self, bk):
+        """A small off-hover state: position, attitude, velocities, rates."""
+        x = np.array([0.5, -0.3, 0.4, 0.1, -0.08, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        return bk.array(x)
+
+    def _lqr(self, bk, plant):
+        from shinro.controllers.lqr import LQR
+
+        A, B = plant.get_model()
+        Q = bk.from_numpy(np.diag([10.0, 10.0, 50.0, 20.0, 20.0, 10.0, 1.0, 1.0, 10.0, 1.0, 1.0, 1.0]))
+        R = 0.1 * bk.eye(4)
+        return LQR(Q, R, A, B, backend=bk)
+
+    def test_lqr_stabilizes_quadrotor_hover_model(self, bk):
+        """The hover linearization is controllable and the LQR gain places every mode inside the unit circle."""
+        plant = self._plant(bk)
+        lqr = self._lqr(bk, plant)
+        A, B = plant.get_model()
+        A_cl = _to_np(A, bk) - _to_np(B, bk) @ _to_np(lqr.K, bk)
+        eigs = np.linalg.eigvals(A_cl)
+        assert np.all(np.abs(eigs) < 1.0)
+        u = lqr.compute(self._perturbed(bk))
+        assert _to_np(u, bk).shape == (4,)
+
+    def test_lqr_drives_quadrotor_state_toward_hover(self, bk):
+        """Closed-loop simulation of the hover model contracts the state norm to the origin."""
+        plant = self._plant(bk)
+        lqr = self._lqr(bk, plant)
+        A, B = plant.get_model()
+        x = self._perturbed(bk)
+        x0_norm = float(np.linalg.norm(_to_np(x, bk)))
+        for _ in range(400):
+            x = A @ x + B @ lqr.compute(x)
+        assert float(np.linalg.norm(_to_np(x, bk))) < 1e-2 * x0_norm
+
+    def test_mpc_lti_compute_shape_and_bounds(self, bk):
+        """MPC over the quadrotor model returns four bounded rotor commands."""
+        from shinro.controllers.mpc_lti import MPC_LTI
+
+        plant = self._plant(bk)
+        A, B = plant.get_model()
+        mpc = MPC_LTI(
+            horizon=5,
+            control_cost_matrix=bk.eye(4),
+            state_cost_matrix=bk.eye(12),
+            A_dynamics=A,
+            B_dynamics=B,
+            terminal_cost=5.0 * bk.eye(12),
+            backend=bk,
+        )
+        bound = 5.0
+        mpc.constraints(bk.eye(4), bound * bk.array(np.ones(4)), -bound * bk.array(np.ones(4)))
+        u = _to_np(mpc.compute(self._perturbed(bk)), bk)
+        assert u.shape == (4,)
+        assert np.all(np.isfinite(u))
+        assert np.all(np.abs(u) <= bound + 1e-3)
+
+    def test_mpc_lti_deltau_compute_shape(self, bk):
+        """Delta-u MPC augments the 12-state quadrotor model and still returns four commands."""
+        from shinro.controllers.mpc_lti import MPC_LTI_DeltaU
+
+        plant = self._plant(bk)
+        A, B = plant.get_model()
+        mpc = MPC_LTI_DeltaU(
+            delta_u_penalty=0.1 * bk.eye(4),
+            horizon=5,
+            control_cost_matrix=bk.eye(4),
+            state_cost_matrix=bk.eye(12),
+            A_dynamics=A,
+            B_dynamics=B,
+            terminal_cost=5.0 * bk.eye(12),
+            backend=bk,
+        )
+        mpc.constraints(bk.eye(4), 5.0 * bk.array(np.ones(4)), -5.0 * bk.array(np.ones(4)))
+        u = _to_np(mpc.compute(self._perturbed(bk), u_prev=bk.zeros(4)), bk)
+        assert u.shape == (4,)
+        assert np.all(np.isfinite(u))
+
+    def test_mppi_attach_quadrotor(self, bk):
+        """MPPI attaches the quadrotor's batched dynamics and returns four rotor commands."""
+        from shinro.controllers.mppi import MPPIController
+
+        plant = self._plant(bk)
+        ctrl = MPPIController(
+            num_samples=16,
+            temperature=1.0,
+            dt=plant.dt,
+            horizon=5,
+            noise_sigma=[0.5, 0.5, 0.5, 0.5],
+            seed=1,
+            backend=bk,
+        )
+        ctrl.attach_plant(plant, Q=bk.array(np.ones(12)), R=bk.array(0.1 * np.ones(4)))
+        u = _to_np(ctrl.compute(self._perturbed(bk)), bk)
+        assert u.shape == (4,)
+        assert np.all(np.isfinite(u))
+
+    def test_mppi_quadrotor_control_dimension_mismatch(self, bk):
+        """Attaching the quadrotor with the wrong noise dimension is rejected."""
+        from shinro.controllers.mppi import MPPIController
+
+        plant = self._plant(bk)
+        ctrl = MPPIController(
+            num_samples=8, temperature=1.0, dt=plant.dt, horizon=4, noise_sigma=[0.5, 0.5], seed=1, backend=bk
+        )
+        with pytest.raises(ValueError, match="control dimension"):
+            ctrl.attach_plant(plant)
+
+    def test_smc_mimo_on_quadrotor(self, bk):
+        """A 12-state Hurwitz surface yields a min-norm 4-rotor command that meets the reaching law."""
+        from shinro.controllers.smc import SlidingModeController
+        from shinro.utils.linearization import linearize_plant
+
+        plant = self._plant(bk)
+        c = np.poly(-np.arange(1.0, 12.0))[::-1].copy()  # roots -1..-11 -> Hurwitz (copy: torch rejects negative strides)
+        smc = SlidingModeController(c=c, k1=1.0, k2=0.5, phi=0.1, backend=bk)
+
+        x0 = self._perturbed(bk)
+        u0 = bk.array([self._hover_speed(plant)] * 4)
+        f_x = plant.dynamics(x0, u0)
+        _, g_x = linearize_plant(plant, x0, u0)
+        u = smc.compute(x0, f_x, g_x)
+        u_np = _to_np(u, bk)
+        assert u_np.shape == (4,)
+        assert np.all(np.isfinite(u_np))
+
+        # s_dot = c^T f + c^T g u must equal the commanded reaching law.
+        c_np = _to_np(smc.c, bk)
+        s = float(c_np @ _to_np(x0, bk))
+        cf = float(c_np @ _to_np(f_x, bk))
+        cg = c_np @ _to_np(g_x, bk)
+        smooth_s = np.clip(s / smc.phi, -1.0, 1.0)
+        want = -smc.k1 * abs(s) ** smc.alpha * smooth_s - smc.k2 * s
+        assert np.allclose(cf + cg @ u_np, want, atol=1e-6)
+
+    def test_pid_per_channel_attitude_altitude(self, bk):
+        """PID runs as four cascaded channels over the actuated axes [z, roll, pitch, yaw]."""
+        from shinro.controllers.pid import PIDController
+
+        plant = self._plant(bk)
+        pid = PIDController(
+            kp=bk.array(2.0 * np.ones(4)),
+            ki=bk.array(0.5 * np.ones(4)),
+            kd=bk.array(0.1 * np.ones(4)),
+            dt=plant.dt,
+            backend=bk,
+        )
+        current = bk.array([0.4, 0.1, -0.08, 0.05])  # z, roll, pitch, yaw
+        target = bk.zeros(4)
+        u = _to_np(pid.compute(current, target), bk)
+        assert u.shape == (4,)
+        assert np.all(np.isfinite(u))
