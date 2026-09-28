@@ -202,6 +202,41 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_emosqp_tests.step);
     test_step.dependOn(&run_lower_tests.step);
 
+    // Frozen multi-graph oracle: one instance of tests/lower_graph.zig per
+    // fixture, each instantiating the graph-agnostic VM over that fixture's
+    // graph + expected vectors. Generated once by scripts/gen_lower_fixtures.py
+    // and committed under tests/graphs/; adding a graph type is one table row.
+    const graph_fixtures = .{
+        .{ .name = "kf_lqr", .graph = "tests/graphs/kf_lqr_graph.zig", .data = "tests/graphs/kf_lqr_data.zig" },
+        .{ .name = "toy_lstm", .graph = "tests/graphs/toy_lstm_graph.zig", .data = "tests/graphs/toy_lstm_data.zig" },
+        .{ .name = "go2", .graph = "tests/graphs/go2_graph.zig", .data = "tests/graphs/go2_data.zig" },
+        .{ .name = "drone_gru", .graph = "tests/graphs/drone_gru_graph.zig", .data = "tests/graphs/drone_gru_data.zig" },
+    };
+    inline for (graph_fixtures) |spec| {
+        const graph_mod = b.createModule(.{
+            .root_source_file = b.path(spec.graph),
+            .target = target,
+            .optimize = optimize,
+        });
+        const vectors_mod = b.createModule(.{
+            .root_source_file = b.path(spec.data),
+            .target = target,
+            .optimize = optimize,
+        });
+        const fixture_driver = b.createModule(.{
+            .root_source_file = b.path("tests/lower_graph.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "lower", .module = vm_mod },
+                .{ .name = "graph", .module = graph_mod },
+                .{ .name = "vectors", .module = vectors_mod },
+            },
+        });
+        const fixture_test = b.addTest(.{ .root_module = fixture_driver });
+        test_step.dependOn(&b.addRunArtifact(fixture_test).step);
+    }
+
     // Build manifest (audit trail): a deterministic report of what this .so
     // contains, written next to the artifact after every build, plus a
     // timestamped archive copy under <prefix>/manifests/ so teams can browse

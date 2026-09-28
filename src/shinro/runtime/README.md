@@ -23,6 +23,8 @@ pipeline narrative and the XLA-fidelity model.
 | `tests/linalg.zig` | Zig unit tests for the linear-algebra kernels. |
 | `tests/lower.zig` | Zig-native C-ABI tests for `lower.zig`: drives `shinro_step` in-process, no `.so`/ctypes/Python. |
 | `tests/lower_fixture_graph.zig` | Hand-authored fixture `graph_data.zig` (tiny node table) compiled into the `tests/lower.zig` test module. |
+| `tests/lower_graph.zig` | Shared frozen-fixture oracle: one copy compiled per fixture, instantiating `Vm(Ctx)` over that fixture's graph. |
+| `tests/graphs/` | **Generated** — the frozen fixtures: `<name>_graph.zig` + `<name>_weights.bin` (raw f32, `@embedFile`d) + `<name>_data.zig` (expected vectors). Emitted by `scripts/gen_lower_fixtures.py` (generate-once). |
 | `tests/emosqp.zig` | Handwritten Zig test driving the codegen static solver, compared against the Python oracle. |
 | `tests/emosqp_data.zig` | **Generated** — the oracle test vectors (sample `q` + expected solution, hex floats). Emitted by `scripts/gen_emosqp_test.py`. |
 
@@ -81,6 +83,18 @@ directly in the test process, compiled against the committed fixture graph
 `graph_data` anonymous import). It needs no shared-library build, no ctypes,
 and no Python, so a VM/ABI regression surfaces in the Zig test step alone. The
 fixture is solver-free, so it pulls in no OSQP bake.
+
+`zig build test` additionally compiles `tests/lower_graph.zig` **once per frozen
+fixture** (KF+LQR, a toy LSTM, the real Go2 MLP, and the real eco-drone GRU),
+each instantiating `lower.Vm(Ctx)` over that fixture's graph and checking its
+outputs and recurrent state against `interpret()` on the recorded vectors. The
+fixtures live under `tests/graphs/`: the graph is Zig constants, but the f32
+weight blob is a raw little-endian `.bin` embedded at compile time
+(`@embedFile` + `bytesAsSlice`) — ~5x smaller than hex literals (the Go2 MLP is
+~0.75 MB instead of ~4 MB). Regenerate them *deliberately* with
+`python3 scripts/gen_lower_fixtures.py` (needs the sibling `shinro-bench`
+checkout for the real policies); this is a generate-once step, deliberately not
+wired into `make zig-gen` or CI, so the fixtures never churn.
 
 ## Generated artifacts — shared paths, last build wins
 
