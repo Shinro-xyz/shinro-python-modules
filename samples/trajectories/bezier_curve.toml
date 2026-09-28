@@ -1,0 +1,15 @@
+type = "bezier"
+dt = 0.02
+duration = 6.0
+
+# Ordered control points — the ends are interpolated exactly and the degree is
+# len(control_points) - 1 (four points -> a cubic).
+control_points = [
+    [0.0, 0.0, 0.0],
+    [0.4, 0.6, 0.0],
+    [0.8, -0.6, 0.0],
+    [1.2, 0.0, 0.0],
+]
+
+# Duplicate an end point (here [0,0,0] twice at the start) to pin the boundary
+# velocity to zero for a rest-to-rest move.

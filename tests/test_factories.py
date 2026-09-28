@@ -200,6 +200,13 @@ class TestTrajectoryFactory:
         schedule = factory.create(backend=bk)
         assert _to_np(schedule, bk).shape[1] == 3
 
+    def test_create_bezier(self, bk):
+        """TrajectoryFactory creates a Bezier schedule from the shipped sample."""
+        from shinro.factories.trajectory_factory import TrajectoryFactory
+        factory = TrajectoryFactory("samples/trajectories/bezier_curve.toml")
+        schedule = factory.create(backend=bk)
+        assert _to_np(schedule, bk).shape[1] == 3
+
     def test_create_unknown_type(self, tmp_path):
         """TrajectoryFactory raises KeyError for an unknown trajectory type."""
         from shinro.factories.trajectory_factory import TrajectoryFactory
