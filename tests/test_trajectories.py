@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 
 def _to_np(x, bk):
@@ -285,3 +286,131 @@ class TestQuinticPolynomial:
         traj.generate(p0, pf, T)
         pos, _, _ = traj.position_at(0.5)
         assert _to_np(pos, bk).shape == (3,)
+
+
+class TestLissajous:
+    """Verify Lissajous: endpoints, zero boundary velocity, R orientation, derivatives, config."""
+
+    @staticmethod
+    def _rot_z(theta):
+        """Rotation matrix about z (world-from-local)."""
+        c, s = np.cos(theta), np.sin(theta)
+        return [[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]]
+
+    def _make(self, bk, start, end, T, k, R=None):
+        from shinro.trajectories.lissajous import Lissajous
+        traj = Lissajous(k, R=R, backend=bk)
+        traj.generate(bk.array(start), bk.array(end), T)
+        return traj
+
+    def test_position_endpoints(self, bk):
+        """Position at t=0 matches start and at t=T matches end."""
+        traj = self._make(bk, [1.0, 0.0, 0.0], [-1.0, 0.0, 0.0], 2.0, [1.0, 1.0, 0.0])
+        pos0, _, _ = traj.position_at(0.0)
+        posT, _, _ = traj.position_at(2.0)
+        assert np.allclose(_to_np(pos0, bk), [1.0, 0.0, 0.0])
+        assert np.allclose(_to_np(posT, bk), [-1.0, 0.0, 0.0])
+
+    def test_zero_boundary_velocity(self, bk):
+        """Odd harmonics make the velocity zero at both ends."""
+        traj = self._make(bk, [0.5, 0.5, 0.0], [-0.5, -0.5, 0.0], 2.0, [1.0, 2.0, 0.0])
+        _, vel0, _ = traj.position_at(0.0)
+        _, velT, _ = traj.position_at(2.0)
+        assert np.allclose(_to_np(vel0, bk), 0.0, atol=1e-12)
+        assert np.allclose(_to_np(velT, bk), 0.0, atol=1e-12)
+
+    def test_frequencies(self, bk):
+        """Per-axis frequencies are (2k_i + 1)*pi/T."""
+        k = [1.0, 2.0, 0.0]
+        T = 2.0
+        traj = self._make(bk, [0.5, 0.5, 0.0], [-0.5, -0.5, 0.0], T, k)
+        expected = (2 * np.array(k) + 1) * np.pi / T
+        assert np.allclose(_to_np(traj.omegas, bk), expected)
+
+    def test_rotated_R_hits_endpoints(self, bk):
+        """A non-identity rotation still interpolates start and end exactly."""
+        k = [1.0, 2.0, 0.0]
+        traj = self._make(
+            bk, [0.5, 0.5, 0.0], [-0.5, -0.5, 0.0], 2.0, k, R=self._rot_z(np.pi / 4)
+        )
+        pos0, _, _ = traj.position_at(0.0)
+        posT, _, _ = traj.position_at(2.0)
+        assert np.allclose(_to_np(pos0, bk), [0.5, 0.5, 0.0])
+        assert np.allclose(_to_np(posT, bk), [-0.5, -0.5, 0.0])
+
+    def test_R_orients_the_figure(self, bk):
+        """R changes the interior path (mixing per-axis frequencies) while endpoints hold."""
+        k = [1.0, 2.0, 0.0]
+        start, end = [0.5, 0.5, 0.0], [-0.5, -0.5, 0.0]
+        identity = self._make(bk, start, end, 2.0, k)
+        rotated = self._make(bk, start, end, 2.0, k, R=self._rot_z(np.pi / 4))
+        assert not np.allclose(
+            _to_np(identity.position_at(0.3)[0], bk),
+            _to_np(rotated.position_at(0.3)[0], bk),
+        )
+
+    def test_derivative_of_position_is_velocity(self, bk):
+        """The returned velocity is the analytic derivative of the position."""
+        traj = self._make(
+            bk, [0.5, 0.5, 0.0], [-0.5, -0.5, 0.0], 2.0, [1.0, 2.0, 0.0], R=self._rot_z(np.pi / 4)
+        )
+        eps = 1e-6
+        pos_plus = _to_np(traj.position_at(0.7 + eps)[0], bk)
+        pos_minus = _to_np(traj.position_at(0.7 - eps)[0], bk)
+        vel = _to_np(traj.position_at(0.7)[1], bk)
+        assert np.allclose((pos_plus - pos_minus) / (2 * eps), vel, atol=1e-4)
+
+    def test_derivative_of_velocity_is_acceleration(self, bk):
+        """The returned acceleration is the analytic derivative of the velocity."""
+        traj = self._make(bk, [0.5, 0.5, 0.0], [-0.5, -0.5, 0.0], 2.0, [1.0, 2.0, 0.0])
+        eps = 1e-6
+        vel_plus = _to_np(traj.position_at(0.7 + eps)[1], bk)
+        vel_minus = _to_np(traj.position_at(0.7 - eps)[1], bk)
+        acc = _to_np(traj.position_at(0.7)[2], bk)
+        assert np.allclose((vel_plus - vel_minus) / (2 * eps), acc, atol=1e-4)
+
+    def test_time_clamped(self, bk):
+        """Time outside [0, T] is clamped to the nearest endpoint."""
+        traj = self._make(bk, [1.0, 0.0, 0.0], [-1.0, 0.0, 0.0], 2.0, [1.0, 1.0, 0.0])
+        pos_before, _, _ = traj.position_at(-1.0)
+        pos_after, _, _ = traj.position_at(3.0)
+        assert np.allclose(_to_np(pos_before, bk), [1.0, 0.0, 0.0])
+        assert np.allclose(_to_np(pos_after, bk), [-1.0, 0.0, 0.0])
+
+    def test_ndimensional(self, bk):
+        """Lissajous supports N-dimensional positions with a matching identity R."""
+        traj = self._make(bk, [1.0, 1.0, 1.0, 1.0], [-1.0, -1.0, -1.0, -1.0], 1.0, [0.0, 0.0, 0.0, 0.0])
+        pos, _, _ = traj.position_at(0.5)
+        assert _to_np(pos, bk).shape == (4,)
+
+    def test_k_length_mismatch_raises(self, bk):
+        """A k vector that disagrees with the position dimension is a loud error."""
+        from shinro.trajectories.lissajous import Lissajous
+        traj = Lissajous([1.0, 1.0], backend=bk)
+        with pytest.raises(ValueError, match="k has 2 entries"):
+            traj.generate(bk.array([0.0, 0.0, 0.0]), bk.array([1.0, 1.0, 1.0]), 1.0)
+
+    def test_non_rotation_R_raises(self, bk):
+        """A non-orthogonal R breaks the endpoint guarantee and is rejected."""
+        from shinro.trajectories.lissajous import Lissajous
+        traj = Lissajous([1.0, 1.0, 0.0], R=[[1.0, 1.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], backend=bk)
+        with pytest.raises(ValueError, match="rotation matrix"):
+            traj.generate(bk.array([1.0, 0.0, 0.0]), bk.array([-1.0, 0.0, 0.0]), 1.0)
+
+    def test_from_config_schedule(self, bk):
+        """from_config samples the figure into a (steps, N) waypoint schedule."""
+        from shinro.trajectories.lissajous import Lissajous
+        schedule = Lissajous.from_config(
+            {
+                "type": "lissajous",
+                "dt": 0.1,
+                "duration": 1.0,
+                "start": [0.5, 0.5, 0.0],
+                "end": [-0.5, -0.5, 0.0],
+                "k": [1.0, 2.0, 0.0],
+            },
+            backend=bk,
+        )
+        arr = _to_np(schedule, bk)
+        assert arr.shape == (10, 3)
+        assert np.allclose(arr[0], [0.5, 0.5, 0.0])

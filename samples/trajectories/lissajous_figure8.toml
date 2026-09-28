@@ -1,0 +1,16 @@
+type = "lissajous"
+dt = 0.02
+duration = 6.0
+
+# start / end are the two oscillation extrema; their midpoint is the center.
+start = [0.6, 0.4, 0.3]
+end = [-0.6, -0.4, 0.3]
+
+# Per-axis harmonic indices -> omega_i = (2*k_i + 1) * pi / T.
+k = [1.0, 2.0, 0.0]
+
+# Optional world-from-local rotation matrix orienting the figure (default:
+# identity). For example, a 45 deg rotation about z would tilt the oscillation:
+# R = [[0.7071, -0.7071, 0.0],
+#      [0.7071,  0.7071, 0.0],
+#      [0.0,     0.0,    1.0]]
