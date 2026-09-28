@@ -2,7 +2,8 @@ from dataclasses import dataclass
 
 from shinro.components import Plant
 from shinro.factories.registry import register_plant
-
+import numpy as np
+from shinro.utils.array_backend import ArrayBackend, NumpyBackend
 
 @dataclass(frozen=True)
 class QuadrotorConfig:
@@ -32,23 +33,39 @@ class Quadrotor(Plant):
     TODO: implement standalone dynamics + MuJoCo engine mode
     """
 
-    def __init__(self, *args, **kwargs):
-        raise NotImplementedError("Quadrotor plant is a placeholder — not yet implemented")
+    def __init__(self,mass: float,radius: float,inertia: list[float],dt:float,g:float=9.81,thrust_coeff: float=1.0,torque_coeff: float=0.1, backend: ArrayBackend | None= None):
+            self.m= mass
+            self.I=inertia
+            self.dt=dt
+            self.r=radius
+            self.g=g
+            self.k=thrust_coeff
+            self.b=torque_coeff
+            self.input_dim=4
+            self.bk= backend or NumpyBackend()
 
-    def get_state(self):
-        raise NotImplementedError
+    def _rotation_matrix(self, roll, pitch, yaw):
+        R_x=np.array(
+            [[1,0,0],
+            [0,np.cos(roll), -np.sin(roll)],
+            [0,np.sin(roll),np.cos(roll)]])
+        R_y= self.bk.array(
+            [[self.bk.cos(pitch),0,self.bk.sin(pitch)],
+            [0,1,0],
+            [-self.bk.sin(pitch), 0, self.bk.cos(pitch)]])
+        R_z= np.array(
+            [[np.cos(yaw),-np.sin(yaw),0],
+            [np.sin(yaw), np.cos(yaw),0],
+            [0,0,1]]
+        )
+        return R_z@R_y@R_x
 
-    def get_model(self):
-        raise NotImplementedError
-
-    def step(self, u):
-        raise NotImplementedError
-
-    def physics_engine(self, engine):
-        raise NotImplementedError
-
-    Config = QuadrotorConfig
-
-    @classmethod
-    def from_config(cls, config, backend=None):
-        raise NotImplementedError
+    def _angular_transformation_matrix(self,roll, pitch,yaw):
+        T=np.array(
+            [[1, np.sin(roll)*np.tan(pitch), np.cos(roll)*np.tan(pitch)],
+            [0, np.cos(roll),-np.sin(roll)],
+            [0,np.sin(roll)/np.cos(pitch), np.cos(roll)/np.cos(pitch)]]
+        )
+        return T
+    def get_dynamics(self, state, control, bk=None):
+        
