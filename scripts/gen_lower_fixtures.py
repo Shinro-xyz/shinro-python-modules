@@ -29,7 +29,9 @@ from __future__ import annotations
 
 import argparse
 import re
+import shutil
 import struct
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -57,6 +59,12 @@ FI = {
         "recipe": "build_base_graph",
         "desc": "closed-loop Kalman filter + LQR (matmul/reshape/add/sub/inv/clip + recurrence)",
     },
+    "mpc": {
+        "kind": "classical",
+        "recipe": "build_mpc_composed_graph",
+        "tol": 1e-3,
+        "desc": "closed-loop Kalman filter + MPC_LTI (.solve_qp via the baked OSQP solver)",
+    },
     "toy_lstm": {
         "kind": "onnx",
         "root": "repo",
@@ -83,9 +91,9 @@ FI = {
 def _build_composed(name: str, spec: dict[str, Any], bench_root: Path):
     """Build the ComposedGraph for one fixture spec."""
     if spec["kind"] == "classical":
-        from shinro.codegen.recipes import build_base_graph
+        from shinro.codegen import recipes
 
-        return {"build_base_graph": build_base_graph}[spec["recipe"]]()
+        return getattr(recipes, spec["recipe"])()
     root = REPO if spec["root"] == "repo" else bench_root
     model = root / spec["model"]
     if not model.exists():
@@ -108,10 +116,10 @@ def _compact_f32_blob(name: str, graph_path: Path, header: str) -> None:
     """
     text = graph_path.read_text()
     m = re.search(r"pub const const_blob_f32 = \[_\]f32\{(.*?)\};", text)
-    body = m.group(1).strip() if m is not None else ""
-    if not body:
+    if m is None or not m.group(1).strip():
         graph_path.write_text(text.replace(_ORIG_HEADER, header))
         return
+    body = m.group(1)
     values = [float.fromhex(tok.strip()) for tok in body.split(",") if tok.strip()]
     raw = b"".join(struct.pack("<f", v) for v in values)
     weights_name = f"{name}_weights.bin"
@@ -128,7 +136,7 @@ def _compact_f32_blob(name: str, graph_path: Path, header: str) -> None:
     assert len(values) * 4 == len(raw)
 
 
-def _emit_vectors(name: str, cg, data_path: Path) -> tuple[int, int, int]:
+def _emit_vectors(name: str, cg, data_path: Path, tol: float) -> tuple[int, int, int]:
     """Run the Python interpreter on seeded inputs; emit the expected vectors."""
     import numpy as np
 
@@ -160,7 +168,7 @@ def _emit_vectors(name: str, cg, data_path: Path) -> tuple[int, int, int]:
         f"pub const n_in = {n_in};\n"
         f"pub const n_out = {n_out};\n"
         f"pub const n_state = {n_state};\n"
-        f"pub const tol = {TOL!r};\n"
+        f"pub const tol = {tol!r};\n"
         f"pub const inputs = [_]f64{{{_zig_floats(in_flat.tolist())}}};\n"
         f"pub const outputs = [_]f64{{{_zig_floats(out_flat.tolist())}}};\n"
         f"pub const states = [_]f64{{{_zig_floats(state_flat.tolist())}}};\n"
@@ -187,7 +195,7 @@ def generate(name: str, spec: dict[str, Any], bench_root: Path, out_dir: Path) -
     lower_zig(cg, str(graph_path))
     graph_path.with_name(graph_path.stem + "_manifest.json").unlink(missing_ok=True)
     _compact_f32_blob(name, graph_path, header)
-    n_in, n_out, n_state = _emit_vectors(name, cg, data_path)
+    n_in, n_out, n_state = _emit_vectors(name, cg, data_path, spec.get("tol", TOL))
 
     graph_kb = graph_path.stat().st_size / 1024
     weights = graph_path.parent / f"{name}_weights.bin"
@@ -220,6 +228,10 @@ def main() -> int:
         except FileNotFoundError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 2
+    # Normalize formatting so regenerating is a no-op against the committed
+    # files (lower_zig's output is not necessarily zig-fmt clean).
+    if shutil.which("zig"):
+        subprocess.run(["zig", "fmt", str(out_dir)], check=False)
     print(f"\nwrote fixtures to {out_dir}")
     return 0
 

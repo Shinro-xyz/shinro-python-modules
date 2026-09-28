@@ -2849,7 +2849,7 @@ class TestOnnxRecurrentPolicyOracle:
 # scripts/gen_lower_fixtures.py.
 
 FIXTURE_DIR = RUNTIME / "tests" / "graphs"
-FIXTURE_NAMES = ["kf_lqr", "toy_lstm", "go2", "drone_gru"]
+FIXTURE_NAMES = ["kf_lqr", "toy_lstm", "go2", "drone_gru", "mpc"]
 
 
 def _zig_const_int(text: str, name: str) -> int:

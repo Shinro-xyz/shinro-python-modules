@@ -203,21 +203,35 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_lower_tests.step);
 
     // Frozen multi-graph oracle: one instance of tests/lower_graph.zig per
-    // fixture, each instantiating the graph-agnostic VM over that fixture's
-    // graph + expected vectors. Generated once by scripts/gen_lower_fixtures.py
-    // and committed under tests/graphs/; adding a graph type is one table row.
+    // fixture, each calling the exported C-ABI `shinro_step` for that fixture's
+    // graph and checking it against the committed vectors. Generated once by
+    // scripts/gen_lower_fixtures.py; adding a graph type is one table row.
+    //
+    // Each fixture gets its own `entry` module (rooted at entry.zig) so
+    // `graph_data` resolves to that fixture. A QP fixture also needs the baked
+    // OSQP solver compiled in (qp.zig @cImports osqp.h and links the C bake).
     const graph_fixtures = .{
-        .{ .name = "kf_lqr", .graph = "tests/graphs/kf_lqr_graph.zig", .data = "tests/graphs/kf_lqr_data.zig" },
-        .{ .name = "toy_lstm", .graph = "tests/graphs/toy_lstm_graph.zig", .data = "tests/graphs/toy_lstm_data.zig" },
-        .{ .name = "go2", .graph = "tests/graphs/go2_graph.zig", .data = "tests/graphs/go2_data.zig" },
-        .{ .name = "drone_gru", .graph = "tests/graphs/drone_gru_graph.zig", .data = "tests/graphs/drone_gru_data.zig" },
+        .{ .name = "kf_lqr", .graph = "tests/graphs/kf_lqr_graph.zig", .data = "tests/graphs/kf_lqr_data.zig", .qp = false },
+        .{ .name = "toy_lstm", .graph = "tests/graphs/toy_lstm_graph.zig", .data = "tests/graphs/toy_lstm_data.zig", .qp = false },
+        .{ .name = "go2", .graph = "tests/graphs/go2_graph.zig", .data = "tests/graphs/go2_data.zig", .qp = false },
+        .{ .name = "drone_gru", .graph = "tests/graphs/drone_gru_graph.zig", .data = "tests/graphs/drone_gru_data.zig", .qp = false },
+        .{ .name = "mpc", .graph = "tests/graphs/mpc_graph.zig", .data = "tests/graphs/mpc_data.zig", .qp = true },
     };
     inline for (graph_fixtures) |spec| {
-        const graph_mod = b.createModule(.{
-            .root_source_file = b.path(spec.graph),
+        const entry_mod = b.createModule(.{
+            .root_source_file = b.path("entry.zig"),
             .target = target,
             .optimize = optimize,
+            .link_libc = spec.qp,
         });
+        entry_mod.addAnonymousImport("graph_data", .{ .root_source_file = b.path(spec.graph) });
+        if (spec.qp) {
+            entry_mod.addAnonymousImport("solver_meta", .{ .root_source_file = b.path("codegen/emosqp/solver_meta.zig") });
+            entry_mod.addIncludePath(b.path("codegen/emosqp/inc/public"));
+            entry_mod.addIncludePath(b.path("codegen/emosqp/inc/private"));
+            entry_mod.addIncludePath(b.path("codegen/emosqp"));
+            entry_mod.addCSourceFiles(.{ .files = &default_emosqp_srcs, .flags = &.{} });
+        }
         const vectors_mod = b.createModule(.{
             .root_source_file = b.path(spec.data),
             .target = target,
@@ -228,8 +242,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "lower", .module = vm_mod },
-                .{ .name = "graph", .module = graph_mod },
+                .{ .name = "entry", .module = entry_mod },
                 .{ .name = "vectors", .module = vectors_mod },
             },
         });
