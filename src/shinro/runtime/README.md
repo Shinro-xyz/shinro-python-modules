@@ -85,9 +85,11 @@ and no Python, so a VM/ABI regression surfaces in the Zig test step alone. The
 fixture is solver-free, so it pulls in no OSQP bake.
 
 `zig build test` additionally compiles `tests/lower_graph.zig` **once per frozen
-fixture** (KF+LQR, a toy LSTM, the real Go2 MLP, and the real eco-drone GRU),
-each instantiating `lower.Vm(Ctx)` over that fixture's graph and checking its
-outputs and recurrent state against `interpret()` on the recorded vectors. The
+fixture** (KF+LQR, a toy LSTM, the real Go2 MLP, the real eco-drone GRU, and a
+KF+MPC `.solve_qp` graph), each calling the exported C-ABI `shinro_step` through
+its own `entry` module and checking the outputs/state against `interpret()` on
+the recorded vectors. The QP fixture's `entry` module also compiles the baked
+OSQP solver, so `.solve_qp` is covered natively too. The
 fixtures live under `tests/graphs/`: the graph is Zig constants, but the f32
 weight blob is a raw little-endian `.bin` embedded at compile time
 (`@embedFile` + `bytesAsSlice`) — ~5x smaller than hex literals (the Go2 MLP is

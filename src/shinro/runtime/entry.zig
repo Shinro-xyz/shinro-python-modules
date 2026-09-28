@@ -28,7 +28,8 @@ pub const Ctx = struct {
 };
 
 /// One tick of the deployed closed-loop step (see lower.zig's `Vm(Ctx).step`
-/// for the buffer contract).
-export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) void {
+/// for the buffer contract). `pub` so the Zig-native fixture tests can call the
+/// real C-ABI entry directly; the exported symbol name is unchanged.
+pub export fn shinro_step(inputs: [*]const f64, outputs: [*]f64, state_out: [*]f64) void {
     lower.Vm(Ctx).step(inputs, outputs, state_out);
 }
