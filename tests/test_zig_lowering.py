@@ -2835,3 +2835,92 @@ class TestOnnxRecurrentPolicyOracle:
             np.testing.assert_allclose(got, want, atol=1e-13, err_msg=f"{op} tick {tick}")
         # and the state actually moved (a frozen state would pass tick 0 only)
         assert not np.allclose(outs[-1], np.asarray(compiled.step({"state": x})))
+
+
+# ─── Frozen multi-graph fixtures through the C-ABI ──────────────────────────
+#
+# The Zig-native oracle (runtime/tests/lower_graph.zig, run by `zig build test`)
+# drives `Vm(Ctx).step` in-process. These tests go through the *exported* C
+# symbol instead: build a `.so` from each committed fixture graph
+# (runtime/tests/graphs/) and call `shinro_step` via ctypes, against the same
+# committed vectors. That covers the export / port-packing surface and the
+# compiled path for the compact `@embedFile` graph format. Self-contained: reads
+# only the committed fixtures (no shinro-bench, no ONNX) — regenerate them with
+# scripts/gen_lower_fixtures.py.
+
+FIXTURE_DIR = RUNTIME / "tests" / "graphs"
+FIXTURE_NAMES = ["kf_lqr", "toy_lstm", "go2", "drone_gru"]
+
+
+def _zig_const_int(text: str, name: str) -> int:
+    m = re.search(rf"pub const {name} = (\d+);", text)
+    assert m is not None, f"missing integer const {name!r}"
+    return int(m.group(1))
+
+
+def _zig_f64_array(text: str, name: str) -> list[float]:
+    m = re.search(rf"pub const {name} = \[_\]f64\{{(.*?)\}};", text, re.S)
+    assert m is not None, f"missing f64 array {name!r}"
+    return [float.fromhex(tok.strip()) for tok in m.group(1).split(",") if tok.strip()]
+
+
+def _build_fixture_so(graph_path: Path, build_dir: Path) -> ctypes.CDLL:
+    """Compile a committed fixture graph into a .so (no lowering, no bake)."""
+    if shutil.which("zig") is None:
+        pytest.skip("zig not on PATH; skipping fixture C-ABI oracle")
+    result = subprocess.run(
+        [
+            "zig",
+            "build",
+            "--build-file",
+            str(RUNTIME / "build.zig"),
+            "--prefix",
+            str(build_dir),
+            f"-Dgraph={graph_path}",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        pytest.skip(f"zig build failed: {result.stderr.strip()[:400]}")
+    lib = ctypes.CDLL(str(build_dir / "lib" / "libbase.so"))
+    lib.shinro_step.argtypes = [ctypes.POINTER(ctypes.c_double)] * 3
+    lib.shinro_step.restype = None
+    return lib
+
+
+class TestFrozenFixturesCAbi:
+    """Each committed fixture's .so matches its committed `interpret()` vectors."""
+
+    @pytest.mark.parametrize("name", FIXTURE_NAMES)
+    def test_fixture_so_matches_vectors(self, name, tmp_path_factory):
+        data = (FIXTURE_DIR / f"{name}_data.zig").read_text()
+        n_samples = _zig_const_int(data, "n_samples")
+        n_in = _zig_const_int(data, "n_in")
+        n_out = _zig_const_int(data, "n_out")
+        n_state = _zig_const_int(data, "n_state")
+        tol_match = re.search(r"pub const tol = ([^;]+);", data)
+        assert tol_match is not None, "missing tol"
+        tol = float(tol_match.group(1))
+        inputs = _zig_f64_array(data, "inputs")
+        outputs = _zig_f64_array(data, "outputs")
+        states = _zig_f64_array(data, "states")
+
+        build_dir = tmp_path_factory.mktemp(f"fixture-{name}")
+        lib = _build_fixture_so((FIXTURE_DIR / f"{name}_graph.zig").resolve(), build_dir)
+
+        for s in range(n_samples):
+            packed = np.ascontiguousarray(inputs[s * n_in : (s + 1) * n_in], dtype=np.float64)
+            out = np.zeros(n_out, dtype=np.float64)
+            state = np.zeros(n_state, dtype=np.float64)
+            lib.shinro_step(
+                packed.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+                out.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+                state.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+            )
+            np.testing.assert_allclose(
+                out, outputs[s * n_out : (s + 1) * n_out], atol=tol, err_msg=f"{name} sample {s} outputs"
+            )
+            np.testing.assert_allclose(
+                state, states[s * n_state : (s + 1) * n_state], atol=tol, err_msg=f"{name} sample {s} state"
+            )
