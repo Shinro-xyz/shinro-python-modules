@@ -414,3 +414,136 @@ class TestLissajous:
         arr = _to_np(schedule, bk)
         assert arr.shape == (10, 3)
         assert np.allclose(arr[0], [0.5, 0.5, 0.0])
+
+
+class TestBezierCurve:
+    """Verify BezierCurve: endpoints, boundary velocities, derivatives, validation."""
+
+    CUBIC = ((0.0, 0.0, 0.0), (0.4, 0.6, 0.0), (0.8, -0.6, 0.0), (1.2, 0.0, 0.0))
+
+    def _make(self, bk, points, T):
+        from shinro.trajectories.bezier_curve import BezierCurve
+        traj = BezierCurve(points, backend=bk)
+        traj.generate(duration=T)
+        return traj
+
+    def test_endpoints_interpolated(self, bk):
+        """B(0) is the first control point and B(T) is the last."""
+        traj = self._make(bk, self.CUBIC, 2.0)
+        pos0, _, _ = traj.position_at(0.0)
+        posT, _, _ = traj.position_at(2.0)
+        assert np.allclose(_to_np(pos0, bk), self.CUBIC[0])
+        assert np.allclose(_to_np(posT, bk), self.CUBIC[-1])
+
+    def test_boundary_velocities(self, bk):
+        """B'(0) = n/T (P1 - P0), and B'(T) uses the last two control points."""
+        traj = self._make(bk, self.CUBIC, 2.0)
+        n = len(self.CUBIC) - 1
+        _, vel0, _ = traj.position_at(0.0)
+        _, velT, _ = traj.position_at(2.0)
+        expected0 = (n / 2.0) * (np.array(self.CUBIC[1]) - np.array(self.CUBIC[0]))
+        expectedT = (n / 2.0) * (np.array(self.CUBIC[-1]) - np.array(self.CUBIC[-2]))
+        assert np.allclose(_to_np(vel0, bk), expected0)
+        assert np.allclose(_to_np(velT, bk), expectedT)
+
+    def test_known_line(self, bk):
+        """Collinear control points [[0],[1],[2]] give B(s) = 2s exactly."""
+        traj = self._make(bk, [[0.0], [1.0], [2.0]], 4.0)
+        pos, vel, acc = traj.position_at(1.0)
+        assert np.allclose(_to_np(pos, bk)[0], 0.5)
+        assert np.allclose(_to_np(vel, bk)[0], 0.5)
+        assert np.allclose(_to_np(acc, bk)[0], 0.0)
+
+    def test_duplicate_endpoints_zero_boundary_velocity(self, bk):
+        """Duplicating the end points pins the boundary velocity to zero."""
+        traj = self._make(bk, [[0.0, 0.0], [0.0, 0.0], [1.0, 0.0], [1.0, 0.0]], 2.0)
+        _, vel0, _ = traj.position_at(0.0)
+        _, velT, _ = traj.position_at(2.0)
+        assert np.allclose(_to_np(vel0, bk), 0.0)
+        assert np.allclose(_to_np(velT, bk), 0.0)
+
+    def test_derivative_of_position_is_velocity(self, bk):
+        """The returned velocity is the analytic derivative of the position."""
+        traj = self._make(bk, self.CUBIC, 2.0)
+        eps = 1e-6
+        pos_plus = _to_np(traj.position_at(0.7 + eps)[0], bk)
+        pos_minus = _to_np(traj.position_at(0.7 - eps)[0], bk)
+        vel = _to_np(traj.position_at(0.7)[1], bk)
+        assert np.allclose((pos_plus - pos_minus) / (2 * eps), vel, atol=1e-4)
+
+    def test_derivative_of_velocity_is_acceleration(self, bk):
+        """The returned acceleration is the analytic derivative of the velocity."""
+        traj = self._make(bk, self.CUBIC, 2.0)
+        eps = 1e-6
+        vel_plus = _to_np(traj.position_at(0.7 + eps)[1], bk)
+        vel_minus = _to_np(traj.position_at(0.7 - eps)[1], bk)
+        acc = _to_np(traj.position_at(0.7)[2], bk)
+        assert np.allclose((vel_plus - vel_minus) / (2 * eps), acc, atol=1e-4)
+
+    def test_degree1_zero_acceleration(self, bk):
+        """A two-point (straight) curve has constant velocity and zero acceleration."""
+        traj = self._make(bk, [[0.0, 0.0], [2.0, 0.0]], 2.0)
+        pos, vel, acc = traj.position_at(1.0)
+        assert np.allclose(_to_np(vel, bk), [1.0, 0.0])
+        assert np.allclose(_to_np(acc, bk), 0.0)
+        assert _to_np(pos, bk).shape == (2,)
+
+    def test_time_clamped(self, bk):
+        """Time outside [0, T] is clamped to the nearest endpoint."""
+        traj = self._make(bk, self.CUBIC, 2.0)
+        pos_before, _, _ = traj.position_at(-1.0)
+        pos_after, _, _ = traj.position_at(5.0)
+        assert np.allclose(_to_np(pos_before, bk), self.CUBIC[0])
+        assert np.allclose(_to_np(pos_after, bk), self.CUBIC[-1])
+
+    def test_ndimensional(self, bk):
+        """The spatial dimension is inferred from the control points."""
+        traj = self._make(bk, [[0.0, 0.0, 0.0], [1.0, 1.0, 1.0], [2.0, 2.0, 2.0]], 1.0)
+        pos, _, _ = traj.position_at(0.5)
+        assert _to_np(pos, bk).shape == (3,)
+
+    def test_ragged_control_points_raise(self, bk):
+        """Control points of differing dimension are a loud error."""
+        from shinro.trajectories.bezier_curve import BezierCurve
+        traj = BezierCurve([[0.0, 0.0], [1.0, 1.0, 1.0]], backend=bk)
+        with pytest.raises(ValueError, match="same dimension"):
+            traj.generate(duration=1.0)
+
+    def test_too_few_points_raise(self, bk):
+        """A single control point is not a curve."""
+        from shinro.trajectories.bezier_curve import BezierCurve
+        traj = BezierCurve([[0.0, 0.0]], backend=bk)
+        with pytest.raises(ValueError, match="at least 2"):
+            traj.generate(duration=1.0)
+
+    def test_bad_duration_raises(self, bk):
+        """A non-positive (or missing) duration is a loud error."""
+        from shinro.trajectories.bezier_curve import BezierCurve
+        traj = BezierCurve(self.CUBIC, backend=bk)
+        with pytest.raises(ValueError, match="duration must be positive"):
+            traj.generate(duration=0.0)
+        with pytest.raises(ValueError, match="duration must be positive"):
+            traj.generate()
+
+    def test_start_mismatch_raises(self, bk):
+        """A declared start that disagrees with the first control point raises."""
+        from shinro.trajectories.bezier_curve import BezierCurve
+        traj = BezierCurve(self.CUBIC, backend=bk)
+        with pytest.raises(ValueError, match="disagrees"):
+            traj.generate(start_position=[9.0, 9.0, 9.0], duration=1.0)
+
+    def test_from_config_schedule(self, bk):
+        """from_config samples the curve into a (steps, d) waypoint schedule."""
+        from shinro.trajectories.bezier_curve import BezierCurve
+        schedule = BezierCurve.from_config(
+            {
+                "type": "bezier",
+                "dt": 0.1,
+                "duration": 1.0,
+                "control_points": [[0.0, 0.0], [1.0, 1.0], [2.0, 0.0]],
+            },
+            backend=bk,
+        )
+        arr = _to_np(schedule, bk)
+        assert arr.shape == (10, 2)
+        assert np.allclose(arr[0], [0.0, 0.0])
