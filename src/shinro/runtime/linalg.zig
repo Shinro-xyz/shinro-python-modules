@@ -29,10 +29,49 @@ const SIMD_VL = std.simd.suggestVectorLength(f64) orelse 1;
 /// path.
 const SIMD_MIN_K = @max(2 * SIMD_VL, 8);
 
+/// One output row of a row-major product: `out[0..n] = a_row (k,) @ b (k,n)`.
+///
+/// Shared by `matmul` (once per output row) and `vecmat` (its single row).
+/// Row-major `b` is contiguous along the output column axis `j`, so the SIMD
+/// route sweeps `j`: broadcast `a_row[p]` (a scalar, free on NEON/AVX) and FMA
+/// it against the `SIMD_VL`-wide slice of `b`. Each lane sums `p` in the same
+/// serial order as the scalar loop, so no reassociation is introduced — only
+/// the mul+add fusion differs, matching `dot`. `n < SIMD_VL` (and a target with
+/// no vector width) stays scalar, so small shapes are bit-identical everywhere.
+fn rowMatVec(comptime k: usize, comptime n: usize, a_row: []const f64, b: []const f64, out: []f64) void {
+    if (SIMD_VL <= 1 or n < SIMD_VL) {
+        for (0..n) |j| {
+            var s: f64 = 0.0;
+            for (0..k) |p| s += a_row[p] * b[p * n + j];
+            out[j] = s;
+        }
+        return;
+    }
+
+    const V = @Vector(SIMD_VL, f64);
+    const n_full = n - (n % SIMD_VL); // columns covered by whole vectors
+    var j0: usize = 0;
+    while (j0 < n_full) : (j0 += SIMD_VL) {
+        var acc: V = @splat(0.0);
+        for (0..k) |p| {
+            const bv: V = b[p * n + j0 ..][0..SIMD_VL].*;
+            acc = @mulAdd(V, @splat(a_row[p]), bv, acc);
+        }
+        out[j0..][0..SIMD_VL].* = acc;
+    }
+    // Remaining columns stay scalar.
+    for (n_full..n) |j| {
+        var s: f64 = 0.0;
+        for (0..k) |p| s += a_row[p] * b[p * n + j];
+        out[j] = s;
+    }
+}
+
 /// Matrix multiply: (m, k) @ (k, n) -> (m, n), row-major, flat output.
 ///
 /// Mirrors numpy's 2D @ 2D convention. All dimensions are comptime so the
-/// output is a fixed-size stack array `[m * n]f64`.
+/// output is a fixed-size stack array `[m * n]f64`. Each output row is one
+/// `rowMatVec` sweep (`n` is the vectorized axis).
 ///
 /// Args:
 ///     m: Rows of `a` and of the result.
@@ -45,53 +84,7 @@ const SIMD_MIN_K = @max(2 * SIMD_VL, 8);
 ///     The flat `m*n` row-major result.
 pub fn matmul(comptime m: usize, comptime k: usize, comptime n: usize, a: []const f64, b: []const f64) [m * n]f64 {
     var out: [m * n]f64 = undefined;
-
-    // Scalar route: no vector unit, or fewer than one full vector of output
-    // columns. Guard is on `n` (the axis we vectorize over) — if n < SIMD_VL
-    // then n_full == 0 and the vector write below would run past a row.
-    if (SIMD_VL <= 1 or n < SIMD_VL) {
-        for (0..m) |i| {
-            for (0..n) |j| {
-                var s: f64 = 0.0;
-                for (0..k) |p| {
-                    s += a[i * k + p] * b[p * n + j];
-                }
-                out[i * n + j] = s;
-            }
-        }
-        return out;
-    }
-
-    // SIMD route: row-major A and B, so the contraction is strided but the
-    // OUTPUT column axis `j` is contiguous in B. Sweep `j`: broadcast
-    // a[i][p] and FMA it against the SIMD_VL-wide slice of B. Each lane sums
-    // `p` in the same order as the scalar loop, so no reassociation is
-    // introduced (only the mul+add fusion differs, matching `dot`).
-    const v = @Vector(SIMD_VL, f64); // the vector type
-    const n_full = n - (n % SIMD_VL); // columns covered by whole vectors
-
-    for (0..m) |i| {
-        const a_row = a[i * k ..][0..k];
-        var j0: usize = 0;
-
-        while (j0 < n_full) : (j0 += SIMD_VL) {
-            var acc: v = @splat(0.0);
-            for (0..k) |p| {
-                const bv: v = b[p * n + j0 ..][0..SIMD_VL].*;
-                acc = @mulAdd(v, @splat(a_row[p]), bv, acc);
-            }
-            out[i * n + j0 ..][0..SIMD_VL].* = acc;
-        }
-
-        // Remaining columns stay scalar.
-        for (n_full..n) |j| {
-            var s: f64 = 0.0;
-            for (0..k) |p| {
-                s += a_row[p] * b[p * n + j];
-            }
-            out[i * n + j] = s;
-        }
-    }
+    for (0..m) |i| rowMatVec(k, n, a[i * k ..][0..k], b, out[i * n ..][0..n]);
     return out;
 }
 
@@ -134,15 +127,12 @@ pub fn matvec(comptime m: usize, comptime k: usize, comptime TB: type, a: []cons
 ///
 /// Returns:
 ///     The flat `n`-vector result.
+///
+/// The single row of a row-major product, routed through the shared SIMD
+/// `rowMatVec` sweep (`n` is the vectorized axis).
 pub fn vecmat(comptime k: usize, comptime n: usize, v: []const f64, b: []const f64) [n]f64 {
     var out: [n]f64 = undefined;
-    for (0..n) |j| {
-        var s: f64 = 0.0;
-        for (0..k) |p| {
-            s += v[p] * b[p * n + j];
-        }
-        out[j] = s;
-    }
+    rowMatVec(k, n, v, b, &out);
     return out;
 }
 

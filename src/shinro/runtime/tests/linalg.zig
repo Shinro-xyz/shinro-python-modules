@@ -63,6 +63,25 @@ test "vecmat: (k,) @ (k,n) -> (n,)" {
     try std.testing.expectEqual([_]f64{ 8, 8, 11, 7 }, r);
 }
 
+test "vecmat wide n: SIMD columns + scalar tail" {
+    // Same blind spot as matmul: the 3x4 case above has n < SIMD_VL. n = 19
+    // drives the vectorized column sweep plus the `n % SIMD_VL` scalar tail.
+    const k = 5;
+    const n = 19;
+    var v: [k]f64 = undefined;
+    var b: [k * n]f64 = undefined;
+    for (&v, 0..) |*x, i| x.* = @floatFromInt(@as(isize, @intCast((i * 5) % 9)) - 4);
+    for (&b, 0..) |*x, i| x.* = @floatFromInt(@as(isize, @intCast((i * 3) % 7)) - 3);
+    var want: [n]f64 = undefined;
+    for (0..n) |j| {
+        var s: f64 = 0.0;
+        for (0..k) |p| s += v[p] * b[p * n + j];
+        want[j] = s;
+    }
+    const got = la.vecmat(k, n, &v, &b);
+    try std.testing.expectEqualSlices(f64, &want, &got);
+}
+
 test "inv round-trips 2x2: inv(A) @ A == I" {
     const a = [_]f64{ 4, 7, 2, 6 };
     const ai = la.inv(2, &a);
