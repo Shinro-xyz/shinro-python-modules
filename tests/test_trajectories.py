@@ -1299,3 +1299,176 @@ class TestCircularArc:
         deriv = CircularArc.from_config({**cfg, "derivatives": True}, backend=bk)
         assert set(deriv) == {"position", "velocity", "acceleration"}
         assert np.allclose(_to_np(deriv["position"], bk), arr)
+
+
+class TestTimeLimits:
+    """Verify limit_trajectory / time_scale_factor: limits respected, path kept."""
+
+    # Sampling resolution shared by the factor estimate and the peak measurement,
+    # so k is exact with respect to the measured peaks.
+    N = 2001
+
+    def _make(self, bk):
+        from shinro.trajectories.min_snap import MinSnapPolynomial
+        traj = MinSnapPolynomial(backend=bk)
+        traj.generate(bk.array([0.0]), bk.array([1.0]), 1.0)
+        return traj
+
+    @staticmethod
+    def _peaks(bk, traj, n):
+        total = traj.T
+        vmax = amax = 0.0
+        for i in range(n + 1):
+            _, vel, acc = traj.position_at(total * i / n)
+            vmax = max(vmax, np.max(np.abs(_to_np(vel, bk))))
+            amax = max(amax, np.max(np.abs(_to_np(acc, bk))))
+        return vmax, amax
+
+    def test_velocity_limit(self, bk):
+        """Halving the velocity limit doubles the time scale and respects it."""
+        from shinro.trajectories.time_scaling import limit_trajectory
+        traj = self._make(bk)
+        vpk, _ = self._peaks(bk, traj, self.N)
+        scaled = limit_trajectory(traj, max_velocity=vpk / 2, samples=self.N)
+        assert np.isclose(scaled.k, 2.0)
+        assert self._peaks(bk, scaled, self.N)[0] <= vpk / 2 + 1e-9
+
+    def test_acceleration_limit(self, bk):
+        """Quartering the acceleration limit doubles the time scale and respects it."""
+        from shinro.trajectories.time_scaling import limit_trajectory
+        traj = self._make(bk)
+        _, apk = self._peaks(bk, traj, self.N)
+        scaled = limit_trajectory(traj, max_acceleration=apk / 4, samples=self.N)
+        assert np.isclose(scaled.k, 2.0)
+        assert self._peaks(bk, scaled, self.N)[1] <= apk / 4 + 1e-9
+
+    def test_both_limits(self, bk):
+        """With both limits the stricter one wins; the peaks land within them."""
+        from shinro.trajectories.time_scaling import limit_trajectory
+        traj = self._make(bk)
+        vpk, apk = self._peaks(bk, traj, self.N)
+        scaled = limit_trajectory(traj, max_velocity=vpk / 4, max_acceleration=apk / 4, samples=self.N)
+        assert np.isclose(scaled.k, 4.0)  # velocity is stricter here
+        sv, sa = self._peaks(bk, scaled, self.N)
+        assert sv <= vpk / 4 + 1e-9 and sa <= apk / 4 + 1e-9
+
+    def test_no_slowdown_when_limits_are_loose(self, bk):
+        traj = self._make(bk)
+        from shinro.trajectories.time_scaling import time_scale_factor
+        assert np.isclose(time_scale_factor(traj, max_velocity=1e9, max_acceleration=1e9), 1.0)
+
+    def test_path_is_preserved(self, bk):
+        """The same fraction of the horizon gives the same position."""
+        from shinro.trajectories.time_scaling import limit_trajectory
+        traj = self._make(bk)
+        scaled = limit_trajectory(traj, max_velocity=0.5, max_acceleration=2.0)
+        for frac in (0.0, 0.25, 0.5, 0.75, 1.0):
+            a = _to_np(scaled.position_at(frac * scaled.T)[0], bk)
+            b = _to_np(traj.position_at(frac * traj.T)[0], bk)
+            assert np.allclose(a, b)
+
+    def test_duration_and_schedule(self, bk):
+        """T scales with k and the wrapper feeds sample_schedule directly."""
+        from shinro.trajectories import limit_trajectory, sample_schedule
+        traj = self._make(bk)
+        scaled = limit_trajectory(traj, max_velocity=0.5, max_acceleration=2.0)
+        assert np.isclose(scaled.T, scaled.k * traj.T)
+        out = sample_schedule(scaled, 0.1)
+        assert _to_np(out["position"], bk).shape == (round(scaled.T / 0.1), 1)
+
+    def test_requires_a_limit(self, bk):
+        from shinro.trajectories.time_scaling import time_scale_factor
+        with pytest.raises(ValueError, match="at least one"):
+            time_scale_factor(self._make(bk))
+
+
+class TestSCurve:
+    """Verify s_curve_limit: min-jerk time law respects v/a/j, keeps the path."""
+
+    N = 2001
+
+    def _make(self, bk):
+        from shinro.trajectories.min_snap import MinSnapPolynomial
+        traj = MinSnapPolynomial(backend=bk)
+        traj.generate(bk.array([0.0]), bk.array([1.0]), 1.0)
+        return traj
+
+    @staticmethod
+    def _peaks(bk, traj, n):
+        total = traj.T
+        h = total / (n * 100)
+        vmax = amax = jmax = 0.0
+        for i in range(n + 1):
+            t = total * i / n
+            _, vel, acc = traj.position_at(t)
+            acc_p = traj.position_at(min(t + h, total))[2]
+            acc_m = traj.position_at(max(t - h, 0.0))[2]
+            jerk = (_to_np(acc_p, bk) - _to_np(acc_m, bk)) / (2 * h)
+            vmax = max(vmax, np.max(np.abs(_to_np(vel, bk))))
+            amax = max(amax, np.max(np.abs(_to_np(acc, bk))))
+            jmax = max(jmax, np.max(np.abs(jerk)))
+        return vmax, amax, jmax
+
+    def test_velocity_limit(self, bk):
+        from shinro.trajectories.time_scaling import s_curve_limit
+        traj = self._make(bk)
+        vpk = self._peaks(bk, traj, self.N)[0]
+        scaled = s_curve_limit(traj, max_velocity=vpk / 2, samples=self.N)
+        assert self._peaks(bk, scaled, self.N)[0] <= vpk / 2 * 1.02
+
+    def test_acceleration_limit(self, bk):
+        from shinro.trajectories.time_scaling import s_curve_limit
+        traj = self._make(bk)
+        apk = self._peaks(bk, traj, self.N)[1]
+        scaled = s_curve_limit(traj, max_acceleration=apk / 4, samples=self.N)
+        assert self._peaks(bk, scaled, self.N)[1] <= apk / 4 * 1.02
+
+    def test_jerk_limit(self, bk):
+        from shinro.trajectories.time_scaling import s_curve_limit
+        traj = self._make(bk)
+        jpk = self._peaks(bk, traj, self.N)[2]
+        scaled = s_curve_limit(traj, max_jerk=jpk / 4, samples=self.N)
+        assert self._peaks(bk, scaled, self.N)[2] <= jpk / 4 * 1.05
+
+    def test_endpoints_preserved(self, bk):
+        """S-curve re-times the path but still starts and ends at the endpoints."""
+        from shinro.trajectories.time_scaling import s_curve_limit
+        traj = self._make(bk)
+        scaled = s_curve_limit(traj, max_velocity=0.5, max_acceleration=2.0)
+        assert np.allclose(_to_np(scaled.position_at(0.0)[0], bk), 0.0)
+        assert np.allclose(_to_np(scaled.position_at(scaled.T)[0], bk), 1.0)
+
+    def test_ends_at_rest(self, bk):
+        """Min-jerk profile has zero boundary velocity/acceleration."""
+        from shinro.trajectories.time_scaling import s_curve_limit
+        traj = self._make(bk)
+        scaled = s_curve_limit(traj, max_velocity=0.5)
+        assert np.allclose(_to_np(scaled.position_at(0.0)[1], bk), 0.0, atol=1e-9)
+        assert np.allclose(_to_np(scaled.position_at(scaled.T)[1], bk), 0.0, atol=1e-9)
+
+    def test_horizon_never_shortens(self, bk):
+        from shinro.trajectories.time_scaling import s_curve_limit
+        traj = self._make(bk)
+        assert s_curve_limit(traj, max_velocity=1e9).T >= traj.T
+
+    def test_midpoint_maps_through_profile(self, bk):
+        """sigma(0.5) = 0.5, so the horizon midpoint is the path midpoint."""
+        from shinro.trajectories.time_scaling import s_curve_limit
+        traj = self._make(bk)
+        scaled = s_curve_limit(traj, max_acceleration=2.0)
+        assert np.allclose(
+            _to_np(scaled.position_at(scaled.T / 2)[0], bk),
+            _to_np(traj.position_at(traj.T / 2)[0], bk),
+        )
+
+    def test_feeds_sample_schedule(self, bk):
+        from shinro.trajectories import s_curve_limit, sample_schedule
+        traj = self._make(bk)
+        scaled = s_curve_limit(traj, max_velocity=0.5, max_acceleration=2.0)
+        out = sample_schedule(scaled, 0.1)
+        assert _to_np(out["position"], bk).shape == (round(scaled.T / 0.1), 1)
+
+    def test_requires_a_limit(self, bk):
+        from shinro.trajectories.time_scaling import s_curve_horizon
+        with pytest.raises(ValueError, match="at least one"):
+            s_curve_horizon(self._make(bk))

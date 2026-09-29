@@ -102,6 +102,32 @@ closed-loop runner is unaffected. The shared helpers
 `shinro.trajectories.sample_schedule` / `sample_segments` build these directly
 from a generator (which exposes `position_at(t) -> (pos, vel, acc)`).
 
+### Time scaling / motion limits
+
+`shinro.trajectories.time_scaling` re-times a generator so it respects
+per-component limits — the same geometry, a different clock. Two time laws:
+
+- `limit_trajectory(traj, max_velocity=..., max_acceleration=...)` — **uniform
+  (constant) time scaling**: play the path `k` times slower (velocity ÷ `k`,
+  acceleration ÷ `k²`), where `k` is the smallest factor satisfying both. Returns
+  a `TimeScaled` wrapper; `time_scale_factor(traj, ...)` gives just `k`.
+- `s_curve_limit(traj, max_velocity=..., max_acceleration=..., max_jerk=...)` —
+  **min-jerk (S-curve) time scaling**: re-time the path parameter with a
+  rest-to-rest min-jerk profile `φ(t) = T·σ(t/T')`, choosing the horizon `T'` so
+  velocity, acceleration, **and jerk** fit. Returns an `SCurveScaled` wrapper; the
+  ends come to rest and jerk is bounded (`s_curve_horizon` gives `T'`).
+
+Both are drop-ins for `sample_schedule`:
+
+```python
+from shinro.trajectories import limit_trajectory, s_curve_limit, sample_schedule
+schedule = sample_schedule(limit_trajectory(traj, max_velocity=0.5, max_acceleration=2.0), dt=0.01)["position"]
+schedule = sample_schedule(s_curve_limit(traj, max_velocity=0.5, max_jerk=10.0), dt=0.01)["position"]
+```
+
+Wired programmatically (the registry's `from_config` returns sampled arrays, not
+generator objects, so there is no TOML-level wrapper).
+
 ## Physics engines
 
 | Registered name | Class | File |
