@@ -1,0 +1,28 @@
+type = "catmull_rom"
+dt = 0.02
+
+# Waypoint 0.
+start = [0.0, 0.0, 0.0]
+
+# C^1 pass-through: each entry is reached `duration` seconds after the previous
+# waypoint, and the curve does NOT stop at interior waypoints (contrast the
+# `waypoints` trajectory, which holds each position).
+[[waypoints]]
+duration = 1.0
+position = [0.6, 1.2, 0.3]
+
+[[waypoints]]
+duration = 1.0
+position = [1.5, 1.5, 0.6]
+
+[[waypoints]]
+duration = 1.0
+position = [2.4, 0.9, 0.9]
+
+[[waypoints]]
+duration = 1.5
+position = [3.0, 0.0, 1.2]
+
+# Endpoint tangent: "zero" (default) is rest-to-rest at the ends; "one_sided"
+# is the classic non-zero Catmull-Rom end tangent.
+# endpoint_tangent = "zero"

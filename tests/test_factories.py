@@ -216,6 +216,15 @@ class TestTrajectoryFactory:
         assert arr.shape[1] == 3
         assert arr.shape[0] == 60
 
+    def test_create_catmull_rom(self, bk):
+        """TrajectoryFactory creates a Catmull-Rom schedule from the shipped sample."""
+        from shinro.factories.trajectory_factory import TrajectoryFactory
+        factory = TrajectoryFactory("samples/trajectories/catmull_rom.toml")
+        schedule = factory.create(backend=bk)
+        arr = _to_np(schedule, bk)
+        assert arr.shape[1] == 3
+        assert arr.shape[0] == 225
+
     def test_create_unknown_type(self, tmp_path):
         """TrajectoryFactory raises KeyError for an unknown trajectory type."""
         from shinro.factories.trajectory_factory import TrajectoryFactory
