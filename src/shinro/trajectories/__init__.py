@@ -12,6 +12,8 @@ Available generators:
     BezierCurve       — Bernstein curve over an arbitrary control-point list
     BSpline           — Cox–de Boor B-spline over a knot vector and control polygon
     CatmullRom        — C¹ cubic Hermite through an ordered waypoint list
+    Akima             — overshoot-resistant C¹ waypoint spline
+    CubicSpline       — natural C² waypoint spline
 
 Sampling helpers:
     sample_schedule / sample_segments — stacked (steps, N) position/velocity/
@@ -24,6 +26,7 @@ from .cubic_polynomial import CubicPolynomial
 from .lissajous import Lissajous
 from .quintic_polynomial import QuinticPolynomial
 from .sampling import sample_schedule, sample_segments
+from .waypoint_splines import Akima, CubicSpline
 
 __all__ = [
     "CubicPolynomial",
@@ -32,6 +35,8 @@ __all__ = [
     "BezierCurve",
     "BSpline",
     "CatmullRom",
+    "Akima",
+    "CubicSpline",
     "sample_schedule",
     "sample_segments",
 ]
