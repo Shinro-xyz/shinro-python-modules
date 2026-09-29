@@ -888,3 +888,107 @@ class TestCatmullRom:
         arr = _to_np(schedule, bk)
         assert arr.shape == (4, 2)
         assert np.allclose(arr[0], [0.0, 0.0])
+
+
+class TestDerivativeSchedules:
+    """The ``derivatives`` opt-in emits stacked (pos, vel, acc) without changing the default."""
+
+    CONFIGS = {
+        "bezier": {"dt": 0.1, "duration": 1.0, "control_points": [[0, 0], [1, 1], [2, 0]]},
+        "bspline": {
+            "dt": 0.1,
+            "duration": 1.0,
+            "degree": 3,
+            "control_points": [[0, 0], [0, 1], [1, 1], [1, 0]],
+            "knots": [0, 0, 0, 0, 1, 1, 1, 1],
+        },
+        "catmull_rom": {
+            "dt": 0.5,
+            "start": [0, 0],
+            "waypoints": [
+                {"duration": 1.0, "position": [1, 1]},
+                {"duration": 1.0, "position": [2, -1]},
+            ],
+        },
+        "lissajous": {
+            "dt": 0.1,
+            "duration": 1.0,
+            "start": [0.5, 0.5],
+            "end": [-0.5, -0.5],
+            "k": [1, 2],
+        },
+        "cubic_segments": {"dt": 0.1, "segments": [{"duration": 1.0, "start": [0, 0], "end": [1, 1]}]},
+        "quintic_segments": {"dt": 0.1, "segments": [{"duration": 1.0, "start": [0, 0], "end": [1, 1]}]},
+    }
+
+    def _from_config(self, name, bk, **overrides):
+        from shinro.factories.registry import _TRAJECTORY_REGISTRY
+        cfg = {**self.CONFIGS[name], "type": name, **overrides}
+        return _TRAJECTORY_REGISTRY[name].from_config(cfg, backend=bk)
+
+    @pytest.mark.parametrize("name", list(CONFIGS))
+    def test_default_is_positions_only(self, bk, name):
+        """Without the opt-in, from_config returns the (steps, N) position schedule."""
+        out = self._from_config(name, bk)
+        assert not isinstance(out, dict)
+        assert _to_np(out, bk).ndim == 2
+
+    @pytest.mark.parametrize("name", list(CONFIGS))
+    def test_derivatives_returns_stacked_dict(self, bk, name):
+        """With derivatives=True, from_config returns position/velocity/acceleration arrays."""
+        plain = _to_np(self._from_config(name, bk), bk)
+        deriv = self._from_config(name, bk, derivatives=True)
+        assert set(deriv) == {"position", "velocity", "acceleration"}
+        for key in ("position", "velocity", "acceleration"):
+            assert _to_np(deriv[key], bk).shape == plain.shape
+        assert np.allclose(_to_np(deriv["position"], bk), plain)
+
+    @pytest.mark.parametrize("name", list(CONFIGS))
+    def test_velocity_matches_finite_difference(self, bk, name):
+        """The emitted velocity is the finite-difference derivative of the positions."""
+        dt = 0.002
+        deriv = self._from_config(name, bk, dt=dt, derivatives=True)
+        pos = _to_np(deriv["position"], bk)
+        vel = _to_np(deriv["velocity"], bk)
+        assert np.allclose(np.gradient(pos, dt, axis=0)[1:-1], vel[1:-1], atol=1e-2)
+
+
+class TestSamplingHelpers:
+    """Verify sample_schedule / sample_segments directly."""
+
+    def _line(self, bk):
+        from shinro.trajectories.cubic_polynomial import CubicPolynomial
+        traj = CubicPolynomial(backend=bk)
+        traj.generate(
+            bk.array([0.0, 0.0]), bk.array([1.0, 2.0]), 1.0, bk.array([0.0, 0.0]), bk.array([0.0, 0.0])
+        )
+        return traj
+
+    def test_sample_schedule_orders(self, bk):
+        """order selects which of position/velocity/acceleration are returned."""
+        from shinro.trajectories import sample_schedule
+        traj = self._line(bk)
+        assert set(sample_schedule(traj, 0.1, order=0)) == {"position"}
+        assert set(sample_schedule(traj, 0.1, order=1)) == {"position", "velocity"}
+        out = sample_schedule(traj, 0.1, order=2)
+        assert set(out) == {"position", "velocity", "acceleration"}
+        assert _to_np(out["position"], bk).shape == (10, 2)
+
+    def test_sample_schedule_reads_generator_duration(self, bk):
+        """duration defaults to the generator's own horizon (CubicPolynomial stores self.duration)."""
+        from shinro.trajectories import sample_schedule
+        out = sample_schedule(self._line(bk), 0.1)
+        assert _to_np(out["position"], bk).shape == (10, 2)
+
+    def test_sample_segments_concatenates(self, bk):
+        """Per-segment samples concatenate; the joint is emitted once."""
+        from shinro.trajectories import sample_segments
+        segments = []
+        for a, b in (((0.0,), (1.0,)), ((1.0,), (2.0,))):
+            from shinro.trajectories.cubic_polynomial import CubicPolynomial
+            seg = CubicPolynomial(backend=bk)
+            seg.generate(bk.array(a), bk.array(b), 1.0, bk.array([0.0]), bk.array([0.0]))
+            segments.append((seg, 1.0))
+        out = sample_segments(segments, 0.5, order=2)
+        assert _to_np(out["position"], bk).shape == (4, 1)
+        assert np.allclose(_to_np(out["position"], bk)[2], 1.0)

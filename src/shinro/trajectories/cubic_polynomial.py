@@ -1,10 +1,10 @@
 
 from dataclasses import dataclass
-
-import numpy as np
+from typing import Any
 
 from shinro.components import TrajectoryGenerator
 from shinro.factories.registry import register_trajectory
+from shinro.trajectories.sampling import sample_segments
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend
 from shinro.utils.config_spec import strict_from_list
 
@@ -26,6 +26,7 @@ class CubicSegmentsConfig:
 
     dt: float
     segments: list[dict]
+    derivatives: bool = False
     name: str = "cubic_segments"
 
 
@@ -110,7 +111,7 @@ class CubicPolynomial(TrajectoryGenerator):
     Config = CubicSegmentsConfig
 
     @classmethod
-    def from_config(cls, config, backend: ArrayBackend | None = None):
+    def from_config(cls, config, backend: ArrayBackend | None = None) -> Any:
         """Create a waypoint schedule from a TOML config dict or :class:`CubicSegmentsConfig`.
 
         Config fields:
@@ -127,22 +128,21 @@ class CubicPolynomial(TrajectoryGenerator):
             backend: Array backend. Defaults to NumpyBackend.
 
         Returns:
-            Array of shape (total_steps, N) with position waypoints.
+            Array of shape (total_steps, N) with position waypoints, or — when
+            ``derivatives`` is true — a dict of ``(total_steps, N)`` arrays
+            under ``"position"``, ``"velocity"``, and ``"acceleration"``.
         """
         bk = backend or NumpyBackend()
         cfg = cls.parse_config(config)
         segs = strict_from_list(CubicSegmentConfig, cfg.segments, "cubic_segments.segment")
-        schedule = []
+        segments = []
         for seg in segs:
-            n_steps = int(np.round(seg.duration / cfg.dt))
             p0 = bk.array(seg.start)
             pf = bk.array(seg.end)
             start_vel = bk.array(seg.start_vel if seg.start_vel is not None else [0.0] * len(seg.start))
             end_vel = bk.array(seg.end_vel if seg.end_vel is not None else [0.0] * len(seg.end))
             traj = cls(backend=bk)
             traj.generate(p0, pf, seg.duration, start_vel, end_vel)
-            for k in range(n_steps):
-                t = k * cfg.dt
-                pos, _, _ = traj.position_at(t)
-                schedule.append(pos)
-        return bk.array(schedule)
+            segments.append((traj, seg.duration))
+        sampled = sample_segments(segments, cfg.dt, order=2 if cfg.derivatives else 0)
+        return sampled if cfg.derivatives else sampled["position"]

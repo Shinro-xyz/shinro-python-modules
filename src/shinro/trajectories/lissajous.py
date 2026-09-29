@@ -2,9 +2,11 @@
 
 import math
 from dataclasses import dataclass
+from typing import Any
 
 from shinro.components import TrajectoryGenerator
 from shinro.factories.registry import register_trajectory
+from shinro.trajectories.sampling import sample_schedule
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend
 
 
@@ -22,6 +24,10 @@ class LissajousConfig:
             :math:`\\omega_i = (2 k_i + 1) \\pi / T`.
         R: Optional ``N x N`` rotation matrix orienting the oscillation frame
             relative to the world frame. Defaults to the identity.
+        derivatives: Also emit the reference velocity/acceleration. When true,
+            ``from_config`` returns a ``{"position", "velocity",
+            "acceleration"}`` dict of ``(steps, N)`` arrays instead of the
+            position schedule.
         name: Registered trajectory name (validated against the ``type`` key).
     """
 
@@ -31,6 +37,7 @@ class LissajousConfig:
     duration: float
     k: list[float]
     R: list[list[float]] | None = None
+    derivatives: bool = False
     name: str = "lissajous"
 
 
@@ -132,7 +139,7 @@ class Lissajous(TrajectoryGenerator):
         return pos, vel, acc
 
     @classmethod
-    def from_config(cls, config, backend: ArrayBackend | None = None):
+    def from_config(cls, config, backend: ArrayBackend | None = None) -> Any:
         """Create a waypoint schedule from a TOML config dict or :class:`LissajousConfig`.
 
         Config fields:
@@ -149,12 +156,13 @@ class Lissajous(TrajectoryGenerator):
             backend: Array backend. Defaults to NumpyBackend.
 
         Returns:
-            Array of shape (total_steps, N) with position waypoints.
+            Array of shape (total_steps, N) with position waypoints, or — when
+            ``derivatives`` is true — a dict of ``(total_steps, N)`` arrays
+            under ``"position"``, ``"velocity"``, and ``"acceleration"``.
         """
         bk = backend or NumpyBackend()
         cfg = cls.parse_config(config)
         traj = cls(cfg.k, R=cfg.R, backend=bk)
         traj.generate(bk.array(cfg.start), bk.array(cfg.end), cfg.duration)
-        n_steps = round(cfg.duration / cfg.dt)
-        schedule = [traj.position_at(step * cfg.dt)[0] for step in range(n_steps)]
-        return bk.array(schedule)
+        sampled = sample_schedule(traj, cfg.dt, order=2 if cfg.derivatives else 0)
+        return sampled if cfg.derivatives else sampled["position"]

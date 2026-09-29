@@ -1,10 +1,12 @@
 """Catmull-Rom (C1 cubic Hermite) trajectory generator."""
 
 from dataclasses import dataclass
+from typing import Any
 
 from shinro.components import TrajectoryGenerator
 from shinro.factories.registry import register_trajectory
 from shinro.trajectories.cubic_polynomial import CubicPolynomial
+from shinro.trajectories.sampling import sample_schedule
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend
 from shinro.utils.config_spec import strict_from_list
 
@@ -32,6 +34,10 @@ class CatmullRomConfig:
             after ``duration`` seconds from the previous waypoint.
         endpoint_tangent: ``"zero"`` (rest-to-rest ends, default) or
             ``"one_sided"`` (classic Catmull-Rom one-sided end tangent).
+        derivatives: Also emit the reference velocity/acceleration. When true,
+            ``from_config`` returns a ``{"position", "velocity",
+            "acceleration"}`` dict of ``(steps, d)`` arrays instead of the
+            position schedule.
         name: Registered trajectory name (validated against the ``type`` key).
     """
 
@@ -39,6 +45,7 @@ class CatmullRomConfig:
     start: list[float]
     waypoints: list[dict]
     endpoint_tangent: str = "zero"
+    derivatives: bool = False
     name: str = "catmull_rom"
 
 
@@ -167,7 +174,7 @@ class CatmullRom(TrajectoryGenerator):
         return seg.position_at(t - start)
 
     @classmethod
-    def from_config(cls, config, backend: ArrayBackend | None = None):
+    def from_config(cls, config, backend: ArrayBackend | None = None) -> Any:
         """Create a waypoint schedule from a TOML config dict or :class:`CatmullRomConfig`.
 
         Config fields:
@@ -182,7 +189,9 @@ class CatmullRom(TrajectoryGenerator):
             backend: Array backend. Defaults to NumpyBackend.
 
         Returns:
-            Array of shape (total_steps, d) with position waypoints.
+            Array of shape (total_steps, d) with position waypoints, or — when
+            ``derivatives`` is true — a dict of ``(total_steps, d)`` arrays
+            under ``"position"``, ``"velocity"``, and ``"acceleration"``.
         """
         bk = backend or NumpyBackend()
         cfg = cls.parse_config(config)
@@ -191,7 +200,5 @@ class CatmullRom(TrajectoryGenerator):
         durations = [wp.duration for wp in wps]
         traj = cls(backend=bk)
         traj.generate(waypoints, durations, endpoint_tangent=cfg.endpoint_tangent)
-        total = sum(durations)
-        n_steps = round(total / cfg.dt)
-        schedule = [traj.position_at(step * cfg.dt)[0] for step in range(n_steps)]
-        return bk.array(schedule)
+        sampled = sample_schedule(traj, cfg.dt, order=2 if cfg.derivatives else 0)
+        return sampled if cfg.derivatives else sampled["position"]

@@ -2,9 +2,11 @@
 
 import math
 from dataclasses import dataclass
+from typing import Any
 
 from shinro.components import TrajectoryGenerator
 from shinro.factories.registry import register_trajectory
+from shinro.trajectories.sampling import sample_schedule
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend
 
 
@@ -19,12 +21,17 @@ class BezierConfig:
             the same length (the spatial dimension). The curve degree is
             ``len(control_points) - 1`` and the two ends are interpolated
             exactly.
+        derivatives: Also emit the reference velocity/acceleration. When true,
+            ``from_config`` returns a ``{"position", "velocity",
+            "acceleration"}`` dict of ``(steps, d)`` arrays instead of the
+            position schedule.
         name: Registered trajectory name (validated against the ``type`` key).
     """
 
     dt: float
     duration: float
     control_points: list[list[float]]
+    derivatives: bool = False
     name: str = "bezier"
 
 
@@ -169,7 +176,7 @@ class BezierCurve(TrajectoryGenerator):
         return pos, vel, acc
 
     @classmethod
-    def from_config(cls, config, backend: ArrayBackend | None = None):
+    def from_config(cls, config, backend: ArrayBackend | None = None) -> Any:
         """Create a waypoint schedule from a TOML config dict or :class:`BezierConfig`.
 
         Config fields:
@@ -182,12 +189,13 @@ class BezierCurve(TrajectoryGenerator):
             backend: Array backend. Defaults to NumpyBackend.
 
         Returns:
-            Array of shape (total_steps, d) with position waypoints.
+            Array of shape (total_steps, d) with position waypoints, or — when
+            ``derivatives`` is true — a dict of ``(total_steps, d)`` arrays
+            under ``"position"``, ``"velocity"``, and ``"acceleration"``.
         """
         bk = backend or NumpyBackend()
         cfg = cls.parse_config(config)
         traj = cls(cfg.control_points, backend=bk)
         traj.generate(duration=cfg.duration)
-        n_steps = round(cfg.duration / cfg.dt)
-        schedule = [traj.position_at(step * cfg.dt)[0] for step in range(n_steps)]
-        return bk.array(schedule)
+        sampled = sample_schedule(traj, cfg.dt, order=2 if cfg.derivatives else 0)
+        return sampled if cfg.derivatives else sampled["position"]
