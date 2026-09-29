@@ -1,0 +1,23 @@
+type = "bspline"
+dt = 0.05
+duration = 3.0
+
+# Polynomial degree p. The knot vector must hold exactly
+# len(control_points) + degree + 1 knots.
+degree = 3
+
+# Clamped cubic knot vector: the first/last knot repeats degree + 1 times, so
+# the curve interpolates the end control points exactly. The simple interior
+# knots (1, 2) give C^2 continuity at the joins.
+knots = [0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 3.0, 3.0, 3.0]
+
+# Control polygon (3-D). The B-spline time parametrization IS the knot vector:
+# its domain [u_degree, u_n+1] = [0, 3] spans [0, duration].
+control_points = [
+    [0.0, 0.0, 0.0],
+    [0.6, 1.2, 0.3],
+    [1.5, 1.5, 0.6],
+    [2.4, 1.2, 0.9],
+    [3.0, 0.3, 1.2],
+    [3.6, 0.0, 1.5],
+]

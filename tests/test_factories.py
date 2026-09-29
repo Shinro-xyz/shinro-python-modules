@@ -207,6 +207,15 @@ class TestTrajectoryFactory:
         schedule = factory.create(backend=bk)
         assert _to_np(schedule, bk).shape[1] == 3
 
+    def test_create_bspline(self, bk):
+        """TrajectoryFactory creates a B-spline schedule from the shipped sample."""
+        from shinro.factories.trajectory_factory import TrajectoryFactory
+        factory = TrajectoryFactory("samples/trajectories/bspline.toml")
+        schedule = factory.create(backend=bk)
+        arr = _to_np(schedule, bk)
+        assert arr.shape[1] == 3
+        assert arr.shape[0] == 60
+
     def test_create_unknown_type(self, tmp_path):
         """TrajectoryFactory raises KeyError for an unknown trajectory type."""
         from shinro.factories.trajectory_factory import TrajectoryFactory

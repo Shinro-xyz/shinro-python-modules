@@ -1,5 +1,6 @@
 """B-spline trajectory generator (Cox–de Boor recursion)."""
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from shinro.components import TrajectoryGenerator
@@ -69,8 +70,8 @@ class BSpline(TrajectoryGenerator):
     def __init__(
         self,
         degree_polynomial: int,
-        control_points: list[list[float]],
-        time_knot_vector: list[float],
+        control_points: Sequence[Sequence[float]],
+        time_knot_vector: Sequence[float],
         backend: ArrayBackend | None = None,
     ):
         self.bk = backend or NumpyBackend()

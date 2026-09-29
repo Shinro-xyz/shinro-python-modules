@@ -547,3 +547,186 @@ class TestBezierCurve:
         arr = _to_np(schedule, bk)
         assert arr.shape == (10, 2)
         assert np.allclose(arr[0], [0.0, 0.0])
+
+
+class TestBSpline:
+    """Verify BSpline: clamped cubic == Bezier, Cox-de Boor derivatives, validation."""
+
+    # Clamped cubic knot vector over 4 control points. The curve domain is
+    # [u_p, u_n+1] = [0, 1], which is also the duration used below.
+    KNOTS = (0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0)
+    CUBIC = ((0.0, 0.0, 0.0), (0.4, 0.6, 0.0), (0.8, -0.6, 0.0), (1.2, 0.0, 0.0))
+
+    def _make(self, bk, degree, points, knots, T):
+        from shinro.trajectories.b_spline import BSpline
+        traj = BSpline(degree, points, knots, backend=bk)
+        traj.generate(duration=T)
+        return traj
+
+    def test_clamped_cubic_matches_bezier(self, bk):
+        """A clamped cubic B-spline over 4 control points IS a cubic Bezier."""
+        from shinro.trajectories.bezier_curve import BezierCurve
+        spline = self._make(bk, 3, self.CUBIC, self.KNOTS, 1.0)
+        bez = BezierCurve(self.CUBIC, backend=bk)
+        bez.generate(duration=1.0)
+        for t in (0.0, 0.2, 0.5, 0.8, 1.0):
+            sp, sv, sa = spline.position_at(t)
+            bp, bv, ba = bez.position_at(t)
+            assert np.allclose(_to_np(sp, bk), _to_np(bp, bk))
+            assert np.allclose(_to_np(sv, bk), _to_np(bv, bk))
+            assert np.allclose(_to_np(sa, bk), _to_np(ba, bk))
+
+    def test_endpoints_interpolated(self, bk):
+        """A clamped knot vector interpolates C(0) = P0 and C(T) = P_last."""
+        traj = self._make(bk, 3, self.CUBIC, self.KNOTS, 1.0)
+        pos0, _, _ = traj.position_at(0.0)
+        posT, _, _ = traj.position_at(1.0)
+        assert np.allclose(_to_np(pos0, bk), self.CUBIC[0])
+        assert np.allclose(_to_np(posT, bk), self.CUBIC[-1])
+
+    def test_boundary_velocities(self, bk):
+        """C'(0) = p/T (P1 - P0); C'(T) uses the last two control points."""
+        traj = self._make(bk, 3, self.CUBIC, self.KNOTS, 1.0)
+        _, vel0, _ = traj.position_at(0.0)
+        _, velT, _ = traj.position_at(1.0)
+        expected0 = 3.0 * (np.array(self.CUBIC[1]) - np.array(self.CUBIC[0]))
+        expectedT = 3.0 * (np.array(self.CUBIC[-1]) - np.array(self.CUBIC[-2]))
+        assert np.allclose(_to_np(vel0, bk), expected0)
+        assert np.allclose(_to_np(velT, bk), expectedT)
+
+    def test_derivative_of_position_is_velocity(self, bk):
+        """The returned velocity is the analytic derivative of the position."""
+        traj = self._make(bk, 3, self.CUBIC, self.KNOTS, 1.0)
+        eps = 1e-6
+        pos_plus = _to_np(traj.position_at(0.6 + eps)[0], bk)
+        pos_minus = _to_np(traj.position_at(0.6 - eps)[0], bk)
+        vel = _to_np(traj.position_at(0.6)[1], bk)
+        assert np.allclose((pos_plus - pos_minus) / (2 * eps), vel, atol=1e-4)
+
+    def test_derivative_of_velocity_is_acceleration(self, bk):
+        """The returned acceleration is the analytic derivative of the velocity."""
+        traj = self._make(bk, 3, self.CUBIC, self.KNOTS, 1.0)
+        eps = 1e-6
+        vel_plus = _to_np(traj.position_at(0.6 + eps)[1], bk)
+        vel_minus = _to_np(traj.position_at(0.6 - eps)[1], bk)
+        acc = _to_np(traj.position_at(0.6)[2], bk)
+        assert np.allclose((vel_plus - vel_minus) / (2 * eps), acc, atol=1e-4)
+
+    def test_partition_of_unity(self, bk):
+        """The Cox-de Boor basis functions sum to one over the domain."""
+        traj = self._make(bk, 3, self.CUBIC, self.KNOTS, 1.0)
+        for t in (0.0, 0.25, 0.5, 0.75, 1.0):
+            N = _to_np(traj._all_basis(t, 3), bk)
+            assert np.isclose(np.sum(N), 1.0)
+
+    def test_degree1_line(self, bk):
+        """A degree-1 spline over collinear points is a straight line, zero acceleration."""
+        traj = self._make(bk, 1, [[0.0], [1.0], [2.0]], [0.0, 0.0, 1.0, 2.0, 2.0], 2.0)
+        pos, vel, acc = traj.position_at(1.0)
+        assert np.allclose(_to_np(pos, bk)[0], 1.0)
+        assert np.allclose(_to_np(vel, bk)[0], 1.0)
+        assert np.allclose(_to_np(acc, bk)[0], 0.0)
+
+    def test_degree0_piecewise_constant(self, bk):
+        """A degree-0 spline is a step function with zero velocity and acceleration."""
+        traj = self._make(bk, 0, [[1.0], [2.0], [3.0]], [0.0, 1.0, 2.0, 3.0], 3.0)
+        pos, vel, acc = traj.position_at(1.5)
+        assert np.allclose(_to_np(pos, bk)[0], 2.0)
+        assert np.allclose(_to_np(vel, bk), 0.0)
+        assert np.allclose(_to_np(acc, bk), 0.0)
+
+    def test_duplicate_endpoints_zero_boundary_velocity(self, bk):
+        """Repeating the end control points pins the boundary velocity to zero."""
+        pts = [[0.0, 0.0], [0.0, 0.0], [1.0, 0.0], [1.0, 0.0]]
+        traj = self._make(bk, 3, pts, self.KNOTS, 1.0)
+        _, vel0, _ = traj.position_at(0.0)
+        _, velT, _ = traj.position_at(1.0)
+        assert np.allclose(_to_np(vel0, bk), 0.0)
+        assert np.allclose(_to_np(velT, bk), 0.0)
+
+    def test_uniform_knots_derivative_consistency(self, bk):
+        """On a non-clamped vector the reduced-knot derivatives match finite differences."""
+        knots = list(range(11))
+        pts = [[0.0], [1.0], [-1.0], [2.0], [0.0], [3.0], [1.0]]
+        traj = self._make(bk, 3, pts, knots, 10.0)
+        t, eps = 5.0, 1e-6
+        pos_plus = _to_np(traj.position_at(t + eps)[0], bk)
+        pos_minus = _to_np(traj.position_at(t - eps)[0], bk)
+        vel = _to_np(traj.position_at(t)[1], bk)
+        assert np.allclose((pos_plus - pos_minus) / (2 * eps), vel, atol=1e-4)
+
+    def test_time_clamped(self, bk):
+        """Time outside [0, T] is clamped to the nearest endpoint."""
+        traj = self._make(bk, 3, self.CUBIC, self.KNOTS, 1.0)
+        pos_before, _, _ = traj.position_at(-1.0)
+        pos_after, _, _ = traj.position_at(9.0)
+        assert np.allclose(_to_np(pos_before, bk), self.CUBIC[0])
+        assert np.allclose(_to_np(pos_after, bk), self.CUBIC[-1])
+
+    def test_ndimensional(self, bk):
+        """The spatial dimension is inferred from the control points."""
+        traj = self._make(bk, 3, self.CUBIC, self.KNOTS, 1.0)
+        pos, _, _ = traj.position_at(0.5)
+        assert _to_np(pos, bk).shape == (3,)
+
+    def test_ragged_control_points_raise(self, bk):
+        """Control points of differing dimension are a loud error."""
+        from shinro.trajectories.b_spline import BSpline
+        traj = BSpline(3, [[0.0, 0.0], [1.0, 1.0, 1.0]], [0.0, 0.0, 0.0, 1.0, 1.0, 1.0], backend=bk)
+        with pytest.raises(ValueError, match="same dimension"):
+            traj.generate(duration=1.0)
+
+    def test_too_few_points_raise(self, bk):
+        """A single control point is not a curve."""
+        from shinro.trajectories.b_spline import BSpline
+        traj = BSpline(1, [[0.0, 0.0]], [0.0, 0.0, 1.0, 1.0], backend=bk)
+        with pytest.raises(ValueError, match="at least 2"):
+            traj.generate(duration=1.0)
+
+    def test_bad_duration_raises(self, bk):
+        """A non-positive duration is a loud error."""
+        from shinro.trajectories.b_spline import BSpline
+        traj = BSpline(3, self.CUBIC, self.KNOTS, backend=bk)
+        with pytest.raises(ValueError, match="duration must be positive"):
+            traj.generate(duration=0.0)
+        with pytest.raises(ValueError, match="duration must be positive"):
+            traj.generate(duration=-1.0)
+
+    def test_knot_count_mismatch_raises(self, bk):
+        """A knot vector that is not len(control_points) + degree + 1 is an error."""
+        from shinro.trajectories.b_spline import BSpline
+        traj = BSpline(3, self.CUBIC, self.KNOTS[:-1], backend=bk)
+        with pytest.raises(ValueError, match="knot vector must hold"):
+            traj.generate(duration=1.0)
+
+    def test_non_monotone_knots_raise(self, bk):
+        """A nondecreasing knot vector is required."""
+        from shinro.trajectories.b_spline import BSpline
+        traj = BSpline(1, [[0.0], [1.0]], [0.0, 2.0, 1.0, 2.0], backend=bk)
+        with pytest.raises(ValueError, match="nondecreasing"):
+            traj.generate(duration=1.0)
+
+    def test_negative_degree_raises(self, bk):
+        """A negative polynomial degree is a loud error."""
+        from shinro.trajectories.b_spline import BSpline
+        traj = BSpline(-1, [[0.0], [1.0]], [0.0, 1.0], backend=bk)
+        with pytest.raises(ValueError, match="degree must be non-negative"):
+            traj.generate(duration=1.0)
+
+    def test_from_config_schedule(self, bk):
+        """from_config samples the curve into a (steps, d) waypoint schedule."""
+        from shinro.trajectories.b_spline import BSpline
+        schedule = BSpline.from_config(
+            {
+                "type": "bspline",
+                "dt": 0.1,
+                "duration": 1.0,
+                "degree": 3,
+                "control_points": [[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0]],
+                "knots": [0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            },
+            backend=bk,
+        )
+        arr = _to_np(schedule, bk)
+        assert arr.shape == (10, 2)
+        assert np.allclose(arr[0], [0.0, 0.0])
