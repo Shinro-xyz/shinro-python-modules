@@ -992,3 +992,166 @@ class TestSamplingHelpers:
         out = sample_segments(segments, 0.5, order=2)
         assert _to_np(out["position"], bk).shape == (4, 1)
         assert np.allclose(_to_np(out["position"], bk)[2], 1.0)
+
+
+def _make_waypoint_spline(cls, bk, start, wps, durations):
+    traj = cls(backend=bk)
+    traj.generate([start, *wps], list(durations))
+    return traj
+
+
+class TestAkima:
+    """Verify Akima: C1 pass-through, overshoot resistance, validation."""
+
+    POINTS = ((0.0, 0.0), (1.0, 1.0), (2.0, -1.0), (3.0, 1.0))
+    DURATIONS = (1.0, 1.0, 1.0)
+
+    def _make(self, bk):
+        from shinro.trajectories.waypoint_splines import Akima
+        return _make_waypoint_spline(Akima, bk, self.POINTS[0], self.POINTS[1:], self.DURATIONS)
+
+    def test_passes_through_waypoints(self, bk):
+        """The curve hits the start and every waypoint at its cumulative time."""
+        traj = self._make(bk)
+        assert np.allclose(_to_np(traj.position_at(0.0)[0], bk), self.POINTS[0])
+        t = 0.0
+        for i, d in enumerate(self.DURATIONS):
+            t += d
+            assert np.allclose(_to_np(traj.position_at(t)[0], bk), self.POINTS[i + 1])
+
+    def test_velocity_continuous_at_interior_waypoints(self, bk):
+        """Left/right velocities agree at every interior waypoint (C1)."""
+        traj = self._make(bk)
+        segs = [seg for (_, _, seg) in traj._segments]
+        for i in range(len(segs) - 1):
+            v_left = _to_np(segs[i].position_at(self.DURATIONS[i])[1], bk)
+            v_right = _to_np(segs[i + 1].position_at(0.0)[1], bk)
+            assert np.allclose(v_left, v_right)
+
+    def test_does_not_overshoot_step(self, bk):
+        """Akima stays inside the data range across a flat-then-step change."""
+        from shinro.trajectories.waypoint_splines import Akima
+        pts = [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [3.0, 1.0], [4.0, 1.0], [5.0, 1.0]]
+        traj = _make_waypoint_spline(Akima, bk, pts[0], pts[1:], [1.0] * 5)
+        ys = np.array([float(_to_np(traj.position_at(t)[0], bk)[1]) for t in np.linspace(0.0, 5.0, 501)])
+        assert ys.min() >= -1e-9
+        assert ys.max() <= 1.0 + 1e-9
+
+    def test_single_hop_is_linear(self, bk):
+        """With one interval there is no four-slope stencil — fall back to a line."""
+        from shinro.trajectories.waypoint_splines import Akima
+        traj = _make_waypoint_spline(Akima, bk, [0.0, 0.0], [[1.0, 1.0]], [1.0])
+        for t in (0.0, 0.25, 0.5, 1.0):
+            assert np.allclose(_to_np(traj.position_at(t)[0], bk), [t, t])
+        assert np.allclose(_to_np(traj.position_at(0.5)[2], bk), 0.0)
+
+    def test_ndimensional(self, bk):
+        from shinro.trajectories.waypoint_splines import Akima
+        traj = _make_waypoint_spline(Akima, bk, [0.0, 0.0, 0.0], [[1.0, 1.0, 1.0], [2.0, 0.0, 2.0]], [1.0, 1.0])
+        assert _to_np(traj.position_at(1.0)[0], bk).shape == (3,)
+
+    def test_validation(self, bk):
+        from shinro.trajectories.waypoint_splines import Akima
+        traj = Akima(backend=bk)
+        with pytest.raises(ValueError, match="at least 2"):
+            traj.generate([[0.0, 0.0]], [])
+        with pytest.raises(ValueError, match="hop durations"):
+            traj.generate([[0.0, 0.0], [1.0, 1.0]], [1.0, 1.0])
+        with pytest.raises(ValueError, match="must be positive"):
+            traj.generate([[0.0, 0.0], [1.0, 1.0]], [0.0])
+        with pytest.raises(ValueError, match="same dimension"):
+            traj.generate([[0.0, 0.0], [1.0, 1.0, 1.0]], [1.0])
+
+    def test_from_config_schedule_and_derivatives(self, bk):
+        """from_config returns positions (and the derivative dict when opted in)."""
+        from shinro.trajectories.waypoint_splines import Akima
+        cfg = {
+            "type": "akima",
+            "dt": 0.5,
+            "start": [0.0, 0.0],
+            "waypoints": [
+                {"duration": 1.0, "position": [1.0, 1.0]},
+                {"duration": 1.0, "position": [2.0, -1.0]},
+            ],
+        }
+        arr = _to_np(Akima.from_config(cfg, backend=bk), bk)
+        assert arr.shape == (4, 2)
+        deriv = Akima.from_config({**cfg, "derivatives": True}, backend=bk)
+        assert set(deriv) == {"position", "velocity", "acceleration"}
+        assert np.allclose(_to_np(deriv["position"], bk), arr)
+
+
+class TestCubicSpline:
+    """Verify CubicSpline: C2 pass-through, natural end conditions, validation."""
+
+    POINTS = ((0.0, 0.0), (1.0, 1.0), (2.0, -1.0), (3.0, 1.0))
+    DURATIONS = (1.0, 1.0, 1.0)
+
+    def _make(self, bk):
+        from shinro.trajectories.waypoint_splines import CubicSpline
+        return _make_waypoint_spline(CubicSpline, bk, self.POINTS[0], self.POINTS[1:], self.DURATIONS)
+
+    def test_passes_through_waypoints(self, bk):
+        traj = self._make(bk)
+        assert np.allclose(_to_np(traj.position_at(0.0)[0], bk), self.POINTS[0])
+        t = 0.0
+        for i, d in enumerate(self.DURATIONS):
+            t += d
+            assert np.allclose(_to_np(traj.position_at(t)[0], bk), self.POINTS[i + 1])
+
+    def test_velocity_continuous_at_interior_waypoints(self, bk):
+        """C1: left/right velocities agree at interior waypoints."""
+        traj = self._make(bk)
+        segs = [seg for (_, _, seg) in traj._segments]
+        for i in range(len(segs) - 1):
+            assert np.allclose(
+                _to_np(segs[i].position_at(self.DURATIONS[i])[1], bk),
+                _to_np(segs[i + 1].position_at(0.0)[1], bk),
+            )
+
+    def test_acceleration_continuous_at_interior_waypoints(self, bk):
+        """C2: left/right accelerations agree at interior waypoints."""
+        traj = self._make(bk)
+        segs = [seg for (_, _, seg) in traj._segments]
+        for i in range(len(segs) - 1):
+            assert np.allclose(
+                _to_np(segs[i].position_at(self.DURATIONS[i])[2], bk),
+                _to_np(segs[i + 1].position_at(0.0)[2], bk),
+                atol=1e-9,
+            )
+
+    def test_natural_end_acceleration_zero(self, bk):
+        """The natural conditions pin boundary acceleration to zero."""
+        traj = self._make(bk)
+        assert np.allclose(_to_np(traj.position_at(0.0)[2], bk), 0.0, atol=1e-9)
+        assert np.allclose(_to_np(traj.position_at(traj.T)[2], bk), 0.0, atol=1e-9)
+
+    def test_natural_step_overshoots(self, bk):
+        """Contrast with Akima: the global natural spline overshoots a step."""
+        from shinro.trajectories.waypoint_splines import CubicSpline
+        pts = [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [3.0, 1.0], [4.0, 1.0], [5.0, 1.0]]
+        traj = _make_waypoint_spline(CubicSpline, bk, pts[0], pts[1:], [1.0] * 5)
+        ys = np.array([float(_to_np(traj.position_at(t)[0], bk)[1]) for t in np.linspace(0.0, 5.0, 501)])
+        assert ys.min() < -1e-3 or ys.max() > 1.0 + 1e-3
+
+    def test_ndimensional(self, bk):
+        from shinro.trajectories.waypoint_splines import CubicSpline
+        traj = _make_waypoint_spline(CubicSpline, bk, [0.0, 0.0, 0.0], [[1.0, 1.0, 1.0], [2.0, 0.0, 2.0]], [1.0, 1.0])
+        assert _to_np(traj.position_at(1.0)[0], bk).shape == (3,)
+
+    def test_from_config_schedule_and_derivatives(self, bk):
+        from shinro.trajectories.waypoint_splines import CubicSpline
+        cfg = {
+            "type": "cubic_spline",
+            "dt": 0.5,
+            "start": [0.0, 0.0],
+            "waypoints": [
+                {"duration": 1.0, "position": [1.0, 1.0]},
+                {"duration": 1.0, "position": [2.0, -1.0]},
+            ],
+        }
+        arr = _to_np(CubicSpline.from_config(cfg, backend=bk), bk)
+        assert arr.shape == (4, 2)
+        deriv = CubicSpline.from_config({**cfg, "derivatives": True}, backend=bk)
+        assert set(deriv) == {"position", "velocity", "acceleration"}
+        assert np.allclose(_to_np(deriv["position"], bk), arr)

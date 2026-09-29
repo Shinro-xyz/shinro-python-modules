@@ -86,6 +86,8 @@ implement `generate(...)` and `position_at(t)`.
 | `bezier` | `BezierCurve` | `trajectories/bezier_curve.py` | `samples/trajectories/bezier_curve.toml` |
 | `bspline` | `BSpline` | `trajectories/b_spline.py` | `samples/trajectories/bspline.toml` |
 | `catmull_rom` | `CatmullRom` | `trajectories/catmull_rom.py` | `samples/trajectories/catmull_rom.toml` |
+| `akima` | `Akima` | `trajectories/waypoint_splines.py` | `samples/trajectories/akima.toml` |
+| `cubic_spline` | `CubicSpline` | `trajectories/waypoint_splines.py` | `samples/trajectories/cubic_spline.toml` |
 
 ### Reference derivatives
 

@@ -1,0 +1,23 @@
+type = "cubic_spline"
+dt = 0.02
+
+# Waypoint 0.
+start = [0.0, 0.0, 0.0]
+
+# Natural C2 pass-through (zero boundary acceleration). Each entry is reached
+# `duration` seconds after the previous waypoint.
+[[waypoints]]
+duration = 1.0
+position = [0.6, 1.2, 0.3]
+
+[[waypoints]]
+duration = 1.0
+position = [1.5, 1.5, 0.6]
+
+[[waypoints]]
+duration = 1.0
+position = [2.4, 0.9, 0.9]
+
+[[waypoints]]
+duration = 1.5
+position = [3.0, 0.0, 1.2]
