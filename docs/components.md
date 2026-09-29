@@ -85,6 +85,7 @@ implement `generate(...)` and `position_at(t)`.
 | `lissajous` | `Lissajous` | `trajectories/lissajous.py` | `samples/trajectories/lissajous_figure8.toml` |
 | `bezier` | `BezierCurve` | `trajectories/bezier_curve.py` | `samples/trajectories/bezier_curve.toml` |
 | `bspline` | `BSpline` | `trajectories/b_spline.py` | `samples/trajectories/bspline.toml` |
+| `catmull_rom` | `CatmullRom` | `trajectories/catmull_rom.py` | `samples/trajectories/catmull_rom.toml` |
 
 ## Physics engines
 

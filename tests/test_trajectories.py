@@ -730,3 +730,161 @@ class TestBSpline:
         arr = _to_np(schedule, bk)
         assert arr.shape == (10, 2)
         assert np.allclose(arr[0], [0.0, 0.0])
+
+
+class TestCatmullRom:
+    """Verify CatmullRom: C1 pass-through, tangent formula, endpoints, validation."""
+
+    START = (0.0, 0.0)
+    WPS = ((1.0, 1.0), (2.0, -1.0), (3.0, 1.0))
+    DURATIONS = (1.0, 1.0, 1.0)
+
+    def _make(self, bk, start=None, wps=None, durations=None, endpoint_tangent="zero"):
+        from shinro.trajectories.catmull_rom import CatmullRom
+        traj = CatmullRom(backend=bk)
+        traj.generate(
+            [self.START if start is None else start, *(self.WPS if wps is None else wps)],
+            list(self.DURATIONS if durations is None else durations),
+            endpoint_tangent,
+        )
+        return traj
+
+    @staticmethod
+    def _points(start, wps):
+        return [start] + list(wps)
+
+    def test_passes_through_waypoints(self, bk):
+        """The curve hits the start and every waypoint at its cumulative time."""
+        traj = self._make(bk)
+        pts = self._points(self.START, self.WPS)
+        assert np.allclose(_to_np(traj.position_at(0.0)[0], bk), pts[0])
+        t = 0.0
+        for i, d in enumerate(self.DURATIONS):
+            t += d
+            assert np.allclose(_to_np(traj.position_at(t)[0], bk), pts[i + 1])
+
+    def test_interior_tangent_formula(self, bk):
+        """Interior velocity is (P_{i+1} - P_{i-1}) / (d_{i-1} + d_i)."""
+        traj = self._make(bk)
+        pts = self._points(self.START, self.WPS)
+        for i in (1, 2):
+            want = (np.array(pts[i + 1]) - np.array(pts[i - 1])) / (
+                self.DURATIONS[i - 1] + self.DURATIONS[i]
+            )
+            got = _to_np(traj.position_at(sum(self.DURATIONS[:i]))[1], bk)
+            assert np.allclose(got, want)
+
+    def test_velocity_continuous_at_interior_waypoints(self, bk):
+        """The left/right velocities agree at every interior waypoint (C1)."""
+        traj = self._make(bk)
+        segs = [seg for (_, _, seg) in traj._segments]
+        for i in range(len(segs) - 1):
+            v_left = _to_np(segs[i].position_at(self.DURATIONS[i])[1], bk)
+            v_right = _to_np(segs[i + 1].position_at(0.0)[1], bk)
+            assert np.allclose(v_left, v_right)
+
+    def test_velocity_matches_finite_difference_across_joint(self, bk):
+        """A central difference across a C1 joint matches the analytic velocity."""
+        traj = self._make(bk)
+        t, eps = self.DURATIONS[0], 1e-6
+        p_plus = _to_np(traj.position_at(t + eps)[0], bk)
+        p_minus = _to_np(traj.position_at(t - eps)[0], bk)
+        vel = _to_np(traj.position_at(t)[1], bk)
+        assert np.allclose((p_plus - p_minus) / (2 * eps), vel, atol=1e-3)
+
+    def test_zero_endpoint_velocity_default(self, bk):
+        """The default endpoint tangent is zero (rest-to-rest ends)."""
+        traj = self._make(bk)
+        assert np.allclose(_to_np(traj.position_at(0.0)[1], bk), 0.0)
+        assert np.allclose(_to_np(traj.position_at(traj.T)[1], bk), 0.0)
+
+    def test_one_sided_endpoint_velocity(self, bk):
+        """``one_sided`` uses the classic non-zero Catmull-Rom end tangents."""
+        traj = self._make(bk, endpoint_tangent="one_sided")
+        pts = self._points(self.START, self.WPS)
+        v0 = (np.array(pts[1]) - np.array(pts[0])) / self.DURATIONS[0]
+        vn = (np.array(pts[-1]) - np.array(pts[-2])) / self.DURATIONS[-1]
+        assert np.allclose(_to_np(traj.position_at(0.0)[1], bk), v0)
+        assert np.allclose(_to_np(traj.position_at(traj.T)[1], bk), vn)
+
+    def test_collinear_equal_spacing_constant_velocity(self, bk):
+        """Collinear, equal-duration waypoints give a straight constant-velocity line."""
+        traj = self._make(
+            bk,
+            start=[0.0],
+            wps=[[1.0], [2.0], [3.0]],
+            durations=[1.0, 1.0, 1.0],
+            endpoint_tangent="one_sided",
+        )
+        for t in (0.0, 0.5, 1.5, 2.5, 3.0):
+            pos, vel, acc = traj.position_at(t)
+            assert np.allclose(_to_np(pos, bk)[0], t)
+            assert np.allclose(_to_np(vel, bk)[0], 1.0)
+            assert np.allclose(_to_np(acc, bk)[0], 0.0)
+
+    def test_ndimensional(self, bk):
+        """Position/velocity/acceleration keep the waypoint dimension."""
+        traj = self._make(
+            bk,
+            start=[0.0, 0.0, 0.0],
+            wps=[[1.0, 1.0, 1.0], [2.0, 0.0, 2.0]],
+            durations=[1.0, 1.0],
+        )
+        pos, vel, acc = traj.position_at(1.0)
+        assert _to_np(pos, bk).shape == (3,)
+        assert _to_np(vel, bk).shape == (3,)
+        assert _to_np(acc, bk).shape == (3,)
+
+    def test_too_few_waypoints_raise(self, bk):
+        """A single waypoint is not a curve."""
+        from shinro.trajectories.catmull_rom import CatmullRom
+        traj = CatmullRom(backend=bk)
+        with pytest.raises(ValueError, match="at least 2"):
+            traj.generate([[0.0, 0.0]], [])
+
+    def test_duration_count_mismatch_raises(self, bk):
+        """The hop-duration count must be one less than the waypoint count."""
+        from shinro.trajectories.catmull_rom import CatmullRom
+        traj = CatmullRom(backend=bk)
+        with pytest.raises(ValueError, match="hop durations"):
+            traj.generate([[0.0, 0.0], [1.0, 1.0]], [1.0, 1.0])
+
+    def test_non_positive_duration_raises(self, bk):
+        """Every hop duration must be positive."""
+        from shinro.trajectories.catmull_rom import CatmullRom
+        traj = CatmullRom(backend=bk)
+        with pytest.raises(ValueError, match="must be positive"):
+            traj.generate([[0.0, 0.0], [1.0, 1.0]], [0.0])
+
+    def test_ragged_waypoints_raise(self, bk):
+        """Waypoints of differing dimension are a loud error."""
+        from shinro.trajectories.catmull_rom import CatmullRom
+        traj = CatmullRom(backend=bk)
+        with pytest.raises(ValueError, match="same dimension"):
+            traj.generate([[0.0, 0.0], [1.0, 1.0, 1.0]], [1.0])
+
+    def test_bad_endpoint_tangent_raises(self, bk):
+        """An unknown endpoint_tangent value is a loud error."""
+        from shinro.trajectories.catmull_rom import CatmullRom
+        traj = CatmullRom(backend=bk)
+        with pytest.raises(ValueError, match="endpoint_tangent"):
+            traj.generate([[0.0, 0.0], [1.0, 1.0]], [1.0], endpoint_tangent="bogus")
+
+    def test_from_config_schedule(self, bk):
+        """from_config samples the curve into a (steps, d) waypoint schedule."""
+        from shinro.trajectories.catmull_rom import CatmullRom
+        schedule = CatmullRom.from_config(
+            {
+                "type": "catmull_rom",
+                "dt": 0.5,
+                "start": [0.0, 0.0],
+                "waypoints": [
+                    {"duration": 1.0, "position": [1.0, 1.0]},
+                    {"duration": 1.0, "position": [2.0, -1.0]},
+                ],
+            },
+            backend=bk,
+        )
+        arr = _to_np(schedule, bk)
+        assert arr.shape == (4, 2)
+        assert np.allclose(arr[0], [0.0, 0.0])
