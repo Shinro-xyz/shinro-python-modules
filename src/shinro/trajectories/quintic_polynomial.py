@@ -1,10 +1,10 @@
 
 from dataclasses import dataclass
-
-import numpy as np
+from typing import Any
 
 from shinro.components import ConfigDriven, TrajectoryGenerator
 from shinro.factories.registry import register_trajectory
+from shinro.trajectories.sampling import sample_segments
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend
 from shinro.utils.config_spec import strict_from_list
 
@@ -28,6 +28,7 @@ class QuinticSegmentsConfig:
 
     dt: float
     segments: list[dict]
+    derivatives: bool = False
     name: str = "quintic_segments"
 
 
@@ -194,7 +195,7 @@ class QuinticPolynomialConfigAdapter(ConfigDriven):
     Config = QuinticSegmentsConfig
 
     @classmethod
-    def from_config(cls, config, backend: ArrayBackend | None = None):
+    def from_config(cls, config, backend: ArrayBackend | None = None) -> Any:
         """Create a waypoint schedule from a TOML config dict or :class:`QuinticSegmentsConfig`.
 
         Config fields:
@@ -213,14 +214,15 @@ class QuinticPolynomialConfigAdapter(ConfigDriven):
             backend: Array backend. Defaults to NumpyBackend.
 
         Returns:
-            Array of shape (total_steps, N) with position waypoints.
+            Array of shape (total_steps, N) with position waypoints, or — when
+            ``derivatives`` is true — a dict of ``(total_steps, N)`` arrays
+            under ``"position"``, ``"velocity"``, and ``"acceleration"``.
         """
         bk = backend or NumpyBackend()
         cfg = cls.parse_config(config)
         segs = strict_from_list(QuinticSegmentConfig, cfg.segments, "quintic_segments.segment")
-        schedule = []
+        segments = []
         for seg in segs:
-            n_steps = int(np.round(seg.duration / cfg.dt))
             p0 = bk.array(seg.start)
             pf = bk.array(seg.end)
             start_vel = bk.array(seg.start_vel if seg.start_vel is not None else [0.0] * len(seg.start))
@@ -229,11 +231,9 @@ class QuinticPolynomialConfigAdapter(ConfigDriven):
             end_acc = bk.array(seg.end_acc if seg.end_acc is not None else [0.0] * len(seg.end))
             traj = QuinticPolynomial(backend=bk)
             traj.generate(p0, pf, seg.duration, start_vel, end_vel, start_acc, end_acc)
-            for k in range(n_steps):
-                t = k * cfg.dt
-                pos, _, _ = traj.position_at(t)
-                schedule.append(pos)
-        return bk.array(schedule)
+            segments.append((traj, seg.duration))
+        sampled = sample_segments(segments, cfg.dt, order=2 if cfg.derivatives else 0)
+        return sampled if cfg.derivatives else sampled["position"]
 
 
 @register_trajectory("waypoints")
@@ -267,7 +267,7 @@ class WaypointSchedule(ConfigDriven):
         wps = strict_from_list(WaypointConfig, cfg.waypoints, "waypoints.waypoint")
         schedule = []
         for wp in wps:
-            n_steps = int(np.round(wp.duration / cfg.dt))
+            n_steps = round(wp.duration / cfg.dt)
             schedule.extend([bk.array(wp.position)] * n_steps)
         return bk.array(schedule)
 
@@ -310,7 +310,7 @@ class PhaseSchedule(ConfigDriven):
         phases = strict_from_list(PhaseConfig, cfg.phases, "phase_list.phase")
         schedules: dict[str, list] = {}
         for phase in phases:
-            n_steps = int(np.round(phase.duration / cfg.dt))
+            n_steps = round(phase.duration / cfg.dt)
             for name, setpoint in phase.signals.items():
                 seq = schedules.setdefault(name, [])
                 arr = bk.array(setpoint)

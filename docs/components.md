@@ -87,6 +87,17 @@ implement `generate(...)` and `position_at(t)`.
 | `bspline` | `BSpline` | `trajectories/b_spline.py` | `samples/trajectories/bspline.toml` |
 | `catmull_rom` | `CatmullRom` | `trajectories/catmull_rom.py` | `samples/trajectories/catmull_rom.toml` |
 
+### Reference derivatives
+
+The curve and segment generators (`bezier`, `bspline`, `catmull_rom`,
+`lissajous`, `cubic_segments`, `quintic_segments`) accept
+`derivatives = true`, which makes `from_config` return a dict of stacked
+`(steps, N)` arrays — `position`, `velocity`, `acceleration` — instead of the
+position schedule. The default (positions only) is unchanged, so the
+closed-loop runner is unaffected. The shared helpers
+`shinro.trajectories.sample_schedule` / `sample_segments` build these directly
+from a generator (which exposes `position_at(t) -> (pos, vel, acc)`).
+
 ## Physics engines
 
 | Registered name | Class | File |
