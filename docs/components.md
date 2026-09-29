@@ -88,6 +88,8 @@ implement `generate(...)` and `position_at(t)`.
 | `catmull_rom` | `CatmullRom` | `trajectories/catmull_rom.py` | `samples/trajectories/catmull_rom.toml` |
 | `akima` | `Akima` | `trajectories/waypoint_splines.py` | `samples/trajectories/akima.toml` |
 | `cubic_spline` | `CubicSpline` | `trajectories/waypoint_splines.py` | `samples/trajectories/cubic_spline.toml` |
+| `min_snap` | `MinSnapPolynomial` | `trajectories/min_snap.py` | `samples/trajectories/min_snap.toml` |
+| `circular_arc` | `CircularArc` | `trajectories/circular_arc.py` | `samples/trajectories/circular_arc.toml` |
 
 ### Reference derivatives
 

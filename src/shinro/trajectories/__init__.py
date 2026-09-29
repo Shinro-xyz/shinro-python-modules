@@ -14,6 +14,8 @@ Available generators:
     CatmullRom        — C¹ cubic Hermite through an ordered waypoint list
     Akima             — overshoot-resistant C¹ waypoint spline
     CubicSpline       — natural C² waypoint spline
+    MinSnapPolynomial — 7th-order (minimum-snap) point-to-point
+    CircularArc       — analytic circular / helical arc
 
 Sampling helpers:
     sample_schedule / sample_segments — stacked (steps, N) position/velocity/
@@ -22,8 +24,10 @@ Sampling helpers:
 from .b_spline import BSpline
 from .bezier_curve import BezierCurve
 from .catmull_rom import CatmullRom
+from .circular_arc import CircularArc
 from .cubic_polynomial import CubicPolynomial
 from .lissajous import Lissajous
+from .min_snap import MinSnapPolynomial
 from .quintic_polynomial import QuinticPolynomial
 from .sampling import sample_schedule, sample_segments
 from .waypoint_splines import Akima, CubicSpline
@@ -31,7 +35,9 @@ from .waypoint_splines import Akima, CubicSpline
 __all__ = [
     "CubicPolynomial",
     "QuinticPolynomial",
+    "MinSnapPolynomial",
     "Lissajous",
+    "CircularArc",
     "BezierCurve",
     "BSpline",
     "CatmullRom",

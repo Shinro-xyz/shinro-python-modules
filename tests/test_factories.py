@@ -239,6 +239,20 @@ class TestTrajectoryFactory:
         schedule = factory.create(backend=bk)
         assert _to_np(schedule, bk).shape[1] == 3
 
+    def test_create_min_snap(self, bk):
+        """TrajectoryFactory creates a minimum-snap schedule from the shipped sample."""
+        from shinro.factories.trajectory_factory import TrajectoryFactory
+        factory = TrajectoryFactory("samples/trajectories/min_snap.toml")
+        schedule = factory.create(backend=bk)
+        assert _to_np(schedule, bk).shape[1] == 3
+
+    def test_create_circular_arc(self, bk):
+        """TrajectoryFactory creates a circular-arc schedule from the shipped sample."""
+        from shinro.factories.trajectory_factory import TrajectoryFactory
+        factory = TrajectoryFactory("samples/trajectories/circular_arc.toml")
+        schedule = factory.create(backend=bk)
+        assert _to_np(schedule, bk).shape[1] == 3
+
     def test_create_unknown_type(self, tmp_path):
         """TrajectoryFactory raises KeyError for an unknown trajectory type."""
         from shinro.factories.trajectory_factory import TrajectoryFactory

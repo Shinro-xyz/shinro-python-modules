@@ -1155,3 +1155,147 @@ class TestCubicSpline:
         deriv = CubicSpline.from_config({**cfg, "derivatives": True}, backend=bk)
         assert set(deriv) == {"position", "velocity", "acceleration"}
         assert np.allclose(_to_np(deriv["position"], bk), arr)
+
+
+class TestMinSnap:
+    """Verify MinSnapPolynomial: rest-to-rest closed form, boundary conditions."""
+
+    def _make(self, bk, p0, pf, T, **boundaries):
+        from shinro.trajectories.min_snap import MinSnapPolynomial
+        traj = MinSnapPolynomial(backend=bk)
+        traj.generate(bk.array(p0), bk.array(pf), T, **boundaries)
+        return traj
+
+    def test_rest_to_rest_matches_closed_form(self, bk):
+        """All-zero boundaries reduce to p0 + (pf-p0)(35s^4 - 84s^5 + 70s^6 - 20s^7)."""
+        p0, pf, T = [0.0, 1.0], [2.0, -1.0], 2.0
+        traj = self._make(bk, p0, pf, T)
+        for t in (0.0, 0.4, 1.0, 1.6, 2.0):
+            s = t / T
+            want = np.array(p0) + (np.array(pf) - np.array(p0)) * (
+                35 * s**4 - 84 * s**5 + 70 * s**6 - 20 * s**7
+            )
+            assert np.allclose(_to_np(traj.position_at(t)[0], bk), want)
+
+    def test_endpoints_interpolated(self, bk):
+        traj = self._make(bk, [0.0, 0.0], [1.0, 2.0], 1.5)
+        assert np.allclose(_to_np(traj.position_at(0.0)[0], bk), [0.0, 0.0])
+        assert np.allclose(_to_np(traj.position_at(1.5)[0], bk), [1.0, 2.0])
+
+    def test_rest_to_rest_zero_boundary_velocity_acceleration(self, bk):
+        """Zero boundary derivatives pin v and a to zero at both ends."""
+        traj = self._make(bk, [0.0], [1.0], 2.0)
+        for t, which in ((0.0, 1), (2.0, 1), (0.0, 2), (2.0, 2)):
+            assert np.allclose(_to_np(traj.position_at(t)[which], bk), 0.0, atol=1e-9)
+
+    def test_nonzero_boundary_velocity(self, bk):
+        """A supplied start velocity is honoured without moving the endpoints."""
+        traj = self._make(bk, [0.0], [1.0], 2.0, start_vel=bk.array([0.5]))
+        assert np.allclose(_to_np(traj.position_at(0.0)[1], bk), 0.5, atol=1e-9)
+        assert np.allclose(_to_np(traj.position_at(0.0)[0], bk), 0.0)
+        assert np.allclose(_to_np(traj.position_at(2.0)[0], bk), 1.0)
+
+    def test_derivative_of_position_is_velocity(self, bk):
+        traj = self._make(bk, [0.0], [1.0], 2.0)
+        eps = 1e-6
+        p_plus = _to_np(traj.position_at(0.8 + eps)[0], bk)
+        p_minus = _to_np(traj.position_at(0.8 - eps)[0], bk)
+        assert np.allclose((p_plus - p_minus) / (2 * eps), _to_np(traj.position_at(0.8)[1], bk), atol=1e-4)
+
+    def test_bad_duration_raises(self, bk):
+        from shinro.trajectories.min_snap import MinSnapPolynomial
+        traj = MinSnapPolynomial(backend=bk)
+        with pytest.raises(ValueError, match="duration must be positive"):
+            traj.generate(bk.array([0.0]), bk.array([1.0]), 0.0)
+
+    def test_from_config_schedule_and_derivatives(self, bk):
+        from shinro.trajectories.min_snap import MinSnapPolynomial
+        cfg = {"type": "min_snap", "dt": 0.5, "start": [0.0, 0.0], "end": [1.0, 1.0], "duration": 1.0}
+        arr = _to_np(MinSnapPolynomial.from_config(cfg, backend=bk), bk)
+        assert arr.shape == (2, 2)
+        deriv = MinSnapPolynomial.from_config({**cfg, "derivatives": True}, backend=bk)
+        assert set(deriv) == {"position", "velocity", "acceleration"}
+        assert np.allclose(_to_np(deriv["position"], bk), arr)
+
+
+class TestCircularArc:
+    """Verify CircularArc: constant radius, analytic speed/accel, helix, validation."""
+
+    def _make(self, bk, center, start, T, sweep, normal=None, pitch=0.0):
+        from shinro.trajectories.circular_arc import CircularArc
+        traj = CircularArc(backend=bk)
+        traj.generate(center, start, T, sweep, normal=normal, pitch=pitch)
+        return traj
+
+    def test_radius_constant(self, bk):
+        traj = self._make(bk, [0.0, 0.0, 0.0], [0.5, 0.0, 0.0], 1.0, np.pi / 2)
+        for t in (0.0, 0.25, 0.5, 0.75, 1.0):
+            pos = _to_np(traj.position_at(t)[0], bk)
+            assert np.isclose(np.linalg.norm(pos), 0.5)
+
+    def test_endpoints_quarter_turn(self, bk):
+        traj = self._make(bk, [0.0, 0.0, 0.0], [0.5, 0.0, 0.0], 1.0, np.pi / 2)
+        assert np.allclose(_to_np(traj.position_at(0.0)[0], bk), [0.5, 0.0, 0.0])
+        assert np.allclose(_to_np(traj.position_at(1.0)[0], bk), [0.0, 0.5, 0.0], atol=1e-12)
+
+    def test_full_turn_returns_to_start(self, bk):
+        traj = self._make(bk, [0.0, 0.0, 0.0], [0.5, 0.0, 0.0], 1.0, 2 * np.pi)
+        assert np.allclose(_to_np(traj.position_at(1.0)[0], bk), [0.5, 0.0, 0.0], atol=1e-12)
+
+    def test_constant_speed_and_centripetal_acceleration(self, bk):
+        """Speed is r*|omega| and acceleration points at the centre (r*omega^2)."""
+        radius, sweep, T = 0.5, np.pi / 2, 1.0
+        omega = sweep / T
+        traj = self._make(bk, [0.0, 0.0, 0.0], [radius, 0.0, 0.0], T, sweep)
+        for t in (0.2, 0.5, 0.8):
+            pos = _to_np(traj.position_at(t)[0], bk)
+            vel = _to_np(traj.position_at(t)[1], bk)
+            acc = _to_np(traj.position_at(t)[2], bk)
+            assert np.isclose(np.linalg.norm(vel), radius * omega)
+            assert np.isclose(np.linalg.norm(acc), radius * omega**2)
+            assert np.allclose(acc / np.linalg.norm(acc), -pos / np.linalg.norm(pos))
+
+    def test_tilted_plane(self, bk):
+        """A non-default normal tilts the arc plane; the radius is preserved."""
+        traj = self._make(
+            bk, [0.0, 0.0, 0.0], [0.5, 0.0, 0.0], 1.0, 2 * np.pi, normal=[0.0, 1.0, 0.0]
+        )
+        # rotating about +y takes (0.5,0,0) out of the xy-plane
+        end = _to_np(traj.position_at(1.0)[0], bk)
+        assert np.isclose(np.linalg.norm(end), 0.5)
+        assert np.allclose(end, [0.5, 0.0, 0.0], atol=1e-12)
+
+    def test_helix_pitch(self, bk):
+        traj = self._make(bk, [0.0, 0.0, 0.0], [0.5, 0.0, 0.0], 1.0, 2 * np.pi, pitch=0.1)
+        end = _to_np(traj.position_at(1.0)[0], bk) - _to_np(traj.position_at(0.0)[0], bk)
+        assert np.isclose(end[2], 0.1)
+
+    def test_validation(self, bk):
+        from shinro.trajectories.circular_arc import CircularArc
+        traj = CircularArc(backend=bk)
+        with pytest.raises(ValueError, match="duration must be positive"):
+            traj.generate([0.0, 0.0, 0.0], [0.5, 0.0, 0.0], 0.0, 1.0)
+        with pytest.raises(ValueError, match="3-D"):
+            traj.generate([0.0, 0.0], [0.5, 0.0], 1.0, 1.0)
+        with pytest.raises(ValueError, match="non-zero"):
+            traj.generate([0.0, 0.0, 0.0], [0.5, 0.0, 0.0], 1.0, 1.0, normal=[0.0, 0.0, 0.0])
+        with pytest.raises(ValueError, match="differ"):
+            traj.generate([0.0, 0.0, 0.0], [0.0, 0.0, 0.0], 1.0, 1.0)
+        with pytest.raises(ValueError, match="perpendicular"):
+            traj.generate([0.0, 0.0, 0.0], [0.5, 0.0, 0.0], 1.0, 1.0, normal=[1.0, 0.0, 0.0])
+
+    def test_from_config_schedule_and_derivatives(self, bk):
+        from shinro.trajectories.circular_arc import CircularArc
+        cfg = {
+            "type": "circular_arc",
+            "dt": 0.1,
+            "center": [0.0, 0.0, 0.0],
+            "start": [0.5, 0.0, 0.0],
+            "duration": 1.0,
+            "sweep_angle": np.pi / 2,
+        }
+        arr = _to_np(CircularArc.from_config(cfg, backend=bk), bk)
+        assert arr.shape == (10, 3)
+        deriv = CircularArc.from_config({**cfg, "derivatives": True}, backend=bk)
+        assert set(deriv) == {"position", "velocity", "acceleration"}
+        assert np.allclose(_to_np(deriv["position"], bk), arr)
