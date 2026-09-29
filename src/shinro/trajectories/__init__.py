@@ -20,6 +20,13 @@ Available generators:
 Sampling helpers:
     sample_schedule / sample_segments — stacked (steps, N) position/velocity/
         acceleration schedules (the ``derivatives`` config opt-in uses them).
+
+Motion limits:
+    limit_trajectory / time_scale_factor — uniform (constant) time scaling: the
+        same path traversed k times slower, for per-component velocity /
+        acceleration limits (TimeScaled).
+    s_curve_limit / s_curve_horizon — min-jerk (S-curve) rest-to-rest time law
+        that also bounds jerk (SCurveScaled).
 """
 from .b_spline import BSpline
 from .bezier_curve import BezierCurve
@@ -30,6 +37,14 @@ from .lissajous import Lissajous
 from .min_snap import MinSnapPolynomial
 from .quintic_polynomial import QuinticPolynomial
 from .sampling import sample_schedule, sample_segments
+from .time_scaling import (
+    SCurveScaled,
+    TimeScaled,
+    limit_trajectory,
+    s_curve_horizon,
+    s_curve_limit,
+    time_scale_factor,
+)
 from .waypoint_splines import Akima, CubicSpline
 
 __all__ = [
@@ -45,4 +60,10 @@ __all__ = [
     "CubicSpline",
     "sample_schedule",
     "sample_segments",
+    "limit_trajectory",
+    "time_scale_factor",
+    "TimeScaled",
+    "s_curve_limit",
+    "s_curve_horizon",
+    "SCurveScaled",
 ]
