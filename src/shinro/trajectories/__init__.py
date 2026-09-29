@@ -10,10 +10,12 @@ Available generators:
     QuinticPolynomial — 5th-order, position + velocity + acceleration continuity
     Lissajous         — odd-harmonic rest-to-rest figure, orientable via R
     BezierCurve       — Bernstein curve over an arbitrary control-point list
+    BSpline           — Cox–de Boor B-spline over a knot vector and control polygon
 """
+from .b_spline import BSpline
 from .bezier_curve import BezierCurve
 from .cubic_polynomial import CubicPolynomial
 from .lissajous import Lissajous
 from .quintic_polynomial import QuinticPolynomial
 
-__all__ = ["CubicPolynomial", "QuinticPolynomial", "Lissajous", "BezierCurve"]
+__all__ = ["CubicPolynomial", "QuinticPolynomial", "Lissajous", "BezierCurve", "BSpline"]
