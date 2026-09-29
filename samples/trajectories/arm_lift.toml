@@ -1,0 +1,23 @@
+type = "waypoints"
+dt = 0.02
+
+# Hold each position for `duration` seconds (piecewise-constant).
+[[waypoints]]
+position = [0.0, 0.0, 0.0]
+duration = 1.0
+
+[[waypoints]]
+position = [0.0, 0.0, 0.3]
+duration = 2.0
+
+[[waypoints]]
+position = [0.2, 0.0, 0.3]
+duration = 1.5
+
+[[waypoints]]
+position = [0.0, 0.0, 0.3]
+duration = 1.0
+
+[[waypoints]]
+position = [0.0, 0.0, 0.0]
+duration = 1.5

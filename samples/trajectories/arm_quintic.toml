@@ -1,0 +1,21 @@
+type = "quintic_segments"
+dt = 0.02
+
+# Each segment pins position, velocity, and acceleration at both ends; any
+# boundary derivative omitted defaults to zero (rest-to-rest).
+[[segments]]
+start = [0.0, 0.0, 0.0]
+end = [0.0, 0.08, 0.05]
+duration = 1.0
+
+[[segments]]
+start = [0.0, 0.08, 0.05]
+end = [0.0, 0.16, 0.10]
+duration = 1.0
+start_vel = [0.0, 0.08, 0.05]
+end_vel = [0.0, 0.08, 0.05]
+
+[[segments]]
+start = [0.0, 0.16, 0.10]
+end = [0.0, 0.0, 0.0]
+duration = 1.5
