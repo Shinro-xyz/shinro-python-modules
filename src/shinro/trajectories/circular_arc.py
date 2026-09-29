@@ -46,20 +46,22 @@ class CircularArcConfig:
 class CircularArc(TrajectoryGenerator):
     r"""Circular arc (optionally helical) around a centre.
 
-    With :math:`r = \text{start} - \text{center}`, unit normal :math:`\hat{n}`
-    (:math:`r \perp \hat{n}`), angular rate :math:`\omega =
-    \theta_\text{sweep}/T`, and :math:`\theta(t) = \omega t`:
+    With :math:`R = |\text{start} - c|`, unit in-plane basis
+    :math:`\hat{u} = (\text{start} - c)/R` and :math:`\hat{v} = \hat{n} \times
+    \hat{u}` (unit normal :math:`\hat{n}`, :math:`\hat{u} \perp \hat{n}`),
+    angular rate :math:`\omega = \theta_\text{sweep}/T`, and
+    :math:`\theta(t) = \omega t`:
 
     .. math::
 
-        p(t) &= c + r\cos\theta + (\hat{n} \times r)\sin\theta
+        p(t) &= c + R\bigl(\hat{u}\cos\theta + \hat{v}\sin\theta\bigr)
             + \hat{n}\,\frac{\text{pitch}}{2\pi}\,\theta, \\
-        \dot{p}(t) &= \omega\bigl(-r\sin\theta + (\hat{n} \times r)\cos\theta
-            \bigr) + \hat{n}\,\frac{\omega\,\text{pitch}}{2\pi}, \\
-        \ddot{p}(t) &= -\omega^2\bigl(r\cos\theta
-            + (\hat{n} \times r)\sin\theta\bigr).
+        \dot{p}(t) &= R\,\omega\bigl(-\hat{u}\sin\theta
+            + \hat{v}\cos\theta\bigr) + \hat{n}\,\frac{\omega\,\text{pitch}}{2\pi}, \\
+        \ddot{p}(t) &= -R\,\omega^2\bigl(\hat{u}\cos\theta
+            + \hat{v}\sin\theta\bigr).
 
-    The speed is constant :math:`\omega r` (plus the axial component) and the
+    The speed is constant :math:`R\omega` (plus the axial component) and the
     acceleration points at the centre — an exact circle, no solve.
 
     .. math::
@@ -125,8 +127,9 @@ class CircularArc(TrajectoryGenerator):
             raise ValueError("CircularArc: start - center must be perpendicular to normal")
 
         self.center = center
-        self.r_vec = r_vec
-        self.perp_dir = bk.cross(n_unit, r_vec)  # in-plane, leads r_vec by 90 deg
+        self.radius = radius  # R
+        self.u = r_vec / radius  # unit, points at `start` (angle 0)
+        self.v = bk.cross(n_unit, self.u)  # unit, leads u by 90 deg in-plane
         self.normal = n_unit
         self.omega = sweep_angle / duration
         self.pitch = pitch
@@ -146,13 +149,13 @@ class CircularArc(TrajectoryGenerator):
         theta = self.omega * t
         c = self.bk.cos(theta)
         s = self.bk.sin(theta)
-        rot = self.r_vec * c + self.perp_dir * s
+        planar = (self.u * c + self.v * s) * self.radius  # R (u cos + v sin)
         axial = self.normal * (self.pitch * theta / (2.0 * math.pi))
-        pos = self.center + rot + axial
-        vel = (-self.r_vec * s + self.perp_dir * c) * self.omega + self.normal * (
+        pos = self.center + planar + axial
+        vel = (-self.u * s + self.v * c) * (self.radius * self.omega) + self.normal * (
             self.pitch * self.omega / (2.0 * math.pi)
         )
-        acc = -rot * (self.omega**2)
+        acc = -planar * (self.omega**2)
         return pos, vel, acc
 
     @classmethod
