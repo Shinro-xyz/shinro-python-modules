@@ -72,7 +72,8 @@ class PhasesConfig:
     name: str = "phase_list"
 
 
-@register_trajectory("quintic_segments")
+# The registered `quintic_segments` entry point is the adapter below (it owns
+# the segment-list `from_config`); this class is the generator it instantiates.
 class QuinticPolynomial(TrajectoryGenerator):
     """5th-order polynomial trajectory generator.
 
