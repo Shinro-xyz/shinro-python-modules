@@ -84,6 +84,7 @@ implement `generate(...)` and `position_at(t)`.
 | `phase_list` | `PhaseSchedule` | `trajectories/quintic_polynomial.py` | `samples/trajectories/pick_and_place.toml` |
 | `lissajous` | `Lissajous` | `trajectories/lissajous.py` | `samples/trajectories/lissajous_figure8.toml` |
 | `bezier` | `BezierCurve` | `trajectories/bezier_curve.py` | `samples/trajectories/bezier_curve.toml` |
+| `bspline` | `BSpline` | `trajectories/b_spline.py` | `samples/trajectories/bspline.toml` |
 
 ## Physics engines
 
