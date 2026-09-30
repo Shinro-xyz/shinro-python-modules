@@ -127,8 +127,7 @@ jobs:
       - run: make test-functional
 
   # ---------------------------------------------------------------------------
-  # Full-loop physics-backed suite (MuJoCo + the tracked vendor/lekiwi-sim
-  # assets).
+  # Full-loop physics-backed suite (MuJoCo required).
   # Excluded from the default run by the `integration` marker.
   # ---------------------------------------------------------------------------
   integration:

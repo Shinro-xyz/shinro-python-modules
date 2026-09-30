@@ -125,7 +125,18 @@ class TestEngineManifestEquivalence:
             warnings.simplefilter("error", DeprecationWarning)  # no legacy fallback
             sim = RobotSim(str(resolve_config_path("samples/robot_config.toml")))
         assert isinstance(sim.engine, MuJoCoEngine)
-        assert set(sim.plants) == {"arm", "base"}
+        assert set(sim.plants) == {"pendulum"}
+
+    def test_shipped_manifest_runs(self):
+        """The shipped example manifest (double pendulum) steps under MuJoCo."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            sim = RobotSim(str(resolve_config_path("samples/robot_config.toml")))
+        for _ in range(5):
+            sim.get_plant("pendulum").step(np.array([0.1, -0.1]))
+        state = np.asarray(sim.get_plant("pendulum").get_state())
+        assert state.shape == (4,)
+        assert np.all(np.isfinite(state))
 
 
 def test_register_engine_enforces_config():

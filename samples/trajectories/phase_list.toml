@@ -1,0 +1,25 @@
+# FILE: samples/trajectories/phase_list.toml
+# Multi-signal feedforward schedule: each phase holds a constant vector per
+# named signal for `duration` seconds. Use it for open-loop scripts (a
+# pick-and-place sequence, a gait phase table) where the schedule IS the
+# control — no feedback controller or estimator is involved.
+type = "phase_list"
+dt = 0.02
+
+[[phases]]
+duration = 1.0
+[phases.signals]
+a = [0.0, 0.0, 0.0]
+b = [0.0]
+
+[[phases]]
+duration = 1.0
+[phases.signals]
+a = [1.0, 0.0, 0.0]
+b = [0.5]
+
+[[phases]]
+duration = 1.5
+[phases.signals]
+a = [0.0, 0.0, 0.0]
+b = [0.0]

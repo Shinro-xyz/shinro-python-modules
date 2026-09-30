@@ -1,14 +1,16 @@
+# Pyright's useLibraryCodeForTypes infers mujoco's types from its shim .py files,
+# which do not expose the C-extension symbols (MjModel, mj_step, ...) and the
+# package ships no py.typed/stubs. Those are false positives: the project's
+# typechecker is pyrefly, and this module is outside its scope.
+# pyright: reportAttributeAccessIssue=false
+
 from dataclasses import dataclass
-from pathlib import Path
 
 import mujoco
 import numpy as np
 
 from shinro.components import PhysicsEngine
 from shinro.factories.registry import register_engine
-
-HERE = Path(__file__).parent.parent
-MJCF_PATH = str(HERE / "lekiwi-sim" / "mjcf_lcmm_robot.xml")
 
 
 @dataclass(frozen=True)
@@ -57,17 +59,19 @@ class MuJoCoEngine(PhysicsEngine):
         from shinro.utils.config_resolver import resolve_config_path
 
         return cls(
-            model_path=str(resolve_config_path(cfg.model)) if cfg.model is not None else MJCF_PATH,
+            model_path=str(resolve_config_path(cfg.model)) if cfg.model is not None else None,
             dt=cfg.dt,
             xml_string=cfg.xml_string,
             assets=assets,
         )
 
-    def __init__(self, model_path: str = MJCF_PATH, dt: float = 0.02, xml_string: str = None, assets: dict = None):
+    def __init__(self, model_path: str | None = None, dt: float = 0.02, xml_string: str | None = None, assets: dict | None = None):
         if xml_string is not None:
             self.model = mujoco.MjModel.from_xml_string(xml_string, assets=assets)
-        else:
+        elif model_path is not None:
             self.model = mujoco.MjModel.from_xml_path(model_path)
+        else:
+            raise ValueError("MuJoCoEngine requires either 'model' (a path) or 'xml_string'")
         self.data  = mujoco.MjData(self.model)
         self.model.opt.timestep = dt
         self._dt = dt

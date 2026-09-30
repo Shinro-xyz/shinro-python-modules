@@ -1,7 +1,6 @@
 # MPPI closed-loop compile scenario: KF + MPPI on the holonomic base.
 #
-# Unlike mppi_base_tracking.toml (a MuJoCo sim scenario with a sim-backed
-# [plant] name), this one is compile-ready:
+# A compile-ready scenario:
 #   * [plant] type/config lets the compile pipeline build the plant and derive
 #     the model, which is what wires MPPI's dynamics/cost (attach_plant).
 #   * MPPI's sampled perturbations arrive as a free C-ABI `epsilon` port of

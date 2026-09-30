@@ -2,18 +2,11 @@
 
 import pytest
 
-from shinro.controllers.lqr import LQR
-from shinro.controllers.pid import PIDController
-from shinro.estimators.kalman_filter import KalmanFilter
 from shinro.factories import ScenarioFactory
 
 pytestmark = [pytest.mark.integration]
 
 SCENARIOS = [
-    "tests/integration/scenarios/base_tracking.toml",
-    "tests/integration/scenarios/arm_cartesian.toml",
-    "tests/integration/scenarios/pick_and_place.toml",
-    "tests/integration/scenarios/adversarial_nan.toml",
     "tests/integration/scenarios/pendulum_balance.toml",
     "tests/integration/scenarios/cartpole_balance.toml",
 ]
@@ -42,30 +35,6 @@ class TestScenarioFactory:
             assert scenario.sim is None
             assert scenario.plant.__class__.__name__ == plant_cfg["type"]
 
-    def test_base_tracking_composes_loop(self, mujoco_available):
-        """Base tracking wires a concrete LQR + Kalman into the loop."""
-        scenario = ScenarioFactory("tests/integration/scenarios/base_tracking.toml").build()
-        assert isinstance(scenario.controller, LQR)
-        assert isinstance(scenario.estimator, KalmanFilter)
-        assert scenario.estimator.A.shape[0] == 3
-        assert scenario.controller.B.shape[1] == 3
-
-    def test_arm_cartesian_composes_loop(self, mujoco_available):
-        """Arm Cartesian wires a concrete PID + Kalman (6D) into the loop."""
-        scenario = ScenarioFactory("tests/integration/scenarios/arm_cartesian.toml").build()
-        assert isinstance(scenario.controller, PIDController)
-        assert isinstance(scenario.estimator, KalmanFilter)
-        assert scenario.estimator.A.shape[0] == 6
-        assert len(scenario.controller.kp) == 6
-
-    def test_pick_and_place_is_feedforward(self, mujoco_available):
-        """Pick-and-place has no feedback controller/estimator — schedule drives."""
-        scenario = ScenarioFactory("tests/integration/scenarios/pick_and_place.toml").build()
-        assert scenario.controller is None
-        assert scenario.estimator is None
-        assert isinstance(scenario.trajectory, dict)
-        assert set(scenario.trajectory.keys()) == {"arm", "base", "jaw"}
-
     def test_pendulum_composes_plant_only_loop(self, mujoco_available):
         """Pendulum balance is a plant-only loop: no sim, derived 2D model, seeded state."""
         scenario = ScenarioFactory("tests/integration/scenarios/pendulum_balance.toml").build()
@@ -87,7 +56,7 @@ class TestDimensionValidation:
     """Mismatched component dimensions are caught at build time."""
 
     def test_estimator_dimension_mismatch_raises(self, mujoco_available, tmp_path):
-        """A 6D estimator on a 3D plant raises ValueError."""
+        """A 6D estimator on the 4D double-pendulum plant raises ValueError."""
         import textwrap
 
         bad = tmp_path / "bad_est.toml"
@@ -99,11 +68,8 @@ class TestDimensionValidation:
                 duration = 1.0
                 dt = 0.02
 
-                [physics]
-                free_joint = true
-
                 [plant]
-                name = "base"
+                name = "pendulum"
 
                 [controller]
                 type = "LQR"
@@ -137,9 +103,6 @@ class TestDimensionValidation:
                 name = "bad_plant"
                 duration = 1.0
                 dt = 0.02
-
-                [physics]
-                free_joint = true
 
                 [plant]
                 name = "nonexistent"

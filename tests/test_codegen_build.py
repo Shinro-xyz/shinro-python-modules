@@ -1,7 +1,7 @@
 """Generic composed-graph builder: equivalence with the shipped generators.
 
 The generic :func:`shinro.codegen.build.build_composed_graph` must produce a
-graph byte-identical to the LeKiwi-specific ``scripts/gen_base.py`` when given
+graph byte-identical to the shipped ``scripts/gen_base.py`` when given
 the same configs and dims — this is the refactor-fidelity guard: the generic
 path is a faithful generalization, not a reimplementation. It also proves the
 two-pass state discovery works for components with recurrent state (PID's

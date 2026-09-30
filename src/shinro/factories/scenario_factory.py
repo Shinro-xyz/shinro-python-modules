@@ -123,7 +123,7 @@ class ScenarioFactory:
 
     Config sections:
         [scenario]    name, description, duration, dt, tolerance, input_limits
-        [physics]     free_joint, model_path
+        [physics]     preset, xml
         [plant]       name (sim-backed) OR type + config + initial_state (plant-only)
         [controller]  type, config (optional)
         [estimator]   type, config (optional)
@@ -135,9 +135,9 @@ class ScenarioFactory:
     Two modes:
 
     1. **Sim-backed** (default): the plant is looked up by ``[plant].name`` on
-       the ``RobotSim`` built from ``[sim]``. When ``[physics].free_joint`` is
-       set, the LeKiwi MJCF is rewritten so the arm hangs off a mobile
-       free-jointed base.
+       the ``RobotSim`` built from ``[sim]``. ``[physics]`` may override the
+       manifest's model with a registered ``preset`` or an explicit ``xml``
+       path.
 
     2. **Plant-only**: when ``[sim]`` is absent, the plant is built directly
        from the registry via ``[plant].type`` (registered name) and
@@ -319,14 +319,11 @@ class ScenarioFactory:
         The manifest's ``[engine].model`` is always authoritative; ``[physics]``
         only ever adds an explicit override:
 
-        - ``[physics].preset = "lekiwi"`` — LeKiwi-specific: loads the stock
-          LeKiwi MJCF, rewrites the arm base onto a free-jointed wheel chassis,
-          and loads its mesh assets (requires the ``lekiwi_sim`` package and
-          the demo helpers).
+        - ``[physics].preset = "<name>"`` — resolve a physics preset registered
+          via :func:`shinro.factories.registry.register_physics_preset`. shinro
+          ships no presets; a robot package supplies them and must be imported
+          before the scenario is built (``--import MODULE`` on the CLI).
         - ``[physics].xml = "path.mjcf"`` — generic per-scenario model override.
-        - ``free_joint = true`` (legacy) — deprecated alias for
-          ``preset = "lekiwi"``; warns loudly instead of silently swapping the
-          manifest's model out from under the scenario.
 
         Args:
             physics_cfg: The ``[physics]`` section of the scenario config.
@@ -338,32 +335,12 @@ class ScenarioFactory:
         if not physics_cfg:
             return None, None
 
-        import warnings
-
         preset = physics_cfg.get("preset")
-        if physics_cfg.get("free_joint"):
-            if preset is None:
-                warnings.warn(
-                    "[physics].free_joint = true is LeKiwi-specific: it loads and rewrites "
-                    "the stock LeKiwi MJCF, ignoring the manifest's [engine].model. Use "
-                    "[physics].preset = \"lekiwi\" to say so explicitly (this fallback will "
-                    "be removed).",
-                    DeprecationWarning,
-                    stacklevel=3,
-                )
-                preset = "lekiwi"
-
         if preset is not None:
-            if preset != "lekiwi":
-                raise ValueError(f"Unknown [physics].preset '{preset}' (available: ['lekiwi'])")
-            from pathlib import Path
+            from shinro.factories.registry import resolve_physics_preset
 
-            from demos.helpers import inject_free_joint, load_model_assets
-            from vendor.lekiwi_sim import HERE, MJCF_PATH
-
-            xml = inject_free_joint(Path(MJCF_PATH).read_text())
-            assets = load_model_assets(HERE / "lekiwi-sim" / "meshes")
-            return xml, assets
+            model = resolve_physics_preset(preset)(physics_cfg)
+            return model.xml_string, model.assets
 
         if physics_cfg.get("xml") is not None:
             from pathlib import Path
