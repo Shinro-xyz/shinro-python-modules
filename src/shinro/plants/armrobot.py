@@ -475,8 +475,11 @@ class ArmRobot(Plant):
             rot_axes: List of rotation axes.
             ee_body_name: Optional end-effector body name.
 
-        Requires a runtime-injected ``engine`` (RobotSim merges it into the
-        config dict); standalone use without an engine is not supported.
+        ``joint_groups`` + ``engine`` are runtime-injected by ``RobotSim``. When
+        both are absent the arm is built in model-only standalone mode
+        (synthetic joint names, ±π limits) — enough for the compile pipeline to
+        derive ``n_x``/``n_u`` from a plant-authoritative ``[plant]`` section
+        without a live sim.
 
         Args:
             config: TOML config dict (with runtime-injected ``engine`` and
@@ -493,13 +496,17 @@ class ArmRobot(Plant):
         cfg = cls.parse_config(clean)
         engine = runtime.get("engine")
         joint_groups = runtime.get("joint_groups")
-        if engine is None or joint_groups is None:
-            raise ValueError(
-                "ArmRobot requires a runtime-injected 'engine' and 'joint_groups' "
-                "(RobotSim merges them into the config dict) — standalone use is not supported."
-            )
-        joint_names = joint_groups[cfg.joint_group]
-        limits = np.array([engine.get_joint_limits(n) for n in joint_names])
+        if engine is not None and joint_groups is not None:
+            joint_names = joint_groups[cfg.joint_group]
+            limits = np.array([engine.get_joint_limits(n) for n in joint_names])
+        else:
+            # Model-only standalone mode. ``engine`` + ``joint_groups`` are
+            # runtime-injected by RobotSim, but the plant's dimensions do not
+            # need them (``get_state`` -> a 6-D end-effector pose, ``get_model``
+            # -> A = I, B = dt*I). The compile pipeline uses this to derive
+            # n_x/n_u from a plant-authoritative [plant] section with no live sim.
+            joint_names = [f"joint_{i}" for i in range(cfg.num_dof)]
+            limits = np.tile(np.array([-np.pi, np.pi]), (cfg.num_dof, 1))
         plant = cls(
             num_dof=cfg.num_dof,
             dt=cfg.dt,
@@ -510,7 +517,8 @@ class ArmRobot(Plant):
             ee_body_name=cfg.ee_body_name,
             backend=bk,
         )
-        plant.physics_engine(engine)
+        if engine is not None:
+            plant.physics_engine(engine)
         return plant
 
 
