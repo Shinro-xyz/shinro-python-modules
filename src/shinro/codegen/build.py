@@ -1,7 +1,7 @@
 """Generic estimator + controller → :class:`ComposedGraph` builder.
 
 This is the framework-side entry point for compiling an arbitrary scenario
-into a deployable graph. It is deliberately LeKiwi-agnostic: the caller
+into a deployable graph. It is deliberately robot-agnostic: the caller
 supplies the estimator/controller config paths and the plant dimensions, and
 the builder returns a composed closed-loop step graph ready for
 :func:`shinro.codegen.lower_zig.lower_zig`.

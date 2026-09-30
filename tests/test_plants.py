@@ -513,7 +513,7 @@ class TestConfigGenerator:
   </actuator>
 </mujoco>"""
 
-    LEKIWI_XML = """<mujoco model="lekiwi">
+    ARM_AND_BASE_XML = """<mujoco model="mobile_manipulator">
   <worldbody>
     <body name="arm_base" pos="0 0 0">
       <joint name="shoulder" type="hinge" axis="0 0 1"/>
@@ -570,11 +570,11 @@ class TestConfigGenerator:
         types = detect_plant_types(root)
         assert "CartPole" in types
 
-    def test_detect_lekiwi(self, tmp_path):
+    def test_detect_arm_and_base(self, tmp_path):
         import xml.etree.ElementTree as ET
 
         from scripts.generate_robot_config import detect_plant_types
-        root = ET.fromstring(self.LEKIWI_XML)
+        root = ET.fromstring(self.ARM_AND_BASE_XML)
         types = detect_plant_types(root)
         assert "ArmRobot" in types
         assert "HolonomicMobileRobot" in types
@@ -611,10 +611,10 @@ class TestConfigGenerator:
         assert len(config.get("plants", [])) == 1
         assert config["plants"][0]["type"] == "CartPole"
 
-    def test_generate_lekiwi_config(self, tmp_path):
+    def test_generate_arm_and_base_config(self, tmp_path):
         from scripts.generate_robot_config import generate_config
-        xml_file = tmp_path / "lekiwi.xml"
-        xml_file.write_text(self.LEKIWI_XML)
+        xml_file = tmp_path / "mobile_manipulator.xml"
+        xml_file.write_text(self.ARM_AND_BASE_XML)
         config = generate_config(str(xml_file))
         assert len(config.get("plants", [])) == 2
         types = [p["type"] for p in config["plants"]]

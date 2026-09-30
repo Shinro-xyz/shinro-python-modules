@@ -9,10 +9,8 @@ run_ci_local.txt
 :memory:.ses
 .codebase/
 
-# Demo media is written to build/demos/ (already ignored). These are the four
-# legacy repo-root outputs; ignore them if a stale run recreates them.
-/lekiwi_demo.gif
-/lekiwi_arm_demo.gif
+# Demo media is written to build/demos/ (already ignored). These are legacy
+# repo-root outputs; ignore them if a stale run recreates them.
 /simple_demo.gif
 /double_pendulum_demo.png
 

@@ -5,13 +5,12 @@
 A clean, modular Python control framework built on five abstract base classes
 — **Controller**, **Plant**, **StateEstimator**, **TrajectoryGenerator**, and
 **PhysicsEngine** — with registry-based factories that compose them from TOML
-config. The architecture is robot-agnostic: **LeKiwi** (holonomic base +
-6-DOF arm) is the current reference robot used in the demos below, not a
-framework constraint.
+config. The architecture is robot-agnostic: the demos drive a generic control
+loop over any registered plant, controller, estimator, and trajectory.
 
-> **Naming note:** this repo was previously scoped and named for LeKiwi only
-> (`lerobot-mpc-lekiwi`). It was renamed to `shinro-python-modules` because
-> the registry/factory/ABC pattern generalized beyond one robot.
+> **Naming note:** this repo was previously scoped for a single reference robot.
+> It was renamed to `shinro-python-modules` because the registry/factory/ABC
+> pattern generalized beyond one robot.
 
 ## Documentation
 
@@ -108,22 +107,20 @@ Local build + install sanity: `make install` and `make build`.
 ## Run a demo
 
 ```bash
-python -m demos.demo_simple                              # terminal-only, no viewer
-python -m demos.demo_arm_trajectory                       # arm trajectory + live viewer
-python -m demos.demo_base_tracking                        # base tracking, LQR + observer
-python -m demos.demo_base_tracking --controller mpc       # base tracking, MPC
-python -m demos.demo_pick_and_place                       # full pick-and-place sequence
-python -m demos.demo_mppi                                 # MPPI model wiring + lowering contract
-python -m demos.demo_mppi_nonlinear                       # MPPI on a nonlinear plant, lowered
-python -m demos.demo_mppi_nonlinear --build               # ...and run the compiled kernel
-python -m demos.demo_smc                                  # SMC on a nonlinear plant (f/g host-side)
-python -m demos.demo_smc --build                          # ...and run the compiled kernel
+python -m demos.demo_double_pendulum                       # one scenario TOML, plant-only
+python -m demos.demo_codegen                               # trace the closed-loop step graph
+python -m demos.demo_mppi                                  # MPPI model wiring + lowering contract
+python -m demos.demo_mppi_nonlinear                        # MPPI on a nonlinear plant, lowered
+python -m demos.demo_mppi_nonlinear --build                # ...and run the compiled kernel
+python -m demos.demo_smc                                   # SMC on a nonlinear plant (f/g host-side)
+python -m demos.demo_smc --build                           # ...and run the compiled kernel
+python -m demos.demo_quadrotor_smc                         # SMC bank on a quadrotor model
 ```
 
 Auto-generate a robot config from a MuJoCo model:
 
 ```bash
-python scripts/generate_robot_config.py vendor/lekiwi-sim/mjcf_lcmm_robot.xml > samples/robot_config.toml
+python scripts/generate_robot_config.py samples/models/double_pendulum.xml > /tmp/robot_config.toml
 ```
 
 ## Repo structure

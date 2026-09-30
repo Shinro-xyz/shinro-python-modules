@@ -7,10 +7,10 @@ Usage:
     # In samples/controllers/lerobot_diffusion.toml:
     #   type = "lerobot_diffusion"
     #   policy_type = "diffusion"
-    #   checkpoint = "huggingface/lerobot-diffusion-lekiwi"
+    #   checkpoint = "<org>/<policy-checkpoint>"
     #   use_camera = false
     #
-    # python -m demos.demo_base_tracking --controller lerobot_diffusion
+    # See samples/controllers/lerobot_diffusion.toml for a full config example.
 """
 
 from shinro.components import Controller

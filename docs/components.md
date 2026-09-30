@@ -81,7 +81,7 @@ implement `generate(...)` and `position_at(t)`.
 | `cubic_segments` | `CubicPolynomial` | `trajectories/cubic_polynomial.py` | `samples/trajectories/arm_extension.toml` |
 | `quintic_segments` | `QuinticPolynomial` / `QuinticPolynomialConfigAdapter` | `trajectories/quintic_polynomial.py` | `samples/trajectories/arm_quintic.toml` |
 | `waypoints` | `WaypointSchedule` | `trajectories/quintic_polynomial.py` | `samples/trajectories/arm_lift.toml`, `base_straight.toml`, `base_triangle.toml` |
-| `phase_list` | `PhaseSchedule` | `trajectories/quintic_polynomial.py` | `samples/trajectories/pick_and_place.toml` |
+| `phase_list` | `PhaseSchedule` | `trajectories/quintic_polynomial.py` | `samples/trajectories/phase_list.toml` |
 | `lissajous` | `Lissajous` | `trajectories/lissajous.py` | `samples/trajectories/lissajous_figure8.toml` |
 | `bezier` | `BezierCurve` | `trajectories/bezier_curve.py` | `samples/trajectories/bezier_curve.toml` |
 | `bspline` | `BSpline` | `trajectories/b_spline.py` | `samples/trajectories/bspline.toml` |

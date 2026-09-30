@@ -98,7 +98,7 @@ your project; the repo's `samples/` holds example configs (shinro ships none).
 ## Layer 2: Simulation — putting the loop together
 
 `src/shinro/simulation/robotsim.py` assembles a whole scenario from a single
-scenario TOML (e.g. `tests/integration/scenarios/base_tracking.toml`). A
+scenario TOML (e.g. `tests/integration/scenarios/cartpole_balance.toml`). A
 scenario file declares:
 
 - which plant to control,
@@ -115,7 +115,8 @@ analytical `step()` for a fast in-memory simulation.
 Scenarios come in two modes:
 
 - **Sim-backed** (default): the plant is looked up by `[plant].name` on the
-  `RobotSim` built from `[sim]` (e.g. `base_tracking.toml`, `arm_cartesian.toml`).
+  `RobotSim` built from `[sim]` (a sim manifest TOML naming the engine's
+  model and the plant list).
 - **Plant-only**: when `[sim]` is absent, the plant is built directly from the
   registry via `[plant].type` + `[plant].config` (a plant TOML) and
   self-integrates its analytical dynamics — no MuJoCo. `[plant].initial_state`

@@ -8,7 +8,7 @@
 #     [sim] / [plant] / [trajectory] sections at the bottom.
 #   • Compilation: make compile SCENARIO=<this file> — needs ONLY
 #     [controller], [estimator], and [compile]. Delete the sim block for a
-#     compile-only robot (no MuJoCo, no LeKiwi).
+#     compile-only robot (no MuJoCo sim).
 #
 # Sections marked REQUIRED are needed by both pipelines. Values in angle
 # brackets (<...>) are placeholders — replace them with your robot's values.
@@ -52,9 +52,10 @@ artifact_name = "libbase"    # REQUIRED — deployed artifact stem: lib/<name>.s
 
 # ── SIMULATION-ONLY — delete this block for a compile-only robot ─────────────
 # [physics]
-# free_joint = false
+# preset = "<registered-preset>"   # optional: a robot package's physics preset
+# xml = "path/to/model.mjcf"       # optional: per-scenario model override
 # [plant]
-# name = "base"
+# name = "pendulum"
 # [sim]
 # config = "samples/robot_config.toml"
 # [trajectory]

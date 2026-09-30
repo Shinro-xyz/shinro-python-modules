@@ -278,6 +278,11 @@ class Plant(ConfigDriven, ABC):
     ``None`` means the plant has not declared its input dimension; callers
     of ``linearize_plant`` must then pass ``u0`` explicitly.
     """
+    bk: ArrayBackend
+    """Array backend the plant computes with (numpy or torch). Concrete plants set
+    this in ``__init__``."""
+    dt: float
+    """Integration time step in seconds. Concrete plants set this in ``__init__``."""
     @abstractmethod
     def get_state(self, *args:Any, **kwargs:Any)->Any:
         """

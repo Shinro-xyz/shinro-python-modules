@@ -2,13 +2,11 @@
 # LeRobot diffusion policy adapter
 # Requires: pip install lerobot
 #
-# Usage:
-#   python -m demos.demo_base_tracking --controller lerobot_diffusion
-#   python -m demos.demo_arm_trajectory --controller lerobot_diffusion
+# Replace `checkpoint` with your own Hugging Face LeRobot policy repo id.
 
 type = "lerobot_diffusion"
 name = "lerobot_policy"
 policy_type = "diffusion"
-checkpoint = "huggingface/lerobot-diffusion-lekiwi"
+checkpoint = "<org>/<policy-checkpoint>"
 use_camera = false
 device = "cpu"

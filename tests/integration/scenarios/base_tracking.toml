@@ -1,17 +1,14 @@
-# Base tracking: full closed-loop Trajectory -> LQR -> Kalman -> HolonomicMobileRobot -> MuJoCo.
+# Base tracking: the canonical compiled closed-loop step graph (KF + LQR on the
+# 3-DOF holonomic base). The codegen/compilation tests and the shipped graph
+# (shinro.codegen.recipes.LQR_CONFIGS) are pinned to this scenario, so keep its
+# controller/estimator/input_limits consistent with those recipes.
+#
+# Compile-only: there is no [sim]/[plant] here — the dims are declared in
+# [compile] and baked into the graph at trace time.
 [scenario]
 name = "base_tracking"
-description = "LQR + Kalman filter track a straight-line waypoint schedule on the holonomic base"
-duration = 16.0
-dt = 0.02
-tolerance = { steady_state = 0.05, estimator = 0.03 }
+description = "KF + LQR closed loop on the 3-DOF holonomic base (compile reference)"
 input_limits = { min = [-0.5, -0.5, -1.0], max = [0.5, 0.5, 1.0] }
-
-[physics]
-free_joint = true
-
-[plant]
-name = "base"
 
 [controller]
 type = "LQR"
@@ -21,18 +18,6 @@ config = "samples/controllers/lqr_base.toml"
 type = "KalmanFilter"
 config = "samples/estimators/kalman_base.toml"
 
-[trajectory]
-type = "waypoints"
-config = "samples/trajectories/base_straight.toml"
-
-[sim]
-config = "samples/robot_config.toml"
-
-[noise.measurement]
-std = [0.01, 0.01, 0.02]
-
-# Compile-time spec for the e2e compilation pipeline (scripts/gen_scenario.py).
-# n_x / n_u are baked into the graph at trace time ("fixed as compiled").
 [compile]
 optimize = "debug"        # "debug" | "release" (release -> ReleaseFast)
 artifact_name = "libbase"   # kernel installs as lib/<name>.so
