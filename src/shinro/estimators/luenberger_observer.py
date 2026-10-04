@@ -135,12 +135,13 @@ class LuenbergerObserver(StateEstimator):
             B = cfg.dt * bk.eye(n)
         else:
             raise ValueError("LuenbergerObserver: no B_dynamics and no dt — standalone use requires one of them")
+        C = bk.array(cfg.C) if cfg.C is not None else bk.eye(n)
         return cls(
             A=A,
             B=B,
             observer_gain=gain,
-            C=bk.array(cfg.C) if cfg.C is not None else bk.eye(n),
-            D=bk.array(cfg.D) if cfg.D is not None else bk.zeros((n, B.shape[1])),
+            C=C,
+            D=bk.array(cfg.D) if cfg.D is not None else bk.zeros((C.shape[0], B.shape[1])),
             x0=bk.zeros((n, 1)),
             backend=bk,
         )

@@ -296,3 +296,21 @@ class TestLuenbergerObserver:
         u = bk.array([[0.5]])
         x = obs.estimate(y, u)
         assert _to_np(x, bk).shape == (2, 1)
+
+    def test_from_config_partial_C_builds_d_by_output_dim(self, bk):
+        """from_config with a partial C (n_y != n) builds D as (n_y, n_u) and estimates.
+
+        Regression: D used the state dim n instead of n_y, so estimate()
+        raised whenever C selected fewer outputs than there are states.
+        """
+        from shinro.estimators.luenberger_observer import LuenbergerObserver
+        cfg = {
+            "observer_gain": [[0.6], [0.2]],     # (n, n_y) = (2, 1)
+            "A_dynamics": [[1.0, 1.0], [0.0, 1.0]],
+            "B_dynamics": [[0.0], [1.0]],
+            "C": [[1.0, 0.0]],                   # n_y = 1 != n = 2
+        }
+        obs = LuenbergerObserver.from_config(cfg, backend=bk)
+        assert _to_np(obs.D, bk).shape == (1, 1)
+        x = obs.estimate(bk.array([[1.0]]), bk.array([[0.0]]))
+        assert _to_np(x, bk).shape == (2, 1)

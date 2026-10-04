@@ -119,16 +119,19 @@ class LTISystemsAnalyzer:
         rank = self.bk.matrix_rank(O_mat)
         return rank == self.A.shape[0]
 
-    def _solve_continuous_lyap(self, Q: np.ndarray):
+    def _solve_continuous_lyap(self, Q: np.ndarray, A_matrix=None):
         """Solve the continuous Lyapunov equation A W + W A^T + Q = 0.
 
         Args:
             Q: Right-hand side matrix (n, n).
+            A_matrix: Optional matrix to use in place of ``self.A`` (pass
+                ``self.A.T`` to get the observability Gramian).
 
         Returns:
             Solution W (n, n).
         """
-        A_np = self.bk.to_numpy(self.A)
+        A = self.A if A_matrix is None else A_matrix
+        A_np = self.bk.to_numpy(A)
         Q_np = self.bk.to_numpy(-Q)
         Wc_np = solve_continuous_lyapunov(A_np, Q_np)
         return self.bk.from_numpy(Wc_np)
@@ -179,7 +182,9 @@ class LTISystemsAnalyzer:
                 "Use observability_gramian_finite(T) instead."
             )
         Q = self.C.T @ self.C
-        Wo = self._solve_continuous_lyap(Q)
+        # Observability Gramian: A^T Wo + Wo A + C^T C = 0 — solve the
+        # controllability-form Lyapunov equation for the adjoint A^T.
+        Wo = self._solve_continuous_lyap(Q, self.A.T)
         self._cached_values["Wo"] = Wo
         return Wo
 
@@ -270,6 +275,7 @@ class LTISystemsAnalyzer:
         T: float,
         method: str = "RK45",
         num_pts: int = 500,
+        A_matrix=None,
     ) -> np.ndarray:
         """Common routine for finite-horizon Gramians via IVP integration.
 
@@ -278,6 +284,8 @@ class LTISystemsAnalyzer:
             T: Horizon length.
             method: ODE solver method. Defaults to "RK45".
             num_pts: Number of evaluation points. Defaults to 500.
+            A_matrix: Optional matrix to integrate with in place of ``self.A``
+                (pass ``self.A.T`` for the observability Gramian).
 
         Returns:
             Gramian at time T (n, n).
@@ -286,7 +294,8 @@ class LTISystemsAnalyzer:
             RuntimeError: If IVP integration fails.
         """
         n = self.A.shape[0]
-        A_mat = self.A.toarray() if issparse(self.A) else self.A  # type: ignore
+        A_used = self.A if A_matrix is None else A_matrix
+        A_mat = A_used.toarray() if issparse(A_used) else A_used  # type: ignore
         sol = solve_ivp(
             fun=self._gramian_ode,
             t_span=(0.0, T),
@@ -335,7 +344,8 @@ class LTISystemsAnalyzer:
         if T <= 0:
             raise ValueError("T (horizon) must be positive.")
         Q = self.C.T @ self.C
-        return self._finite_horizon_gramian(Q, T)
+        # Wo(T) = ∫ e^{A^T τ} C^T C e^{A τ} dτ — integrate the adjoint A^T.
+        return self._finite_horizon_gramian(Q, T, A_matrix=self.A.T)
 
     def gramian_spectrum(self, gramian: str = "Wc") -> np.ndarray:
         """Return eigenvalues of a chosen Gramian.
@@ -382,19 +392,40 @@ class LTISystemsAnalyzer:
             return np.inf
         return self.bk.cond(G)
 
+    def _hankel_from_gramians(self, Wc, Wo) -> np.ndarray:
+        """σ_i = sqrt(λ_i(Wc Wo)), sorted in descending order."""
+        prod = Wc @ Wo
+        eigs = self.bk.real(self.bk.eigvals(prod))
+        eigs = self.bk.where(eigs < 0, self.bk.zeros_like(eigs), eigs)
+        return self.bk.sqrt(self.bk.sort(eigs)[::-1])
+
     def hankel_singular_values(self) -> np.ndarray:
-        """Compute the Hankel singular values σ_i = sqrt(λ_i(Wc Wo)).
+        """Continuous-time Hankel singular values σ_i = sqrt(λ_i(Wc Wo)).
 
         Returns:
             Hankel singular values sorted in descending order (n,).
         """
-        Wc = self.controllability_gramian()
-        Wo = self.observability_gramian()
-        prod = Wc @ Wo
-        eigs = self.bk.real(self.bk.eigvals(prod))
-        eigs = self.bk.where(eigs < 0, self.bk.zeros_like(eigs), eigs)
-        sigma = self.bk.sqrt(self.bk.sort(eigs)[::-1])
-        return sigma
+        return self._hankel_from_gramians(
+            self.controllability_gramian(), self.observability_gramian()
+        )
+
+    def discrete_hankel_singular_values(self) -> np.ndarray:
+        """Discrete-time Hankel singular values from the discrete-time Gramians.
+
+        The continuous Gramians (and hence :meth:`hankel_singular_values`) do
+        not exist for a Schur-stable discrete system, so this is the valid HSV
+        path for a discrete system.
+
+        Returns:
+            Hankel singular values sorted in descending order (n,).
+
+        Raises:
+            ValueError: If ``dt`` is None or |eig(A)| >= 1.
+        """
+        return self._hankel_from_gramians(
+            self.discrete_controllability_gramian(),
+            self.discrete_observability_gramian(),
+        )
 
     def balanced_realization(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Return the balanced state-space matrices (Abal, Bbal, Cbal).
@@ -462,12 +493,16 @@ class LTISystemsAnalyzer:
             Dict with keys 'controllability' and 'observability', each a
             tuple of (rank, condition_number).
         """
+        n = self.A.shape[0]
         C_mat = self.controllabilty()
         O_mat = self.observability()
         rank_c = self.bk.matrix_rank(C_mat)
         rank_o = self.bk.matrix_rank(O_mat)
-        cond_c = self.bk.cond(C_mat) if rank_c == C_mat.shape[0] else np.inf
-        cond_o = self.bk.cond(O_mat) if rank_o == O_mat.shape[0] else np.inf
+        # Full rank means rank == n for both matrices (C_mat is n x N*m and
+        # O_mat is N*p x n).  Gating on n also avoids cond() on an empty
+        # matrix when B or C has a zero dimension.
+        cond_c = self.bk.cond(C_mat) if rank_c == n else np.inf
+        cond_o = self.bk.cond(O_mat) if rank_o == n else np.inf
         return {
             "controllability": (int(rank_c), float(cond_c)),
             "observability": (int(rank_o), float(cond_o)),

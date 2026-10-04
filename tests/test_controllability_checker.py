@@ -1,6 +1,6 @@
 import numpy as np
 import pytest
-from scipy.linalg import cholesky, solve_continuous_lyapunov
+from scipy.linalg import cholesky, solve_continuous_lyapunov, solve_discrete_lyapunov
 
 from shinro.utils.array_backend import NumpyBackend
 from shinro.utils.controllability_checker import LTISystemsAnalyzer
@@ -137,6 +137,21 @@ class TestGramianContinuous:
         Wc_expected = solve_continuous_lyapunov(A, -B @ B.T)
         assert np.allclose(Wc, Wc_expected)
 
+    def test_observability_gramian_matches_adjoint_lyapunov(self):
+        """Observability Gramian solves A^T Wo + Wo A + C^T C = 0 for non-symmetric A.
+
+        Regression: the continuous observability Gramian used A instead of A^T
+        (the discrete siblings already used A^T).
+        """
+        A = np.array([[0, 1], [-1, -2]], dtype=float)
+        B = np.array([[0], [1]], dtype=float)
+        C = np.array([[1, 0]], dtype=float)
+        ana = _make_ana(A, B, C)
+        Wo = ana.observability_gramian()
+        assert np.allclose(Wo, solve_continuous_lyapunov(A.T, -(C.T @ C)))
+        # and it must differ from the controllability-form solve (the old bug)
+        assert not np.allclose(Wo, solve_continuous_lyapunov(A, -(C.T @ C)))
+
 
 class TestGramianDiscrete:
     """Verify discrete-time Gramian properties."""
@@ -182,6 +197,22 @@ class TestHankelAndBalanced:
         ana = _make_ana(A, B, C)
         sigma = ana.hankel_singular_values()
         assert sigma[0] >= sigma[1] >= 0
+
+    def test_discrete_hankel_singular_values(self):
+        """Discrete Hankel SVs come from the discrete Gramians, not the continuous ones.
+
+        Regression: only a continuous HSV path existed, so the discrete
+        Gramian tool always reported null.
+        """
+        A = np.array([[0.5, 0.1], [0.0, 0.6]], dtype=float)
+        B = np.array([[1.0], [0.5]], dtype=float)
+        C = np.array([[1.0, 0.0]], dtype=float)
+        ana = _make_ana(A, B, C, dt=0.01)
+        sigma = ana.discrete_hankel_singular_values()
+        Wc = solve_discrete_lyapunov(A, B @ B.T)
+        Wo = solve_discrete_lyapunov(A.T, C.T @ C)
+        expected = np.sqrt(np.sort(np.real(np.linalg.eigvals(Wc @ Wo)))[::-1])
+        assert np.allclose(sigma, expected)
 
     def test_balanced_realization_diagonal_gramians(self):
         """Balanced Gramians are diagonal (off-diagonal sum < 1e-8)."""
@@ -299,6 +330,32 @@ class TestUtility:
         report = ana.rank_report()
         assert "controllability" in report
         assert "observability" in report
+
+    def test_rank_report_cond_uses_state_order_for_multiple_outputs(self):
+        """Observability cond is finite for an observable system with p > 1.
+
+        Regression: the full-rank gate compared against the row count (n*p)
+        instead of n, so cond was inf for any observable multi-output system.
+        """
+        A = np.array([[0, 1], [0, 0]], dtype=float)
+        B = np.array([[0], [1]], dtype=float)
+        C = np.eye(2)
+        ana = _make_ana(A, B, C)
+        report = ana.rank_report()
+        assert report["observability"][0] == 2
+        assert np.isfinite(report["observability"][1])
+
+    def test_rank_report_survives_zero_dimension_bc(self):
+        """rank_report must not call cond() on an empty matrix (B and C default empty)."""
+        ana = LTISystemsAnalyzer(np.array([[-1.0]]))
+        report = ana.rank_report()
+        assert report["controllability"][0] == 0
+        assert report["observability"][0] == 0
+
+    def test_summary_with_defaulted_bc(self):
+        """summary() works when B and C default to empty (regression)."""
+        ana = LTISystemsAnalyzer(np.array([[-1.0]]))
+        assert "System order" in ana.summary()
 
     def test_summary(self):
         """summary returns a string containing the system order."""

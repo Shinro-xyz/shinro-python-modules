@@ -146,7 +146,7 @@ class MPC_LTI(Controller):
 
         T_list = []
         for n_step in range(self.N):
-            A_new = self.bk.matrix_power(self.A, n_step)
+            A_new = self.bk.matrix_power(self.A, n_step + 1)  # X=[x_1..x_N] -> A^(index+1)
             T_list.append(A_new)
         self.T_bar = self.bk.vstack(T_list)
 
@@ -265,7 +265,7 @@ class MPC_LTI_DeltaU(MPC_LTI):
         A = bk.array(cfg.A_dynamics)
         B = bk.array(cfg.B_dynamics)
         Q = parse_matrix(bk, cfg.state_cost)
-        n = Q.shape[0]
+        m = B.shape[1]
         ctrl = cls(
             delta_u_penalty=parse_matrix(bk, cfg.delta_u_penalty),
             horizon=cfg.horizon,
@@ -278,7 +278,8 @@ class MPC_LTI_DeltaU(MPC_LTI):
         )
         if cfg.constraints is not None:
             cons = strict_from_dict(ConstraintsConfig, cfg.constraints, "MPC_DeltaU.constraints")
-            F = bk.array(cons.matrix) if cons.matrix is not None else bk.vstack([bk.eye(n), -bk.eye(n)])
+            # The QP variable is the control (n_u wide), so default F = [I; -I] is n_u x n_u.
+            F = bk.array(cons.matrix) if cons.matrix is not None else bk.vstack([bk.eye(m), -bk.eye(m)])
             ctrl.constraints(F, cons.upper, cons.lower)
         return ctrl
 
@@ -381,7 +382,7 @@ class MPC_LTI_Base(MPC_LTI):
         A = bk.array(cfg.A_dynamics)
         B = bk.array(cfg.B_dynamics)
         Q = parse_matrix(bk, cfg.state_cost)
-        n = Q.shape[0]
+        m = B.shape[1]
         ctrl = cls(
             horizon=cfg.horizon,
             control_cost_matrix=parse_matrix(bk, cfg.control_cost),
@@ -393,6 +394,7 @@ class MPC_LTI_Base(MPC_LTI):
         )
         if cfg.constraints is not None:
             cons = strict_from_dict(ConstraintsConfig, cfg.constraints, "MPC_LTI.constraints")
-            F = bk.array(cons.matrix) if cons.matrix is not None else bk.vstack([bk.eye(n), -bk.eye(n)])
+            # The QP variable is the control (n_u wide), so default F = [I; -I] is n_u x n_u.
+            F = bk.array(cons.matrix) if cons.matrix is not None else bk.vstack([bk.eye(m), -bk.eye(m)])
             ctrl.constraints(F, cons.upper, cons.lower)
         return ctrl

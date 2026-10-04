@@ -672,7 +672,7 @@ def gramian_discrete(
             result["observability_gramian_error"] = str(e)
 
         try:
-            hsv = analyzer.hankel_singular_values()
+            hsv = analyzer.discrete_hankel_singular_values()
             result["hankel_singular_values"] = hsv.flatten().tolist()
         except Exception:
             result["hankel_singular_values"] = None

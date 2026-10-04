@@ -423,6 +423,73 @@ class TestMPC:
         assert mpc.H is not None
         assert mpc.F is not None
 
+    def test_mpc_lifted_dynamics_match_definition(self, bk):
+        """T_bar = [A, A^2, ..., A^N] and compute() matches an independent QP.
+
+        Regression for the off-by-one that stacked [A^0, ..., A^{N-1}]
+        (invisible when A = I).  Uses the ME701 notes' double-integrator
+        example: A=[[1,1],[0,1]], B=[[0],[1]], N=2, Q=C^T C, P=I, R=0.1.
+        """
+        from shinro.controllers.mpc_lti import MPC_LTI
+
+        A = np.array([[1.0, 1.0], [0.0, 1.0]])
+        B = np.array([[0.0], [1.0]])
+        Q = np.array([[1.0, 0.0], [0.0, 0.0]])  # C^T C with C = [1, 0]
+        P = np.eye(2)
+        R = np.array([[0.1]])
+        N = 2
+        mpc = MPC_LTI(horizon=N, control_cost_matrix=bk.array(R), state_cost_matrix=bk.array(Q),
+                      A_dynamics=bk.array(A), B_dynamics=bk.array(B),
+                      terminal_cost=bk.array(P), backend=bk)
+
+        # X = [x_1, ..., x_N] = S z + T x0
+        S = np.zeros((N * 2, N))
+        for i in range(N):
+            for j in range(i + 1):
+                S[i * 2:(i + 1) * 2, j:j + 1] = np.linalg.matrix_power(A, i - j) @ B
+        T = np.vstack([np.linalg.matrix_power(A, k) for k in range(1, N + 1)])
+
+        assert np.allclose(_to_np(mpc.S_bar, bk), S)
+        assert np.allclose(_to_np(mpc.T_bar, bk), T)
+
+        Q_bar = np.zeros((N * 2, N * 2))
+        Q_bar[:2, :2] = Q
+        Q_bar[2:, 2:] = P
+        H = 2 * (np.kron(np.eye(N), R) + S.T @ Q_bar @ S)
+        F = 2 * T.T @ Q_bar @ S
+        assert np.allclose(_to_np(mpc.H, bk), H)
+        assert np.allclose(_to_np(mpc.F, bk), F)
+
+        # unconstrained solve agrees with the independently built QP
+        mpc.constraints(bk.vstack([bk.eye(1), -bk.eye(1)]),
+                        bk.array([1e6, 1e6]), bk.array([-1e6, -1e6]))
+        x0 = np.array([0.3, -0.2])
+        u_ref = np.linalg.solve(H, -(F.T @ x0))[:1]
+        u = _to_np(mpc.compute(bk.array(x0)), bk)
+        assert np.allclose(u, u_ref, atol=1e-6)
+
+    def test_mpc_from_config_default_constraints_use_control_dim(self):
+        """from_config's default F=[I;-I] is sized by n_u, not n_x.
+
+        Regression: the fallback used eye(n_x), which is wrong when n_x != n_u.
+        """
+        from shinro.controllers.mpc_lti import MPC_LTI_Base
+
+        A = np.eye(4)
+        B = np.zeros((4, 1))
+        B[1, 0] = 0.02
+        config = {
+            "horizon": 3,
+            "state_cost": [1.0, 1.0, 1.0, 1.0],
+            "control_cost": [0.1],
+            "A_dynamics": A.tolist(),
+            "B_dynamics": B.tolist(),
+            "constraints": {"upper": [1.0, 1.0], "lower": [-1.0, -1.0]},
+        }
+        mpc = MPC_LTI_Base.from_config(config)
+        # per-step F is (2*n_u, n_u); tiled across N steps -> (N*2*n_u, N*n_u)
+        assert mpc.A_constraints.shape == (3 * 2, 3 * 1)
+
 
 class TestSMC:
     """Verify sliding mode controller: surface convergence, smoother variants, and error handling."""
