@@ -99,7 +99,7 @@ def build_composed_graph(
         A :class:`ComposedGraph` for one closed-loop step.
     """
     est, ctrl = instantiate(estimator_config, controller_config, plant)
-    return build_composed_graph_from_instances(est, ctrl, n_x, n_u, input_limits)
+    return build_composed_graph_from_instances(est, ctrl, n_x, n_u, input_limits, plant=plant)
 
 
 def instantiate(estimator_config, controller_config, plant=None):
@@ -124,12 +124,76 @@ def instantiate(estimator_config, controller_config, plant=None):
     return est, ctrl
 
 
-def build_composed_graph_from_instances(est, ctrl, n_x, n_u, input_limits=None):
+def _trace_plant_model(plant: object, n_x: int, n_u: int):
+    """Trace the plant-derived model a controller can consume as ``f_x`` / ``g_x``.
+
+    Emits the control-affine pair the SMC form assumes — the drift
+    ``f(x) = dynamics(x, 0)`` and the control matrix ``g(x) = control_matrix(x, 0)``
+    — as ONE subgraph whose input is the state estimate. ``compose`` wires it into
+    a controller that declares those inputs, so the model lowers into the binary
+    instead of being evaluated by the host (the SMC gap).
+
+    Both terms are evaluated at zero control, the drift convention of
+    ``ẋ = f(x) + g(x)u``. A plant whose actuation is nonlinear in ``u`` (rotor
+    thrusts ~ ``w²``) has ``g(x, 0) = 0`` and needs an operating control instead —
+    pass one through :meth:`Plant.control_matrix` when that case is plumbed.
+
+    Args:
+        plant: Plant exposing ``dynamics`` and ``control_matrix``.
+        n_x: State dimension.
+        n_u: Control dimension.
+
+    Returns:
+        A :class:`~shinro.codegen.trace_node.NodeGraph` with input ``x`` and
+        outputs ``f_x`` / ``g_x``.
+
+    Raises:
+        ValueError: If the plant has no dynamics to differentiate.
+    """
+    from shinro.codegen.infer_contract import InferredContract
+    from shinro.codegen.trace_backend import TraceBackend
+    from shinro.codegen.trace_node import NodeGraph
+    from shinro.codegen.tracing import Graph, Tracer
+
+    if getattr(plant, "dynamics", None) is None:
+        raise ValueError(f"{type(plant).__name__} exposes no dynamics() to derive f_x/g_x from.")
+
+    g = Graph()
+    tb = TraceBackend(g)
+    x_node = g.input("x", (n_x,))
+    x = Tracer(g, (n_x,), x_node)
+    f_x = plant.dynamics(x, 0.0, bk=tb)
+    g_x = plant.control_matrix(x, 0.0, bk=tb)
+    g.output("f_x", f_x.node)
+    g.output("g_x", g_x.node)
+    return NodeGraph(
+        graph=g,
+        contract=InferredContract(method_name="plant_model", input_names=["x"]),
+        input_nodes={"x": x_node},
+        output_nodes={"f_x": f_x.node, "g_x": g_x.node},
+        state_attrs=[],
+    )
+
+
+def _controller_input_shape(name: str, n_x: int, n_u: int) -> tuple[int, ...]:
+    """Default traced-input shape for a controller ``compute()`` parameter, by role.
+
+    ``u_prev`` is the control; ``g_x`` is the control matrix, one column per input;
+    everything else (the state estimate, and ``f_x`` the drift) is state-shaped.
+    """
+    if name == "u_prev":
+        return (n_u,)
+    if name == "g_x":
+        return (n_x, n_u)
+    return (n_x,)
+
+
+def build_composed_graph_from_instances(est, ctrl, n_x, n_u, input_limits=None, plant=None):
     """Trace + compose already-instantiated components into a closed-loop step graph."""
     n_y = _measurement_dim(est, n_x)
     est_input_shapes = {"measurement": (n_y, 1), "control_input": (n_u, 1)}
     ctrl_input_shapes = {
-        name: (n_u,) if name == "u_prev" else (n_x,)
+        name: _controller_input_shape(name, n_x, n_u)
         for name in inspect.signature(ctrl.compute).parameters
         if name != "self"
     }
@@ -138,10 +202,16 @@ def build_composed_graph_from_instances(est, ctrl, n_x, n_u, input_limits=None):
     host_shapes = ctrl.host_input_shapes() if hasattr(ctrl, "host_input_shapes") else {}
     ctrl_input_shapes.update(host_shapes)
 
+    # A controller that takes its model as inputs (SMC's f_x/g_x) gets a plant-derived
+    # subgraph composed in — the model is baked, not host-fed. Without a plant compose
+    # raises loudly if the controller still declares those inputs.
+    model = _trace_plant_model(plant, n_x, n_u) if plant is not None and {"f_x", "g_x"} & set(ctrl_input_shapes) else None
+
     return compose(
         _trace_with_state(est, est_input_shapes),
         _trace_with_state(ctrl, ctrl_input_shapes),
         plant_dims={"n_x": n_x, "n_u": n_u},
         input_limits=input_limits,
         host_inputs=tuple(host_shapes),
+        model=model,
     )

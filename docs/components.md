@@ -28,7 +28,7 @@ implement `compute(current, target)` and `reset()`.
 | `MPC_LTI` | `MPC_LTI_Base` | `controllers/mpc_lti.py` | `samples/controllers/mpc_lti_base.toml` |
 | `MPC_DeltaU` | `MPC_LTI_DeltaU` | `controllers/mpc_lti.py` | `samples/controllers/mpc_base.toml` |
 | `MPPI` | `MPPIController` | `controllers/mppi.py` | `samples/controllers/mppi_base.toml`, `mppi.toml` |
-| `SMC` | `SlidingModeController` | `controllers/smc.py` | `samples/controllers/smc.toml` |
+| `SMC` | `SlidingModeController` | `controllers/smc.py` | `samples/controllers/smc.toml`, `smc_inverted_pendulum.toml` |
 | `onnx_rl` | `OnnxRLAdapter` | `controllers/onnx_rl_adapter.py` | `samples/controllers/onnx_rl.toml` |
 | `lerobot_diffusion` | `LeRobotDiffusionAdapter` | `controllers/lerobot_adapter.py` | `samples/controllers/lerobot_diffusion.toml` |
 
@@ -46,7 +46,10 @@ implement `compute(current, target)` and `reset()`.
 Registered via `register_plant`; created with `PlantFactory`. All implement
 `get_state()`, `get_model()`, and `step(u)`. Plants that support
 linearization set `input_dim` and expose `dynamics(x, u)` (see
-`docs/how-it-works.md` and `utils/linearization.py`).
+`docs/how-it-works.md` and `utils/linearization.py`). They also expose
+`control_matrix(x, u)` — the control matrix `g = ∂f/∂u`, defaulting to finite
+differences of `dynamics` — which is what lets a controller that takes its model
+as inputs (SMC's `f_x`/`g_x`) have it composed in from the plant.
 
 | Registered name | Class | File | Config |
 | ----------------- | ------- | ------ | -------- |

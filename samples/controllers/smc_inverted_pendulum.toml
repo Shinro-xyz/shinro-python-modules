@@ -1,0 +1,16 @@
+# Sliding-mode controller for InvertedPendulum (2 states [theta, theta_dot], 1
+# torque input). dt is inherited from the plant (unused by the control law).
+#
+# `f_x` and `g_x` are intentionally absent: the plant is attached in a scenario
+# (attach_plant) and compose bakes the plant-derived model — the drift
+# f(x) = dynamics(x, 0) and the control matrix g(x) = control_matrix(x, 0) — into
+# the graph, so the SMC kernel's only host input is the state. There is no
+# hand-written g here, and none to keep in sync with the plant.
+type = "SMC"
+name = "inverted_pendulum_smc"
+c = [1.0, 2.0]
+k1 = 1.0
+k2 = 0.0
+phi = 0.1
+smoother = "sat"
+alpha = 0.0

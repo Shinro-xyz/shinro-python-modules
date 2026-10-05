@@ -388,6 +388,58 @@ class Plant(ConfigDriven, ABC):
         """
         return None
 
+    def control_matrix(self, state: Any, control: Any, bk: Any | None = None) -> Any:
+        """Control matrix :math:`g(x, u) = \\partial f/\\partial u` at ``(state, control)``.
+
+        This is the input map a control law contracts against (SMC's
+        :math:`c^T g`); for a control-affine plant :math:`\\dot{x} = f(x) +
+        g(x)u` it is the whole control dependence. Shape ``(n_x, n_u)``.
+
+        The default **derives it from** :meth:`dynamics` by central finite
+        differences — the same arithmetic ``linearize_plant`` returns as ``B``
+        — so every plant with a ``dynamics`` gets a correct ``g`` with no extra
+        code. Override it to be exact (a closed form, ``u``-independent for
+        force/torque plants) or cheaper; the default doubles as the test oracle
+        for such an override.
+
+        Contract, mirroring :meth:`dynamics`: route every backend call through
+        ``bk`` (defaults to ``self.bk``), and keep a leading **probe batch** when
+        one arrives — the tracing backend probes with a ``(2*n_u, n_u)`` block
+        whose batch axis is shared with the state, so the state is broadcast
+        onto it rather than evaluated alone.
+
+        Args:
+            state: Current state vector (n_x,).
+            control: Current control (n_u,) — the point ``g`` is evaluated at.
+                For plants whose actuation is *nonlinear* in ``u`` (e.g. rotor
+                thrusts ~ ``w^2``) this matters: ``g`` is zero at ``u = 0``.
+            bk: Backend to evaluate with. Defaults to ``self.bk``.
+
+        Returns:
+            The control matrix ``(n_x, n_u)``.
+
+        Raises:
+            NotImplementedError: If the plant defines no :meth:`dynamics` to
+                differentiate and does not override this method.
+        """
+        if type(self).dynamics is Plant.dynamics:
+            raise NotImplementedError(
+                f"{type(self).__name__}.control_matrix has no source: the plant defines no "
+                f"dynamics() to differentiate and does not override control_matrix()."
+            )
+        backend: ArrayBackend = self.bk if bk is None else bk
+        n_x = state.shape[0]
+
+        def probe(u: Any) -> Any:
+            if len(u.shape) == 2:
+                # Traced probe batch: the backend's batch axis is shared, so the
+                # state must be broadcast onto the same rows as the control probes.
+                x = backend.reshape(state, 1, n_x) + backend.zeros((u.shape[0], n_x))
+                return self.dynamics(x, u, bk=backend)
+            return self.dynamics(state, u, bk=backend)
+
+        return backend.jacobian(probe, backend.ravel(backend.array(control)))
+
 class StateEstimator(ConfigDriven, ABC):
     """
     Abstract base class for state estimators.

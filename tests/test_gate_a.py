@@ -42,3 +42,31 @@ def test_gate_a_flags_a_wrong_live_component():
     ctrl.K = ctrl.K * 1.5  # perturb the live gain away from the traced one
     err = run_gate_a(cg, est, ctrl, n_x, n_u, input_limits=limits, ticks=50)
     assert err > TOL, f"gate A missed a real divergence: {err:.3e}"
+
+
+SMC = str(REPO_ROOT / "tests" / "integration" / "scenarios" / "smc_pendulum_compile.toml")
+
+
+def test_gate_a_drives_a_plant_derived_model():
+    """SMC's f_x/g_x are composed in from the plant; gate A feeds the live side the
+    same plant model (this is what makes a composed SMC meaningful at all)."""
+    from shinro.codegen.recipes import live_components_and_plant
+
+    spec = load_scenario(SMC)
+    cg = build_recipe("closed_loop_tracking", spec)
+    assert "f_x" not in cg.inputs and "g_x" not in cg.inputs, "model terms must be baked, not host ports"
+
+    est, ctrl, n_x, n_u, limits, plant = live_components_and_plant(spec)
+    err = run_gate_a(cg, est, ctrl, n_x, n_u, input_limits=limits, ticks=50, plant=plant)
+    assert err <= TOL, f"gate A diverged: {err:.3e}"
+
+
+def test_gate_a_without_a_plant_for_model_terms_is_loud():
+    """A controller wanting f_x/g_x with no plant to derive them from raises."""
+    from shinro.codegen.recipes import live_components
+
+    spec = load_scenario(SMC)
+    cg = build_recipe("closed_loop_tracking", spec)
+    est, ctrl, n_x, n_u, limits = live_components(spec)
+    with pytest.raises(ValueError, match="plant-model term"):
+        run_gate_a(cg, est, ctrl, n_x, n_u, input_limits=limits, ticks=5, plant=None)

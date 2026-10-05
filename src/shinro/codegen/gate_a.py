@@ -67,7 +67,7 @@ def _initial_state(cg, est, ctrl, n_u) -> dict[str, np.ndarray]:
     return state
 
 
-def _controller_kwargs(input_names, x_hat, x_ref, u_prev, host_values) -> dict:
+def _controller_kwargs(input_names, x_hat, x_ref, u_prev, host_values, plant=None) -> dict:
     """Map the controller's compute() inputs to live values by role (as compose does)."""
     takes_reference = any(_CONTROLLER_INPUT_ROLES.get(n) == "reference" for n in input_names)
     kwargs: dict[str, np.ndarray] = {}
@@ -81,13 +81,29 @@ def _controller_kwargs(input_names, x_hat, x_ref, u_prev, host_values) -> dict:
             # Regulator (no reference input) gets the error x_hat - x_ref; a
             # tracker gets x_hat and x_ref separately (exactly like compose).
             kwargs[name] = x_hat if takes_reference else (x_hat - x_ref)
+        elif role == "model":
+            # A plant-model term (SMC's f_x / g_x). The graph has the plant model
+            # baked in; the live side evaluates the SAME plant at the SAME point
+            # (zero control, the drift convention), so the two sides stay
+            # comparable — which is the whole point of gate A.
+            if plant is None:
+                raise ValueError(
+                    f"controller input '{name}' is a plant-model term but gate A has no plant to "
+                    f"derive it from; pass plant=..."
+                )
+            if name == "f_x":
+                kwargs[name] = np.asarray(plant.dynamics(x_hat, 0.0), dtype=np.float64)
+            elif name == "g_x":
+                kwargs[name] = np.asarray(plant.control_matrix(x_hat, 0.0), dtype=np.float64)
+            else:
+                raise ValueError(f"unknown plant-model term '{name}'; compose knows f_x / g_x.")
         else:
             # A free host input the host fills each tick (e.g. MPPI's epsilon).
             kwargs[name] = host_values.get(name, np.array(0.0))
     return kwargs
 
 
-def run_gate_a(cg, est, ctrl, n_x, n_u, input_limits=None, ticks: int = 50, seed: int = 0) -> float:
+def run_gate_a(cg, est, ctrl, n_x, n_u, input_limits=None, ticks: int = 50, seed: int = 0, plant=None) -> float:
     """Drive the live loop and ``interpret_step(cg)`` over ``ticks``; return max abs err.
 
     Args:
@@ -125,7 +141,7 @@ def run_gate_a(cg, est, ctrl, n_x, n_u, input_limits=None, ticks: int = 50, seed
         u_graph = np.asarray(outs["u"], dtype=np.float64).ravel()
 
         x_hat = np.asarray(est.estimate(y.reshape(-1, 1), u_prev.reshape(-1, 1)), dtype=np.float64).ravel()
-        kwargs = _controller_kwargs(input_names, x_hat, x_ref, u_prev, host_values)
+        kwargs = _controller_kwargs(input_names, x_hat, x_ref, u_prev, host_values, plant=plant)
         u_live = np.asarray(ctrl.compute(**kwargs), dtype=np.float64).ravel()
         if input_limits is not None:
             u_live = np.clip(u_live, np.asarray(input_limits[0], dtype=np.float64), np.asarray(input_limits[1], dtype=np.float64))
