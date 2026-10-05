@@ -841,3 +841,105 @@ class TestTraceNode:
         g.output("out", c)
         g.output("state_x_hat", c)
         assert _collect_output_nodes(g) == {"out": c, "state_x_hat": c}
+
+
+# ─── TraceBackend.jacobian (batched FD probing) ─────────────────────────────
+
+
+class TestTraceBackendJacobian:
+    """The trace-time FD Jacobian: batched probes, dup escape hatch, contracts."""
+
+    N = 3  # state dim
+    M = 4  # output dim
+
+    @staticmethod
+    def _map(bk, w):
+        """Batch-coherent nonlinear map (n,) -> (m,): ``(sin(v)*v + v) @ W``."""
+        return lambda v: (bk.sin(v) * v + v) @ w
+
+    @staticmethod
+    def _eager_map(w):
+        return lambda v: (np.sin(v) * v + v) @ w
+
+    def _w(self):
+        return np.arange(self.N * self.M, dtype=np.float64).reshape(self.N, self.M) / 10.0 + 0.1
+
+    def test_batched_matches_numpy_jacobian(self):
+        w = self._w()
+        g = Graph()
+        bk = TraceBackend(g)
+        x = Tracer(g, (self.N,), g.input("x", (self.N,)))
+        j = bk.jacobian(self._map(bk, w), x)
+        g.output("j", j.node)
+        x_val = np.array([0.3, -0.7, 1.1])
+        got = interpret(g, {"x": x_val})["j"]
+        want = NumpyBackend().jacobian(self._eager_map(w), x_val)
+        assert got.shape == (self.M, self.N)
+        assert np.allclose(got, want, atol=1e-12), f"max|d|={np.max(np.abs(got - want)):.2e}"
+
+    def test_dup_mode_matches_numpy_jacobian(self):
+        w = self._w()
+        g = Graph()
+        bk = TraceBackend(g)
+        x = Tracer(g, (self.N,), g.input("x", (self.N,)))
+        j = bk.jacobian(self._map(bk, w), x, batched=False)
+        g.output("j", j.node)
+        x_val = np.array([0.3, -0.7, 1.1])
+        got = interpret(g, {"x": x_val})["j"]
+        want = NumpyBackend().jacobian(self._eager_map(w), x_val)
+        assert got.shape == (self.M, self.N)
+        assert np.allclose(got, want, atol=1e-12), f"max|d|={np.max(np.abs(got - want)):.2e}"
+
+    def test_batched_and_dup_agree(self):
+        w = self._w()
+        x_val = np.array([0.3, -0.7, 1.1])
+        got = []
+        for batched in (True, False):
+            g = Graph()
+            bk = TraceBackend(g)
+            x = Tracer(g, (self.N,), g.input("x", (self.N,)))
+            j = bk.jacobian(self._map(bk, w), x, batched=batched)
+            g.output("j", j.node)
+            got.append(interpret(g, {"x": x_val})["j"])
+        # Per-probe arithmetic is identical, but a shape-sensitive kernel (the
+        # BLAS matmul here) can differ in the last ulp, which the 1/(2*eps)
+        # division amplifies by ~5e5 — hence a roundoff tolerance, not exactness.
+        assert np.allclose(got[0], got[1], atol=1e-8), f"max|d|={np.max(np.abs(got[0] - got[1])):.2e}"
+
+    def test_batched_emits_one_model_subgraph(self):
+        """The default is ONE model evaluation, not 2n copies of it."""
+        w = self._w()
+        counts = {}
+        for batched in (True, False):
+            g = Graph()
+            bk = TraceBackend(g)
+            x = Tracer(g, (self.N,), g.input("x", (self.N,)))
+            bk.jacobian(self._map(bk, w), x, batched=batched)
+            counts[batched] = sum(1 for n in g.nodes if n.op in ("sin", "matmul"))
+        assert counts[True] < counts[False], f"batched={counts[True]} not smaller than dup={counts[False]}"
+        assert counts[True] == 2, f"expected one sin + one matmul in the batched graph, got {counts[True]}"
+
+    def test_linear_map_jacobian_is_the_matrix(self):
+        """Orientation check: d(x @ W)/dx == W.T."""
+        w = np.arange(self.N * 2, dtype=np.float64).reshape(self.N, 2)
+        g = Graph()
+        bk = TraceBackend(g)
+        x = Tracer(g, (self.N,), g.input("x", (self.N,)))
+        j = bk.jacobian(lambda v: v @ w, x)
+        g.output("j", j.node)
+        got = interpret(g, {"x": np.array([1.0, 2.0, 3.0])})["j"]
+        assert np.allclose(got, w.T, atol=1e-9)
+
+    def test_non_batch_capable_callable_raises(self):
+        g = Graph()
+        bk = TraceBackend(g)
+        x = Tracer(g, (self.N,), g.input("x", (self.N,)))
+        with pytest.raises(ShapeMismatchError, match="batch-capable"):
+            bk.jacobian(lambda v: _lift(g, np.ones((self.M,))), x)
+
+    def test_requires_1d_point(self):
+        g = Graph()
+        bk = TraceBackend(g)
+        x = Tracer(g, (self.N, 1), g.input("x", (self.N, 1)))
+        with pytest.raises(ShapeMismatchError, match="1-D"):
+            bk.jacobian(lambda v: v, x)
