@@ -1,0 +1,22 @@
+# Extended Kalman filter for CartPole (4 states). dt is inherited from the plant.
+#
+# The process model is not in the config: `measurement_matrix` below gives the
+# linear measurement model h(x) = C x (and the exact H = C), and the plant is
+# attached at build time (attach_plant -> plant.dynamics) for f. A compiled
+# scenario therefore needs no callable injection.
+#
+# The compiled path declares the estimator's measurement port as the full state
+# (n_x,), so C is the full-state identity here; a partial-state C would need the
+# compile path to carry n_y (not plumbed yet).
+type = "ExtendedKalmanFilter"
+name = "cartpole_ekf"
+
+process_noise = [0.01, 0.01, 0.01, 0.01]
+measurement_noise = [0.1, 0.1, 0.1, 0.1]
+
+measurement_matrix = [
+    [1.0, 0.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 0.0],
+    [0.0, 0.0, 0.0, 1.0],
+]

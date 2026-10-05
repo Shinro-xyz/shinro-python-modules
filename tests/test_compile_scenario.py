@@ -27,6 +27,7 @@ GEN = REPO_ROOT / "scripts" / "gen_scenario.py"
 BUILD = REPO_ROOT / "scripts" / "build_scenario.py"
 SCENARIO = REPO_ROOT / "tests" / "integration" / "scenarios" / "base_tracking.toml"
 MPC_SCENARIO = REPO_ROOT / "tests" / "integration" / "scenarios" / "mpc_compile.toml"
+EKF_SCENARIO = REPO_ROOT / "tests" / "integration" / "scenarios" / "ekf_cartpole_compile.toml"
 TEMPLATE = REPO_ROOT / "samples" / "scenarios" / "_template.toml"
 
 
@@ -489,3 +490,26 @@ def test_e2e_recurrent_scenario_compiles_with_state_ports(tmp_path):
     manifest = json.loads((out / "graph_data_manifest.json").read_text())
     assert [p["name"] for p in manifest["inputs"]] == ["state", "state_h_0", "state_c_0"]
     assert [p["name"] for p in manifest["state_outputs"]] == ["state_hc_0"]
+
+
+@pytest.mark.skipif(shutil.which("zig") is None, reason="zig not on PATH")
+def test_e2e_ekf_scenario_compiles_and_oracles(tmp_path):
+    """The compiled EKF scenario (batched FD Jacobian) passes gate A and oracle B.
+
+    Gate A is exact (interpret == live, same numpy arithmetic). Oracle B carries the
+    scenario's relaxed ``oracle_tol``: the finite-difference Jacobian divides by
+    2*eps = 2e-6, amplifying last-ulp differences between the VM's transcendentals
+    and numpy's by ~5e5 — measured ~2.5e-11, far below the 1e-9 gate.
+    """
+    out = tmp_path / "ekf"
+    gen = _run(GEN, str(EKF_SCENARIO), "--out", str(out))
+    assert gen.returncode == 0, gen.stderr
+
+    build = _run(BUILD, str(out), "--scenario", str(EKF_SCENARIO))
+    assert build.returncode == 0, build.stderr
+    assert "gate A" in build.stdout and "0.000e+00" in build.stdout
+
+    rec = json.loads((out / "lib" / "libbase.deployment.json").read_text())
+    assert rec["oracle"]["status"] == "passed"
+    assert rec["oracle"]["tolerance"] == 1e-9
+    assert rec["oracle"]["max_abs_err"] < rec["oracle"]["tolerance"]

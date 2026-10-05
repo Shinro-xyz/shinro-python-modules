@@ -103,17 +103,24 @@ def build_composed_graph(
 
 
 def instantiate(estimator_config, controller_config, plant=None):
-    """Instantiate the estimator + controller (attaching the plant to the controller).
+    """Instantiate the estimator + controller (attaching the plant to both).
 
     The single construction site: :func:`build_composed_graph` composes the
     traced graphs from these instances, and gate A
     (:mod:`shinro.codegen.gate_a`) drives the *same* instances live, so the
     graph and the live loop cannot be built from different components.
+
+    The plant is attached to any component exposing ``attach_plant`` — the
+    controller (its model, e.g. MPPI's dynamics/cost) and the estimator (the EKF's
+    process model, so a compiled filter traces the plant's own ``dynamics``).
     """
     est = _factory(EstimatorFactory, estimator_config)
     ctrl = _factory(ControllerFactory, controller_config)
-    if plant is not None and hasattr(ctrl, "attach_plant"):
-        ctrl.attach_plant(plant)
+    if plant is not None:
+        if hasattr(est, "attach_plant"):
+            est.attach_plant(plant)
+        if hasattr(ctrl, "attach_plant"):
+            ctrl.attach_plant(plant)
     return est, ctrl
 
 

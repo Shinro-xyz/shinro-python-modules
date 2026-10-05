@@ -131,6 +131,7 @@ class TestKalmanFilter:
         C = bk.array([[1.0]])
         kf = KalmanFilter(A, B, Q, R, C=C, backend=bk)
         true_state = np.array([[5.0]])
+        x = bk.zeros((1, 1))
         for _ in range(30):
             y = bk.from_numpy(true_state + 0.1 * np.random.randn(1, 1))
             u = bk.array([[0.0]])
@@ -259,6 +260,7 @@ class TestLuenbergerObserver:
         C = bk.array([[1.0]])
         obs = LuenbergerObserver(A, B, L, C=C, backend=bk)
         true_state = np.array([[5.0]])
+        x = bk.zeros((1, 1))
         for _ in range(30):
             y = bk.from_numpy(true_state)
             u = bk.array([[0.0]])
@@ -532,3 +534,110 @@ class TestExtendedKalmanFilter:
 
         assert Exported is ExtendedKalmanFilter
         assert _ESTIMATOR_REGISTRY["ExtendedKalmanFilter"] is ExtendedKalmanFilter
+
+    def test_measurement_matrix_gives_exact_h_and_H(self, bk):
+        """A linear measurement_matrix supplies h(x) = C x and the exact H = C, no callable."""
+        from shinro.estimators.extended_kf import ExtendedKalmanFilter
+
+        C = bk.array([[1.0, 0.0], [0.0, 1.0]])
+        ekf = ExtendedKalmanFilter(
+            lambda x, u: bk.zeros(2),
+            None,
+            dt=0.01,
+            Q=0.01 * bk.eye(2),
+            R=0.1 * bk.eye(2),
+            backend=bk,
+            measurement_matrix=C,
+        )
+        x = bk.array([1.5, -2.0])
+        assert np.allclose(_to_np(ekf._measurement(x), bk), _to_np(C @ x, bk))
+        assert np.allclose(_to_np(ekf._measurement_jacobian(x), bk), _to_np(C, bk))
+        out = ekf.estimate(bk.array([1.5, -2.0]), bk.zeros(2))
+        assert _to_np(out, bk).shape == (2,)
+
+    def test_measurement_matrix_shape_mismatch_is_loud(self, bk):
+        """A C that does not match R's n_y and Q's n_x is rejected at construction."""
+        from shinro.estimators.extended_kf import ExtendedKalmanFilter
+
+        with pytest.raises(ValueError, match="measurement_matrix shape"):
+            ExtendedKalmanFilter(
+                lambda x, u: bk.zeros(2),
+                None,
+                dt=0.01,
+                Q=0.01 * bk.eye(2),
+                R=0.1 * bk.eye(2),
+                backend=bk,
+                measurement_matrix=bk.array([[1.0, 0.0]]),  # (1, 2) but R is (2, 2)
+            )
+
+    def test_from_config_parses_measurement_matrix(self, bk):
+        """from_config carries measurement_matrix into the filter; a C-only filter estimates."""
+        from shinro.estimators.extended_kf import ExtendedKalmanFilter
+
+        ekf = ExtendedKalmanFilter.from_config(
+            {
+                "process_noise": [0.01, 0.01],
+                "measurement_noise": [0.1, 0.1],
+                "dt": 0.02,
+                "measurement_matrix": [[1.0, 0.0], [0.0, 1.0]],
+            },
+            backend=bk,
+        )
+        C = ekf.C
+        assert C is not None
+        assert _to_np(C, bk).shape == (2, 2)
+        assert ekf.measurement_fn is None
+        ekf.dynamics_fn = lambda x, u: bk.zeros(2)
+        assert _to_np(ekf.estimate(bk.array([1.0, 2.0]), bk.zeros(2)), bk).shape == (2,)
+
+    def test_bk_aware_callable_receives_the_backend(self, bk):
+        """A callable taking ``bk`` is given the filter's backend (the tracing route)."""
+        from shinro.estimators.extended_kf import ExtendedKalmanFilter
+
+        seen = []
+
+        def dynamics(x, u, bk=None):
+            seen.append(bk)
+            assert bk is not None
+            return bk.zeros(2)
+
+        ekf = ExtendedKalmanFilter(dynamics, None, dt=0.01, Q=0.01 * bk.eye(2), R=0.1 * bk.eye(2),
+                                    backend=bk, measurement_matrix=bk.eye(2))
+        ekf.estimate(bk.array([1.0, 2.0]), bk.zeros(2))
+        assert seen, "bk-aware dynamics was never called"
+        assert all(s is bk for s in seen), "the filter did not forward its own backend"
+
+    def test_attach_plant_injects_dynamics(self, bk):
+        """attach_plant fills an unset dynamics_fn with the plant's model; explicit wins."""
+        import tomllib as _tomllib
+
+        from shinro.estimators.extended_kf import ExtendedKalmanFilter
+        from shinro.factories.registry import _PLANT_REGISTRY
+        from shinro.utils.array_backend import NumpyBackend
+        from shinro.utils.config_resolver import resolve_config_path
+
+        with open(resolve_config_path("samples/plants/cartpole.toml"), "rb") as f:
+            plant = _PLANT_REGISTRY["CartPole"].from_config(_tomllib.load(f), backend=NumpyBackend())
+
+        ekf = ExtendedKalmanFilter.from_config(
+            {"process_noise": [0.01] * 4, "measurement_noise": [0.1] * 4, "dt": 0.01,
+             "measurement_matrix": [[1.0, 0, 0, 0], [0, 1.0, 0, 0], [0, 0, 1.0, 0], [0, 0, 0, 1.0]]},
+            backend=bk,
+        )
+        assert ekf.dynamics_fn is None
+        ekf.attach_plant(plant)
+        assert ekf.dynamics_fn is not None
+        assert _to_np(ekf.estimate(bk.array([0.1, 0.0, 0.2, 0.0]), bk.zeros(1)), bk).shape == (4,)
+
+        explicit = lambda x, u: bk.zeros(4)  # noqa: E731
+        ekf.dynamics_fn = explicit
+        ekf.attach_plant(plant)
+        assert ekf.dynamics_fn is explicit, "attach_plant overwrote an explicit dynamics_fn"
+
+    def test_attach_plant_without_dynamics_is_loud(self, bk):
+        """A plant exposing no dynamics and a filter with none is a loud error."""
+        from shinro.estimators.extended_kf import ExtendedKalmanFilter
+
+        ekf = ExtendedKalmanFilter(None, None, dt=0.01, Q=bk.eye(1), R=bk.eye(1), backend=bk)
+        with pytest.raises(ValueError, match="no dynamics"):
+            ekf.attach_plant(object())
