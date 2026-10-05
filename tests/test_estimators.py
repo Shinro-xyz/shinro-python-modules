@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 
 def _to_np(x, bk):
@@ -314,3 +315,220 @@ class TestLuenbergerObserver:
         assert _to_np(obs.D, bk).shape == (1, 1)
         x = obs.estimate(bk.array([[1.0]]), bk.array([[0.0]]))
         assert _to_np(x, bk).shape == (2, 1)
+
+
+class TestExtendedKalmanFilter:
+    """Verify the EKF: predict-update equations, Jacobians, config, and reset.
+
+    Flat-vector convention throughout: state (n_x,), control (n_u,),
+    measurement (n_y,). ``dynamics_fn`` is continuous-time dx/dt, Euler-
+    discretized at dt.
+    """
+
+    @staticmethod
+    def _linear_ekf(bk, dt=0.01):
+        """EKF over a linear integrator chain: f = Ac x + Bc u, h = C x.
+
+        No analytical Jacobian is passed — the backend computes them (finite
+        differences on numpy, autograd on torch).
+        """
+        from shinro.estimators.extended_kf import ExtendedKalmanFilter
+
+        Ac = bk.array([[0.0, 1.0], [0.0, 0.0]])
+        Bc = bk.array([[0.0], [1.0]])
+        C = bk.array([[1.0, 0.0]])
+        ekf = ExtendedKalmanFilter(
+            lambda x, u: Ac @ x + Bc @ u,
+            lambda x: C @ x,
+            dt=dt,
+            Q=0.01 * bk.eye(2),
+            R=0.1 * bk.eye(1),
+            backend=bk,
+        )
+        return ekf, Ac, Bc, C
+
+    def test_estimate_shape(self, bk):
+        """estimate() returns a flat state vector of shape (n_x,)."""
+        ekf, *_ = self._linear_ekf(bk)
+        x = ekf.estimate(bk.array([0.7]), bk.array([0.3]))
+        assert _to_np(x, bk).shape == (2,)
+
+    def test_matches_kalman_filter_linear(self, bk):
+        """For linear f, h the EKF reproduces a KalmanFilter with A_d = I + dt A_c, B_d = dt B_c."""
+        from shinro.estimators.kalman_filter import KalmanFilter
+
+        dt = 0.01
+        ekf, Ac, Bc, C = self._linear_ekf(bk, dt)
+        kf = KalmanFilter(
+            bk.eye(2) + dt * Ac, dt * Bc, ekf.Q, ekf.R, C=C, D=bk.zeros((1, 1)), backend=bk
+        )
+        x_ekf = ekf.estimate(bk.array([0.7]), bk.array([0.3]))
+        x_kf = kf.estimate(bk.array([[0.7]]), bk.array([[0.3]]))  # KF is column-vector
+        assert np.allclose(_to_np(x_ekf, bk), _to_np(x_kf, bk).ravel(), atol=1e-8)
+        assert np.allclose(_to_np(ekf.P, bk), _to_np(kf.P, bk), atol=1e-8)
+
+    def test_predict_update_equations(self, bk):
+        """One EKF step follows the documented predict/update equations exactly."""
+        ekf, Ac, Bc, C = self._linear_ekf(bk)
+        n = 2
+        x0 = bk.copy(ekf.x_hat)
+        P0 = bk.copy(ekf.P)
+        y, u = bk.array([0.7]), bk.array([0.3])
+
+        x_pred = x0 + ekf.dt * (Ac @ x0 + Bc @ u)
+        F = bk.eye(n) + ekf.dt * Ac
+        P_pred = F @ P0 @ F.T + ekf.Q
+        S = C @ P_pred @ C.T + ekf.R
+        K = P_pred @ C.T @ bk.inv(S)
+        x_manual = x_pred + K @ (y - C @ x_pred)
+        P_manual = (bk.eye(n) - K @ C) @ P_pred
+
+        x = ekf.estimate(y, u)
+        assert np.allclose(_to_np(x, bk), _to_np(x_manual, bk), atol=1e-8)
+        assert np.allclose(_to_np(ekf.P, bk), _to_np(P_manual, bk), atol=1e-8)
+
+    def test_numerical_jacobian_matches_analytic(self, bk):
+        """The backend Jacobian of f and h matches the analytic linearization."""
+        ekf, Ac, _Bc, C = self._linear_ekf(bk)
+        J_f = ekf._dynamics_jacobian(bk.array([0.3, -0.2]), bk.array([0.5]))
+        J_h = ekf._measurement_jacobian(bk.array([0.3, -0.2]))
+        assert np.allclose(_to_np(J_f, bk), _to_np(Ac, bk), atol=1e-6)
+        assert np.allclose(_to_np(J_h, bk), _to_np(C, bk), atol=1e-6)
+
+    def test_measurement_jacobian_nonlinear(self, bk):
+        """H is the true local Jacobian for a nonlinear h(x) = [x0^2, x1]."""
+        from shinro.estimators.extended_kf import ExtendedKalmanFilter
+
+        ekf = ExtendedKalmanFilter(
+            lambda x, u: bk.zeros(2),
+            lambda x: bk.array([x[0] * x[0], x[1]]),
+            dt=0.01,
+            Q=bk.eye(2),
+            R=bk.eye(2),
+            backend=bk,
+        )
+        H = ekf._measurement_jacobian(bk.array([3.0, 5.0]))
+        assert np.allclose(_to_np(H, bk), [[6.0, 0.0], [0.0, 1.0]], atol=1e-5)
+
+    def test_converges_nonlinear_measurement(self, bk):
+        """With a nonlinear h(x) = x^2 the estimate converges to the true state."""
+        from shinro.estimators.extended_kf import ExtendedKalmanFilter
+
+        ekf = ExtendedKalmanFilter(
+            lambda x, u: bk.zeros(1),
+            lambda x: bk.array([x[0] * x[0]]),
+            dt=0.01,
+            Q=1e-4 * bk.eye(1),
+            R=0.01 * bk.eye(1),
+            x0=bk.array([1.0]),
+            backend=bk,
+        )
+        y, u = bk.array([4.0]), bk.zeros(1)
+        x = ekf.x_hat
+        for _ in range(60):
+            x = ekf.estimate(y, u)
+        assert abs(float(_to_np(x, bk)[0]) - 2.0) < 1e-3
+
+    def test_accepts_column_vector_measurement(self, bk):
+        """A (n,1) measurement is flattened, not broadcast into an (n,n) innovation."""
+        ekf, *_ = self._linear_ekf(bk)
+        x = ekf.estimate(bk.array([[0.7]]), bk.array([[0.3]]))
+        assert _to_np(x, bk).shape == (2,)
+
+    def test_estimate_without_callables_raises(self, bk):
+        """A from_config filter with no injected callables raises a clear RuntimeError."""
+        from shinro.estimators.extended_kf import ExtendedKalmanFilter
+
+        ekf = ExtendedKalmanFilter.from_config(
+            {"process_noise": [0.01], "measurement_noise": [0.1], "dt": 0.02}, backend=bk
+        )
+        with pytest.raises(RuntimeError, match="dynamics_fn"):
+            ekf.estimate(bk.array([1.0]), bk.array([0.0]))
+
+    def test_reset(self, bk):
+        """reset() zeroes the estimate (and accepts a new x0)."""
+        ekf, *_ = self._linear_ekf(bk)
+        ekf.estimate(bk.array([0.7]), bk.array([0.3]))
+        ekf.reset()
+        assert np.allclose(_to_np(ekf.x_hat, bk), 0.0)
+        ekf.reset(bk.array([3.0, 4.0]))
+        assert np.allclose(_to_np(ekf.x_hat, bk), [3.0, 4.0])
+
+    def test_from_config_shapes_and_defaults(self, bk):
+        """from_config reads n_x from Q and n_y from R; callables start None."""
+        from shinro.estimators.extended_kf import ExtendedKalmanFilter
+
+        ekf = ExtendedKalmanFilter.from_config(
+            {"process_noise": [0.01, 0.02, 0.03], "measurement_noise": [0.1, 0.1], "dt": 0.02},
+            backend=bk,
+        )
+        assert ekf.n_x == 3 and ekf.n_y == 2
+        assert _to_np(ekf.Q, bk).shape == (3, 3)
+        assert _to_np(ekf.R, bk).shape == (2, 2)
+        assert _to_np(ekf.x_hat, bk).shape == (3,)
+        assert ekf.dynamics_fn is None and ekf.measurement_fn is None
+
+    def test_from_config_full_matrix_and_initial_state(self, bk):
+        """Nested lists parse as full matrices; initial_state seeds x_hat."""
+        from shinro.estimators.extended_kf import ExtendedKalmanFilter
+
+        ekf = ExtendedKalmanFilter.from_config(
+            {
+                "process_noise": [[0.01, 0.0], [0.0, 0.02]],
+                "measurement_noise": [0.1],
+                "dt": 0.1,
+                "initial_state": [1.0, 2.0],
+            },
+            backend=bk,
+        )
+        assert np.allclose(_to_np(ekf.Q, bk), [[0.01, 0.0], [0.0, 0.02]])
+        assert np.allclose(_to_np(ekf.x_hat, bk), [1.0, 2.0])
+
+    def test_from_config_inject_and_estimate(self, bk):
+        """A from_config filter works once the callables are injected."""
+        from shinro.estimators.extended_kf import ExtendedKalmanFilter
+
+        ekf = ExtendedKalmanFilter.from_config(
+            {"process_noise": [0.01], "measurement_noise": [0.1], "dt": 0.02}, backend=bk
+        )
+        ekf.dynamics_fn = lambda x, u: bk.zeros(1)
+        ekf.measurement_fn = lambda x: bk.array([x[0]])
+        x = ekf.estimate(bk.array([1.0]), bk.zeros(1))
+        assert _to_np(x, bk).shape == (1,)
+
+    def test_from_config_requires_dt(self, bk):
+        """Standalone from_config rejects a missing dt."""
+        from shinro.estimators.extended_kf import ExtendedKalmanFilter
+
+        with pytest.raises(ValueError, match="dt is required"):
+            ExtendedKalmanFilter.from_config(
+                {"process_noise": [0.01], "measurement_noise": [0.1]}, backend=bk
+            )
+
+    def test_from_config_rejects_unknown_key(self, bk):
+        """Strict config parsing rejects an unknown key."""
+        from shinro.estimators.extended_kf import ExtendedKalmanFilter
+
+        with pytest.raises(ValueError, match="unknown key"):
+            ExtendedKalmanFilter.from_config(
+                {"process_noise": [0.01], "measurement_noise": [0.1], "dt": 0.1, "nope": 1},
+                backend=bk,
+            )
+
+    def test_sample_config_parses(self, bk):
+        """The shipped ekf_base.toml parses into a valid filter."""
+        from shinro.estimators.extended_kf import ExtendedKalmanFilter
+
+        cfg = ExtendedKalmanFilter.load_config("samples/estimators/ekf_base.toml")
+        ekf = ExtendedKalmanFilter.from_config(cfg, backend=bk)
+        assert ekf.dt == 0.02
+        assert ekf.n_x == 2 and ekf.n_y == 2
+
+    def test_registered_and_exported(self):
+        """The estimator is registered and exported from the package."""
+        from shinro.estimators import ExtendedKalmanFilter as Exported
+        from shinro.estimators.extended_kf import ExtendedKalmanFilter
+        from shinro.factories.registry import _ESTIMATOR_REGISTRY
+
+        assert Exported is ExtendedKalmanFilter
+        assert _ESTIMATOR_REGISTRY["ExtendedKalmanFilter"] is ExtendedKalmanFilter

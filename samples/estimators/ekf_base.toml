@@ -1,0 +1,11 @@
+# Extended Kalman filter seed config.
+#
+# dynamics_fn / measurement_fn are Python callables and cannot be serialized
+# to TOML: from_config leaves them None and the caller injects them after
+# construction (ekf.dynamics_fn = ..., ekf.measurement_fn = ...). dt is
+# inherited from the plant in scenario builds, so omit it there.
+type = "ExtendedKalmanFilter"
+name = "ekf_base"
+dt = 0.02
+process_noise = [0.01, 0.01]
+measurement_noise = [0.1, 0.1]
