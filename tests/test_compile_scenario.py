@@ -28,6 +28,7 @@ BUILD = REPO_ROOT / "scripts" / "build_scenario.py"
 SCENARIO = REPO_ROOT / "tests" / "integration" / "scenarios" / "base_tracking.toml"
 MPC_SCENARIO = REPO_ROOT / "tests" / "integration" / "scenarios" / "mpc_compile.toml"
 EKF_SCENARIO = REPO_ROOT / "tests" / "integration" / "scenarios" / "ekf_cartpole_compile.toml"
+EKF_PENDULUM_SCENARIO = REPO_ROOT / "tests" / "integration" / "scenarios" / "ekf_inverted_pendulum_compile.toml"
 TEMPLATE = REPO_ROOT / "samples" / "scenarios" / "_template.toml"
 
 
@@ -493,7 +494,8 @@ def test_e2e_recurrent_scenario_compiles_with_state_ports(tmp_path):
 
 
 @pytest.mark.skipif(shutil.which("zig") is None, reason="zig not on PATH")
-def test_e2e_ekf_scenario_compiles_and_oracles(tmp_path):
+@pytest.mark.parametrize("scenario", [EKF_SCENARIO, EKF_PENDULUM_SCENARIO], ids=["cartpole", "inverted_pendulum"])
+def test_e2e_ekf_scenario_compiles_and_oracles(tmp_path, scenario):
     """The compiled EKF scenario (batched FD Jacobian) passes gate A and oracle B.
 
     Gate A is exact (interpret == live, same numpy arithmetic). Oracle B carries the
@@ -502,10 +504,10 @@ def test_e2e_ekf_scenario_compiles_and_oracles(tmp_path):
     and numpy's by ~5e5 — measured ~2.5e-11, far below the 1e-9 gate.
     """
     out = tmp_path / "ekf"
-    gen = _run(GEN, str(EKF_SCENARIO), "--out", str(out))
+    gen = _run(GEN, str(scenario), "--out", str(out))
     assert gen.returncode == 0, gen.stderr
 
-    build = _run(BUILD, str(out), "--scenario", str(EKF_SCENARIO))
+    build = _run(BUILD, str(out), "--scenario", str(scenario))
     assert build.returncode == 0, build.stderr
     assert "gate A" in build.stdout and "0.000e+00" in build.stdout
 

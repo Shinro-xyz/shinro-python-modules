@@ -66,6 +66,24 @@ class ComposedGraph:
     state_outputs: list[str] = field(default_factory=list)
 
 
+def _measurement_dim(est: object, n_x: int) -> int:
+    """The estimator's measurement dimension, for the traced ``y`` port shape.
+
+    A sensor set need not observe every state: the EKF declares ``n_y`` directly,
+    while the KF/Luenberger carry it as their ``C`` row count. Components whose
+    measurement is the whole state (and expose neither) fall back to ``n_x``, which
+    keeps the shipped base graph unchanged.
+
+    The composed graph gets the same answer from the estimator's traced input node
+    (see :func:`compose`); this is the instance-side source for :mod:`build` and
+    :mod:`gate_a`, which hold the live estimator.
+    """
+    n_y = getattr(est, "n_y", None)
+    if n_y is None:
+        n_y = getattr(getattr(est, "C", None), "shape", (None,))[0]
+    return n_x if n_y is None else int(n_y)
+
+
 def compose(
     estimator: NodeGraph,
     controller: NodeGraph,
@@ -133,7 +151,16 @@ def compose(
     output_owner: dict[str, str] = {"u": "compose (the control output)"}
 
     # --- declare combined-graph inputs first (the merge will reference them) ---
-    y_id = combined.input("y", (n_x,))
+    # The measurement port is the ESTIMATOR's, not the state's: a sensor set may
+    # observe fewer channels than the state has dimensions (a partial C with
+    # n_y < n_x), and the estimator already declares its own input shape. Falling
+    # back to (n_x, 1) keeps a whole-state measurement (the shipped base graph)
+    # unchanged.
+    est_meas_shape = _lookup_input_shape(estimator.graph, "measurement", default=(n_x, 1))
+    n_y = 1
+    for dim in est_meas_shape:
+        n_y *= dim
+    y_id = combined.input("y", (n_y,))
     x_ref_id = combined.input("x_ref", (n_x,))
     u_prev_id = combined.input("u_prev", (n_u,))
 
