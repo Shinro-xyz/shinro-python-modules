@@ -27,7 +27,7 @@ from typing import Any
 import numpy as np
 
 from shinro.codegen.ops import missing_op_error
-from shinro.codegen.tracing import Graph, Tracer, _lift
+from shinro.codegen.tracing import Graph, ShapeMismatchError, Tracer, _lift
 
 
 class TraceBackend:
@@ -123,6 +123,52 @@ class TraceBackend:
         # baked in. The node's output is the full QP solution, same length as
         # q; MPC slices out u[:m] with a downstream slice op.
         return self._emit("solve_qp", [q], q.shape, H=H, A=A, lb=lb, ub=ub)
+
+    def jacobian(self, f: Any, x: Tracer, eps: float = 1e-6, *, batched: bool = True) -> Tracer:
+        # Central finite differences, mirroring NumpyBackend.jacobian — but as
+        # graph nodes, so a traced nonlinear model (the EKF's f/h) lowers with
+        # everything else instead of being the one eager-only op.
+        #
+        # The perturbation is batched: f is called ONCE on the (2n, n) block of
+        # x ± eps*e_i probes and the columns are cut out of that single
+        # evaluation. That relies on f being batch-capable — the Plant.dynamics
+        # contract (``(N, n_x) -> (N, n_x)``) already guarantees it and MPPI's
+        # batched rollout already depends on it, so the probes ride the same
+        # batch axis the model is written in. One f-subgraph instead of 2n
+        # copies: the derivative costs the same nodes as one model evaluation.
+        # The arithmetic per probe is unchanged, so the result matches the
+        # per-column form to finite-difference roundoff — bit-identical when the
+        # model is elementwise-only (as the plant dynamics are), and within
+        # ~1/2eps ulps when a shape-sensitive kernel (e.g. BLAS matmul) is in the
+        # model, since the probe batch changes its blocking.
+        x = _lift(self.g, x)
+        if len(x.shape) != 1:
+            raise ShapeMismatchError(f"jacobian requires a 1-D point, got {x.shape}")
+        n = x.shape[0]
+
+        if not batched:
+            # Escape hatch for a callable that cannot carry a leading batch axis
+            # (e.g. a user-supplied measurement model): 2n separate emissions.
+            cols = []
+            for i in range(n):
+                e = np.zeros(n, dtype=np.float64)
+                e[i] = eps
+                cols.append((f(x + e) - f(x - e)) * (1.0 / (2.0 * eps)))
+            return self.stack(cols).T
+
+        n_probes = 2 * n
+        e = np.vstack([np.eye(n, dtype=np.float64), -np.eye(n, dtype=np.float64)]) * eps
+        out = f(self.reshape(x, 1, n) + e)
+        if len(out.shape) != 2 or out.shape[0] != n_probes:
+            raise ShapeMismatchError(
+                f"jacobian: f returned shape {tuple(out.shape)} for a ({n_probes}, {n}) batched probe — "
+                f"a batch-capable callable must accept a leading probe axis and return ({n_probes}, m), "
+                f"like Plant.dynamics (wrap the callable so it passes the batch through, or call with "
+                f"batched=False)"
+            )
+        plus = self.slice_(out, 0, n)
+        minus = self.slice_(out, n, n_probes)
+        return ((plus - minus) * (1.0 / (2.0 * eps))).T
 
     # --- elementwise / selection ---
 
