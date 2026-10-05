@@ -199,9 +199,20 @@ def live_components(spec: dict) -> tuple:
     Returns ``(est, ctrl, n_x, n_u, input_limits)`` — the same instances
     :func:`closed_loop_tracking` traces, rebuilt from the same configs.
     """
+    est, ctrl, n_x, n_u, limits, _plant = live_components_and_plant(spec)
+    return est, ctrl, n_x, n_u, limits
+
+
+def live_components_and_plant(spec: dict) -> tuple:
+    """Like :func:`live_components`, but also returns the plant instance.
+
+    Gate A needs the plant for a controller whose model is composed in rather than
+    host-fed (SMC's ``f_x``/``g_x``): the live side must evaluate the same plant
+    model the graph baked, or the comparison is meaningless.
+    """
     est_cfg, ctrl_cfg, n_x, n_u, limits, plant = closed_loop_configs(spec)
     est, ctrl = instantiate(est_cfg, ctrl_cfg, plant)
-    return est, ctrl, n_x, n_u, limits
+    return est, ctrl, n_x, n_u, limits, plant
 
 
 @register_graph("policy_only")

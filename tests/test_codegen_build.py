@@ -505,3 +505,32 @@ def test_ekf_scenario_expands_its_jacobian_batched(tmp_path, scenario, n_x, n_u,
     outputs, state = interpret_step(cg.graph, inputs)
     assert outputs["u"].shape == (n_u,)
     assert state["x_hat"].shape == (n_x,) and state["P"].shape == (n_x, n_x)
+
+
+def test_smc_composes_with_a_plant_derived_model(tmp_path):
+    """A controller taking f_x/g_x as inputs gets the plant model baked in.
+
+    SMC needs f(x) and g(x); neither is a host port and neither is written in a
+    config — the [plant] is attached and compose emits the subgraph, so the model
+    lowers with everything else (no `jacobian` op, no hand-maintained g).
+    """
+    from shinro.codegen.scenario_gen import gen_scenario
+
+    cg, _ = gen_scenario("tests/integration/scenarios/smc_pendulum_compile.toml", str(tmp_path / "smc"))
+    assert "f_x" not in cg.inputs and "g_x" not in cg.inputs, "model terms must be baked, not host ports"
+    assert "healthy" in cg.outputs  # SMC's controllability flag survives composition
+    assert "jacobian" not in [n.op for n in cg.graph.nodes]
+
+
+def test_controller_model_inputs_without_a_plant_are_loud():
+    """f_x/g_x with no plant to derive them from is a scenario error, not a port."""
+    from shinro.codegen.build import build_composed_graph
+
+    est_cfg = {
+        "type": "KalmanFilter", "dt": 0.01, "process_noise": [0.001, 0.01],
+        "measurement_noise": [0.05, 0.05],
+        "A_dynamics": [[1.0, 0.01], [0.0, 1.0]], "B_dynamics": [[0.0], [0.01]],
+    }
+    ctrl_cfg = {"type": "SMC", "c": [1.0, 2.0], "k1": 1.0, "phi": 0.1, "smoother": "sat", "dt": 0.01}
+    with pytest.raises(ValueError, match="plant-model term"):
+        build_composed_graph(est_cfg, ctrl_cfg, n_x=2, n_u=1, plant=None)

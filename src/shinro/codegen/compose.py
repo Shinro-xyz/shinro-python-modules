@@ -90,6 +90,7 @@ def compose(
     plant_dims: dict[str, int],
     input_limits: tuple[np.ndarray, np.ndarray] | None = None,
     host_inputs: tuple[str, ...] = (),
+    model: NodeGraph | None = None,
 ) -> ComposedGraph:
     """Compose an estimator and controller into one closed-loop step graph.
 
@@ -228,6 +229,21 @@ def compose(
         combined, est_out_id, _lookup_input_shape(estimator.graph, "state_x_hat", default=(n_x, 1)), (n_x,)
     )
 
+    # --- merge the plant-derived model (f_x / g_x), when one was supplied ---
+    # A controller that takes its model as INPUTS (SMC's f_x / g_x) gets them from a
+    # traced plant subgraph wired to the state estimate, so the model is baked into
+    # the single binary instead of being evaluated by the host. The subgraph is
+    # built by the caller (``build._trace_plant_model``) from the scenario's plant;
+    # a controller that declares neither input never needs one.
+    model_output_ids: dict[str, int] = {}
+    if model is not None:
+        model_remap, model_source_ids = _merge_and_rewire(combined, model.graph, {"x": x_hat_flat_id})
+        for name, src in model.output_nodes.items():
+            src_node = model.graph.nodes[src]
+            model_output_ids[name] = (
+                model_source_ids[src_node.attrs["name"]] if src_node.op == "input" else model_remap[src]
+            )
+
     # --- merge the controller ---
     # Controller inputs are mapped by ROLE, driven by the input placeholders
     # the traced controller declares (its compute() signature):
@@ -265,10 +281,21 @@ def compose(
             ctrl_input_map[name] = u_prev_id
         elif role == "state":
             state_role_names.append(name)
+        elif role == "model":
+            # A plant-model term (SMC's f_x / g_x): supplied by the composed model
+            # subgraph, matched by name. Declaring one without a plant to derive it
+            # from is a scenario error, not a silent host port.
+            if name not in model_output_ids:
+                raise ValueError(
+                    f"controller input '{name}' is a plant-model term but no plant model was "
+                    f"composed — give the scenario a [plant] (compose(model=...)) so f(x)/g(x) can "
+                    f"be derived and baked in."
+                )
+            ctrl_input_map[name] = model_output_ids[name]
         else:
             raise ValueError(
                 f"controller input '{name}' does not map to a known role "
-                f"(state / reference / u_prev / a declared host input); extend "
+                f"(state / reference / u_prev / model / a declared host input); extend "
                 f"_CONTROLLER_INPUT_ROLES in shinro.codegen.compose or pass it "
                 f"in host_inputs"
             )
@@ -411,8 +438,9 @@ def compose(
 # Controller input name → dataflow role. Exact names (no prefix matching) so
 # `x_ref` never collides with `x0`/`x`. Controllers whose compute() uses other
 # names for these roles should be added here; anything unmapped raises at
-# compose time rather than silently mis-wiring (e.g. SMC's dynamics terms
-# f_x/g_x, which need a different wiring model entirely).
+# compose time rather than silently mis-wiring. `f_x`/`g_x` are the SMC-style
+# *model terms*: they are not host ports, they are fed by the plant-derived
+# model subgraph compose merges in (see ``model=``).
 _CONTROLLER_INPUT_ROLES: dict[str, str] = {
     "x0": "state",
     "current_state": "state",
@@ -422,6 +450,8 @@ _CONTROLLER_INPUT_ROLES: dict[str, str] = {
     "target_state": "reference",
     "target": "reference",
     "u_prev": "u_prev",
+    "f_x": "model",
+    "g_x": "model",
 }
 
 

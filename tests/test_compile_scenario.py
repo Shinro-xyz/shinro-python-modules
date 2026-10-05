@@ -29,6 +29,7 @@ SCENARIO = REPO_ROOT / "tests" / "integration" / "scenarios" / "base_tracking.to
 MPC_SCENARIO = REPO_ROOT / "tests" / "integration" / "scenarios" / "mpc_compile.toml"
 EKF_SCENARIO = REPO_ROOT / "tests" / "integration" / "scenarios" / "ekf_cartpole_compile.toml"
 EKF_PENDULUM_SCENARIO = REPO_ROOT / "tests" / "integration" / "scenarios" / "ekf_inverted_pendulum_compile.toml"
+SMC_SCENARIO = REPO_ROOT / "tests" / "integration" / "scenarios" / "smc_pendulum_compile.toml"
 TEMPLATE = REPO_ROOT / "samples" / "scenarios" / "_template.toml"
 
 
@@ -514,4 +515,26 @@ def test_e2e_ekf_scenario_compiles_and_oracles(tmp_path, scenario):
     rec = json.loads((out / "lib" / "libbase.deployment.json").read_text())
     assert rec["oracle"]["status"] == "passed"
     assert rec["oracle"]["tolerance"] == 1e-9
+    assert rec["oracle"]["max_abs_err"] < rec["oracle"]["tolerance"]
+
+
+@pytest.mark.skipif(shutil.which("zig") is None, reason="zig not on PATH")
+def test_e2e_smc_scenario_compiles_and_oracles(tmp_path):
+    """The SMC scenario (plant-derived f_x/g_x baked in) passes gate A and oracle B.
+
+    The controller takes its model as inputs; compose emits it from the [plant],
+    so the kernel has no f_x/g_x host ports and gate A drives the live controller
+    with the same plant model. g comes from ``control_matrix``'s finite-difference
+    default, hence the scenario's relaxed oracle tolerance.
+    """
+    out = tmp_path / "smc"
+    gen = _run(GEN, str(SMC_SCENARIO), "--out", str(out))
+    assert gen.returncode == 0, gen.stderr
+
+    build = _run(BUILD, str(out), "--scenario", str(SMC_SCENARIO))
+    assert build.returncode == 0, build.stderr
+    assert "gate A" in build.stdout and "0.000e+00" in build.stdout
+
+    rec = json.loads((out / "lib" / "libbase.deployment.json").read_text())
+    assert rec["oracle"]["status"] == "passed"
     assert rec["oracle"]["max_abs_err"] < rec["oracle"]["tolerance"]

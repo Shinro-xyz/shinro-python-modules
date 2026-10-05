@@ -583,7 +583,7 @@ class TestComposeControllerRoles:
             )
 
     def test_unknown_controller_input_raises(self):
-        """A controller input outside the role table raises (e.g. SMC's f_x/g_x)."""
+        """An input outside the role table raises; a model term without a plant is loud."""
         from shinro.codegen.trace_node import NodeGraph
 
         est_g = Graph()
@@ -598,20 +598,27 @@ class TestComposeControllerRoles:
             output_nodes={"out": est_in},
             state_attrs=[],
         )
-        ctrl_g = Graph()
-        x_in = ctrl_g.input("x", (3,))
-        ctrl_g.input("f_x", (3,))  # SMC-style dynamics term — not a known role
-        ctrl_g.input("g_x", (3,))
-        ctrl_g.output("out", x_in)
-        controller = NodeGraph(
-            graph=ctrl_g,
-            contract=None,  # type: ignore[arg-type]
-            input_nodes={"x": x_in},
-            output_nodes={"out": x_in},
-            state_attrs=[],
-        )
+
+        def controller_with(extra: str) -> NodeGraph:
+            ctrl_g = Graph()
+            x_in = ctrl_g.input("x", (3,))
+            ctrl_g.input(extra, (3,))
+            ctrl_g.output("out", x_in)
+            return NodeGraph(
+                graph=ctrl_g,
+                contract=None,  # type: ignore[arg-type]
+                input_nodes={"x": x_in},
+                output_nodes={"out": x_in},
+                state_attrs=[],
+            )
+
         with pytest.raises(ValueError, match="does not map to a known role"):
-            compose(estimator, controller, plant_dims=_BASE_DIMS, input_limits=None)
+            compose(estimator, controller_with("bogus"), plant_dims=_BASE_DIMS, input_limits=None)
+        # f_x/g_x ARE known roles now (SMC's model terms): they are fed by the
+        # plant-derived model subgraph, so declaring one with no plant is loud
+        # rather than silently becoming a host port.
+        with pytest.raises(ValueError, match="plant-model term"):
+            compose(estimator, controller_with("f_x"), plant_dims=_BASE_DIMS, input_limits=None)
 
 
 class TestComposeHostInputs:

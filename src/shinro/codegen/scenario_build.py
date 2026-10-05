@@ -193,14 +193,16 @@ def _run_gate_a(cg, spec: dict, seed: int) -> int | None:
     live; a policy-only graph has no live closed loop to compare.
     """
     from shinro.codegen.gate_a import run_gate_a
-    from shinro.codegen.recipes import live_components
+    from shinro.codegen.recipes import live_components_and_plant
 
     try:
-        est, ctrl, n_x, n_u, limits = live_components(spec)
+        est, ctrl, n_x, n_u, limits, plant = live_components_and_plant(spec)
     except (ValueError, FileNotFoundError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return EXIT_USAGE
-    max_err = run_gate_a(cg, est, ctrl, n_x, n_u, input_limits=limits, ticks=GATE_A_TICKS, seed=seed)
+    max_err = run_gate_a(
+        cg, est, ctrl, n_x, n_u, input_limits=limits, ticks=GATE_A_TICKS, seed=seed, plant=plant
+    )
     if max_err > TOL_GATE_A:
         print(
             f"GATE A MISMATCH: composed graph diverged from the live components "

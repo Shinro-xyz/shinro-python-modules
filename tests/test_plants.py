@@ -688,6 +688,125 @@ class TestBatchCapableDynamics:
             assert np.allclose(scalar, vector, atol=1e-12), name
 
 
+class TestControlMatrix:
+    """``Plant.control_matrix`` — g = df/du, defaulting to FD of ``dynamics``.
+
+    The default is what the SMC deployment path already computes by hand
+    (``linearize_plant``'s B), so a plant gets a correct, lowering-capable ``g``
+    with no extra code; an analytic override is a pure upgrade and the default is
+    its test oracle.
+    """
+
+    def _plants(self, bk):
+        from shinro.plants.cartpole import CartPole
+        from shinro.plants.double_pendulum import DoublePendulum
+        from shinro.plants.inverted_pendulum import InvertedPendulum
+        from shinro.plants.quadrotor import Quadrotor
+
+        # (plant, n_x, n_u, control point). The quadrotor's actuation is quadratic
+        # in the rotor speeds, so its g is evaluated at a nonzero trim.
+        return {
+            "inverted_pendulum": (InvertedPendulum(backend=bk), 2, 1, 0.0),
+            "cartpole": (CartPole(backend=bk), 4, 1, 0.0),
+            "double_pendulum": (DoublePendulum(backend=bk), 4, 2, 0.0),
+            "quadrotor": (Quadrotor(backend=bk), 12, 4, 3.0),
+        }
+
+    def test_shape_is_n_x_by_n_u(self, bk):
+        for name, (plant, n_x, n_u, u) in self._plants(bk).items():
+            x = bk.array(np.linspace(0.1, 0.4, n_x))
+            g = plant.control_matrix(x, bk.array(np.full(n_u, u)))
+            assert _to_np(g, bk).shape == (n_x, n_u), name
+
+    def test_matches_linearize_plant(self, bk):
+        """The default reproduces ``linearize_plant``'s B (the SMC host's g today)."""
+        from shinro.utils.linearization import linearize_plant
+
+        for name, (plant, n_x, n_u, u) in self._plants(bk).items():
+            x = bk.array(np.linspace(0.1, 0.4, n_x))
+            ctrl = bk.array(np.full(n_u, u))
+            b_ref = np.asarray(_to_np(linearize_plant(plant, x, ctrl)[1], bk), dtype=float)
+            got = np.asarray(_to_np(plant.control_matrix(x, ctrl), bk), dtype=float)
+            # torch evaluates the default by autograd, the reference by central FD.
+            assert np.allclose(got, b_ref, atol=1e-6), name
+
+    def test_numpy_default_is_bit_identical_to_linearize_plant(self):
+        """On numpy both sides are the same central FD — bit-identical.
+
+        This is what lets a compiled SMC graph keep gate A at exactly 0.0 against
+        the live/host model instead of needing a finite-difference tolerance.
+        """
+        from shinro.utils.array_backend import NumpyBackend
+        from shinro.utils.linearization import linearize_plant
+
+        for name, (plant, n_x, n_u, u) in self._plants(NumpyBackend()).items():
+            x = np.linspace(0.1, 0.4, n_x)
+            ctrl = np.full(n_u, u)
+            b_ref = np.asarray(linearize_plant(plant, x, ctrl)[1], dtype=float)
+            got = np.asarray(plant.control_matrix(x, ctrl), dtype=float)
+            assert np.array_equal(got, b_ref), name
+
+    def test_traced_default_matches_eager(self):
+        """In-graph the default lowers to nodes and agrees with the eager call.
+
+        The backend probes with a (2*n_u, n_u) block whose batch axis is shared
+        with the state, so the default must broadcast the state onto it rather
+        than evaluate it alone.
+        """
+        from shinro.codegen.interpreter import interpret
+        from shinro.codegen.trace_backend import TraceBackend
+        from shinro.codegen.tracing import Graph, Tracer
+        from shinro.utils.array_backend import NumpyBackend
+
+        for name, (plant, n_x, n_u, u) in self._plants(NumpyBackend()).items():
+            x = np.linspace(0.1, 0.4, n_x)
+            ctrl = np.full(n_u, u)
+            g = Graph()
+            tb = TraceBackend(g)
+            x_in = Tracer(g, (n_x,), g.input("x", (n_x,)))
+            gx = plant.control_matrix(x_in, ctrl, bk=tb)
+            g.output("g", gx.node)
+            traced = interpret(g, {"x": x})["g"]
+            eager = np.asarray(plant.control_matrix(x, ctrl), dtype=float)
+            assert traced.shape == (n_x, n_u), name
+            assert np.allclose(traced, eager, atol=1e-12), name
+
+    def test_force_torque_plants_ignore_the_control_point(self, bk):
+        """Where u enters affinely, g does not depend on u (the quadrotor is not: """
+        rng = np.random.default_rng(3)
+        for name, (plant, n_x, n_u, _u) in self._plants(bk).items():
+            if name == "quadrotor":
+                continue  # thrust ~ w^2: g(., u) is control-dependent, zero at u = 0
+            x = bk.array(rng.normal(size=n_x))
+            at_zero = np.asarray(_to_np(plant.control_matrix(x, bk.zeros(n_u)), bk), dtype=float)
+            elsewhere = np.asarray(
+                _to_np(plant.control_matrix(x, bk.array(rng.normal(size=n_u))), bk), dtype=float
+            )
+            assert np.allclose(at_zero, elsewhere, atol=1e-9), name
+
+    def test_without_dynamics_is_loud(self, bk):
+        """A plant with no dynamics to differentiate is told to override, not silently wrong."""
+        import pytest
+
+        from shinro.components import Plant
+
+        class Bare(Plant):
+            def get_state(self, *args, **kwargs):
+                return bk.zeros(1)
+
+            def get_model(self, *args, **kwargs):
+                return None
+
+            def step(self, *args, **kwargs):
+                return None
+
+            def physics_engine(self, *args, **kwargs):
+                return None
+
+        with pytest.raises(NotImplementedError, match="no dynamics"):
+            Bare().control_matrix(bk.zeros(1), bk.zeros(1))
+
+
 class TestQuadrotor:
     """Verify quadrotor: rotor mixing, hover equilibrium, 12-state dynamics, linearization, step, from_config."""
 
