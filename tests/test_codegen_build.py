@@ -459,3 +459,39 @@ def test_composes_with_a_hypothetical_third_estimator():
         x_hat = x_hat_next
         plan = ctrl.u.copy()
         u_prev = u_live
+
+
+# ─── compiled EKF: the Jacobian expands as one batched FD probe ─────────────
+
+
+def test_ekf_scenario_expands_its_jacobian_batched(tmp_path):
+    """The compiled EKF's process Jacobian is ONE batched FD probe, not 2n copies.
+
+    There is no ``jacobian`` op: the trace backend emits the plant's dynamics once
+    on a ``(2*n_x, n_x)`` block of perturbations and slices the columns out. The
+    model's ``sin`` node count separates the two regimes for CartPole (one sin per
+    dynamics evaluation): batched = predict + one probe = 2; per-column duplication
+    would be 1 + 2*n_x = 9.
+    """
+    from shinro.codegen.interpreter import interpret_step
+    from shinro.codegen.scenario_gen import gen_scenario
+
+    cg, _ = gen_scenario("tests/integration/scenarios/ekf_cartpole_compile.toml", str(tmp_path / "ekf"))
+    ops = [n.op for n in cg.graph.nodes]
+    assert "jacobian" not in ops, "the FD jacobian must lower to existing ops, not a new op"
+    assert ops.count("sin") == 2, f"expected the batched probe (2 sin), got {ops.count('sin')}"
+
+    # The graph interprets: EKF + LQR, one closed-loop step.
+    import numpy as np
+
+    n_x = 4
+    inputs = {
+        "y": np.array([0.11, 0.01, 0.21, 0.02]),
+        "x_ref": np.zeros(n_x),
+        "u_prev": np.array([0.0]),
+        "state_x_hat": np.array([0.1, 0.0, 0.2, 0.0]),
+        "state_P": np.eye(n_x) * 0.1,
+    }
+    outputs, state = interpret_step(cg.graph, inputs)
+    assert outputs["u"].shape == (1,)
+    assert state["x_hat"].shape == (n_x,) and state["P"].shape == (n_x, n_x)
