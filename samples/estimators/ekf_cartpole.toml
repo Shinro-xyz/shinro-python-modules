@@ -1,22 +1,19 @@
-# Extended Kalman filter for CartPole (4 states). dt is inherited from the plant.
+# Extended Kalman filter for CartPole (4 states) with a PARTIAL sensor set:
+# cart position x and pole angle theta (n_y = 2 < n_x = 4). dt is inherited from
+# the plant.
 #
-# The process model is not in the config: `measurement_matrix` below gives the
-# linear measurement model h(x) = C x (and the exact H = C), and the plant is
-# attached at build time (attach_plant -> plant.dynamics) for f. A compiled
-# scenario therefore needs no callable injection.
-#
-# The compiled path declares the estimator's measurement port as the full state
-# (n_x,), so C is the full-state identity here; a partial-state C would need the
-# compile path to carry n_y (not plumbed yet).
+# The nonlinear process model is not in the config: the plant is attached at build
+# time (attach_plant -> plant.dynamics) and traced through the trace backend, with
+# its Jacobian lowered as a batched finite-difference probe. `measurement_matrix`
+# gives the linear measurement model h(x) = C x (and the exact H = C); its row
+# count sets n_y, which the composed graph carries as the width of the `y` port.
 type = "ExtendedKalmanFilter"
 name = "cartpole_ekf"
 
 process_noise = [0.01, 0.01, 0.01, 0.01]
-measurement_noise = [0.1, 0.1, 0.1, 0.1]
+measurement_noise = [0.1, 0.1]
 
 measurement_matrix = [
-    [1.0, 0.0, 0.0, 0.0],
-    [0.0, 1.0, 0.0, 0.0],
-    [0.0, 0.0, 1.0, 0.0],
-    [0.0, 0.0, 0.0, 1.0],
+    [1.0, 0.0, 0.0, 0.0],   # cart position x
+    [0.0, 0.0, 1.0, 0.0],   # pole angle theta
 ]

@@ -1,0 +1,13 @@
+# Extended Kalman filter for InvertedPendulum — the classic nonlinear EKF case:
+# 2 states [theta, theta_dot], ONE sensor (theta). dt is inherited from the plant.
+#
+# The process model is the plant's nonlinear dynamics (attach_plant ->
+# plant.dynamics, traced through the trace backend; its Jacobian lowers as a
+# batched finite-difference probe). C = [[1, 0]] is the sensor model and sets n_y = 1.
+type = "ExtendedKalmanFilter"
+name = "inverted_pendulum_ekf"
+
+process_noise = [0.001, 0.01]
+measurement_noise = [0.05]
+
+measurement_matrix = [[1.0, 0.0]]

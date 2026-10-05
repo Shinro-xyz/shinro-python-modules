@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import inspect
 
-from shinro.codegen.compose import ComposedGraph, compose
+from shinro.codegen.compose import ComposedGraph, _measurement_dim, compose
 from shinro.codegen.trace_node import NodeGraph, trace_node
 from shinro.factories import ControllerFactory, EstimatorFactory
 from shinro.utils.array_backend import NumpyBackend
@@ -126,7 +126,8 @@ def instantiate(estimator_config, controller_config, plant=None):
 
 def build_composed_graph_from_instances(est, ctrl, n_x, n_u, input_limits=None):
     """Trace + compose already-instantiated components into a closed-loop step graph."""
-    est_input_shapes = {"measurement": (n_x, 1), "control_input": (n_u, 1)}
+    n_y = _measurement_dim(est, n_x)
+    est_input_shapes = {"measurement": (n_y, 1), "control_input": (n_u, 1)}
     ctrl_input_shapes = {
         name: (n_u,) if name == "u_prev" else (n_x,)
         for name in inspect.signature(ctrl.compute).parameters

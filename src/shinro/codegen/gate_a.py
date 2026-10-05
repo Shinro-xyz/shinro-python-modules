@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from shinro.codegen.compose import _CONTROLLER_INPUT_ROLES
+from shinro.codegen.compose import _CONTROLLER_INPUT_ROLES, _measurement_dim
 from shinro.codegen.infer_contract import infer_contract
 from shinro.codegen.interpreter import interpret_step
 
@@ -106,6 +106,7 @@ def run_gate_a(cg, est, ctrl, n_x, n_u, input_limits=None, ticks: int = 50, seed
     """
     rng = np.random.default_rng(seed)
     state = _initial_state(cg, est, ctrl, n_u)
+    n_y = _measurement_dim(est, n_x)  # the sensor set may observe fewer channels than the state
     input_names = infer_contract(ctrl).input_names
     host_shapes = ctrl.host_input_shapes() if hasattr(ctrl, "host_input_shapes") else {}
     # state input port -> the state output key that feeds it next tick
@@ -115,7 +116,7 @@ def run_gate_a(cg, est, ctrl, n_x, n_u, input_limits=None, ticks: int = 50, seed
     u_prev = np.zeros(n_u)
     max_err = 0.0
     for _ in range(ticks):
-        y = rng.normal(0.0, 0.1, (n_x,))
+        y = rng.normal(0.0, 0.1, (n_y,))
         x_ref = rng.normal(0.0, 0.05, (n_x,))
         host_values = {name: (rng.normal(0.0, 0.1, shape) if shape else np.array(0.0)) for name, shape in host_shapes.items()}
 
