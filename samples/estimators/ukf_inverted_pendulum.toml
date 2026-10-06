@@ -1,0 +1,18 @@
+# Unscented Kalman filter for InvertedPendulum — the classic nonlinear case:
+# 2 states [theta, theta_dot], ONE sensor (theta), n_y = 1 < n_x = 2. dt is
+# inherited from the plant.
+#
+# The process model is the plant's nonlinear dynamics (attach_plant ->
+# plant.dynamics), traced as ONE batched (2n+1, n_x) sigma-point call — no
+# finite differences. C = [[1, 0]] is the sensor model and sets n_y = 1.
+type = "UnscentedKF"
+name = "inverted_pendulum_ukf"
+
+process_noise = [0.001, 0.01]
+measurement_noise = [0.05]
+
+alpha = 1.0
+beta = 2.0
+kappa = 0.0
+
+measurement_matrix = [[1.0, 0.0]]
