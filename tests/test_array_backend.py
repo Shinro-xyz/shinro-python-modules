@@ -217,6 +217,13 @@ class TestNumpyBackend:
         s = self.bk.hstack([a, b])
         assert s.shape == (2, 2)
 
+    def test_concat(self):
+        """Concatenate along an existing axis (axis 0 rows, axis 1 columns)."""
+        rows = self.bk.concat([np.array([[1, 2]], dtype=float), np.array([[3, 4]], dtype=float)], axis=0)
+        assert np.allclose(rows, [[1, 2], [3, 4]])
+        cols = self.bk.concat([np.array([[5], [6]], dtype=float), np.array([[7], [8]], dtype=float)], axis=1)
+        assert np.allclose(cols, [[5, 7], [6, 8]])
+
     def test_block(self):
         """Assemble a block matrix from nested blocks."""
         A = np.array([[1, 2], [3, 4]], dtype=float)
@@ -292,6 +299,13 @@ class TestTorchBackend:
         A = self.bk.array([[4, 2], [2, 3]])
         L = self.bk.cholesky(A)
         assert self.bk.allclose(L @ L.T, A)
+
+    def test_concat(self):
+        """Concatenate tensors along an existing axis."""
+        rows = self.bk.concat([self.bk.array([[1.0, 2.0]]), self.bk.array([[3.0, 4.0]])], axis=0)
+        assert self.bk.to_numpy(rows).shape == (2, 2)
+        cols = self.bk.concat([self.bk.array([[5.0], [6.0]]), self.bk.array([[7.0], [8.0]])], axis=1)
+        assert self.bk.to_numpy(cols).shape == (2, 2)
 
     def test_to_numpy_roundtrip(self):
         """Verify to_numpy and from_numpy are inverses."""

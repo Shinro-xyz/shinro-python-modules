@@ -915,7 +915,7 @@ class TestUnscentedKF:
         def dynamics(x, u, bk=None):
             seen.append(bk)
             assert bk is not None
-            return bk.zeros(2)
+            return bk.zeros_like(x)
 
         ukf = UnscentedKF(
             dynamics, None, dt=0.01, alpha=1.0, beta=2.0, kappa=0.0,
@@ -967,6 +967,60 @@ class TestUnscentedKF:
         )
         with pytest.raises(ValueError, match="no dynamics"):
             ukf.attach_plant(object())
+
+    def test_auto_batching_detects_bk_aware_models(self, bk):
+        """Auto mode batches bk-aware (plant/compiled) models, loops plain lambdas."""
+        from shinro.estimators.unscented_kf import UnscentedKF
+
+        plain = lambda x, u: bk.zeros(2)  # noqa: E731
+
+        def aware(x, u, bk=None):
+            assert bk is not None
+            return bk.zeros_like(x)
+
+        ukf = UnscentedKF(
+            plain, None, dt=0.01, alpha=1.0, beta=2.0, kappa=0.0,
+            Q=bk.eye(2), R=bk.eye(2), backend=bk, measurement_matrix=bk.eye(2),
+        )
+        assert ukf._batchable(plain) is False
+        assert ukf._batchable(aware) is True
+        ukf.batched = False
+        assert ukf._batchable(aware) is False
+        ukf.batched = True
+        assert ukf._batchable(plain) is True
+
+    def test_batched_and_per_point_paths_agree(self, bk):
+        """A batch-capable model gives identical results batched or row-by-row."""
+        import tomllib as _tomllib
+
+        from shinro.estimators.unscented_kf import UnscentedKF
+        from shinro.factories.registry import _PLANT_REGISTRY
+        from shinro.utils.array_backend import NumpyBackend
+        from shinro.utils.config_resolver import resolve_config_path
+
+        with open(resolve_config_path("samples/plants/cartpole.toml"), "rb") as f:
+            plant = _PLANT_REGISTRY["CartPole"].from_config(_tomllib.load(f), backend=NumpyBackend())
+
+        cfg = {
+            "process_noise": [0.01] * 4,
+            "measurement_noise": [0.1] * 4,
+            "dt": 0.01,
+            "alpha": 1.0,
+            "measurement_matrix": [[1.0, 0, 0, 0], [0, 1.0, 0, 0], [0, 0, 1.0, 0], [0, 0, 0, 1.0]],
+        }
+        ukf_batched = UnscentedKF.from_config(cfg, backend=bk)
+        ukf_batched.attach_plant(plant)
+        ukf_looped = UnscentedKF.from_config(cfg, backend=bk)
+        ukf_looped.attach_plant(plant)
+        ukf_looped.batched = False
+
+        x_batched = x_looped = bk.zeros(4)
+        for _ in range(5):
+            y, u = bk.array([0.1, 0.0, 0.2, 0.0]), bk.array([0.3])
+            x_batched = ukf_batched.estimate(y, u)
+            x_looped = ukf_looped.estimate(y, u)
+        assert np.allclose(_to_np(x_batched, bk), _to_np(x_looped, bk), atol=1e-12)
+        assert np.allclose(_to_np(ukf_batched.P, bk), _to_np(ukf_looped.P, bk), atol=1e-12)
 
     def test_registered_and_exported(self):
         """The estimator is registered and exported from the package."""

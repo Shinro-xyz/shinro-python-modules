@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from shinro.components import StateEstimator
-from shinro.estimators.model_call import call_model
+from shinro.estimators.model_call import accepts_backend, call_model
 from shinro.factories.registry import register_estimator
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend, parse_matrix
 
@@ -46,10 +46,12 @@ class UnscentedKF(StateEstimator):
         x0: Any | None= None,
         backend: ArrayBackend | None= None,
         measurement_matrix: Any | None = None,
+        batched: bool | None = None,
         ):
             self.bk= backend or NumpyBackend()
             self.dynamics_fn= dynamics_fn
             self.measurement_fn=measurement_fn
+            self.batched= batched
             self.dt= dt
             self.alpha=alpha
             self.beta= beta
@@ -76,16 +78,14 @@ class UnscentedKF(StateEstimator):
             self._weights_sigmapoints()
 
     def _sigma_points(self, x, P):
-        L_covar=self.bk.cholesky((self.lamb+self.nx)*P) #cholesky factorization
+        n=self.nx
+        L_covar=self.bk.cholesky((self.lamb+n)*P) #cholesky factorization (n,n)
 
-        #sigma points, assuming column vectors (one per row)
-        chi=self.bk.zeros((2*self.nx+1,self.nx))
-        chi[0]=x
-        for i in range(self.nx):
-            chi[i+1]= x+L_covar[:,i]
-            chi[i+self.nx+1]=x-L_covar[:,i]
-
-        return chi
+        #sigma points as rows, built by concat (no index assignment) so the same
+        #construction stays traceable once a cholesky VM op exists
+        x_row=self.bk.reshape(x,(1,n))
+        perturb=self.bk.concat([L_covar.T, -L_covar.T], axis=0) #(2n,n): +cols then -cols
+        return self.bk.concat([x_row, x_row+perturb], axis=0)   #(2n+1,n)
 
     def _weights_sigmapoints(self):
         # lambda must be defined here: the weights are computed in __init__,
@@ -106,9 +106,13 @@ class UnscentedKF(StateEstimator):
         self.w_covar=w_covar
 
     def _weighted_mean(self, points):
-        """Weighted mean of a stack of points, shape (L, d) -> (d,)."""
-        w=self.bk.reshape(self.w_mean,(-1,1))
-        return self.bk.sum(w*points, axis=0)
+        """Weighted mean of a stack of points, shape (L, d) -> (d,).
+
+        Expressed as a matmul ``w(1,L) @ points(L,d)`` rather than a reduction,
+        so it stays inside the VM's op set when the filter is lowered.
+        """
+        w=self.bk.reshape(self.w_mean,(1,-1))
+        return self.bk.ravel(w @ points)
 
     def _weighted_cov(self, points, mean):
         """Weighted covariance of a stack of points about ``mean``, (L, d) -> (d, d)."""
@@ -139,27 +143,64 @@ class UnscentedKF(StateEstimator):
             )
         return call_model(self.measurement_fn, x, bk=self.bk)
 
+    def _batchable(self, fn):
+        """Whether a model can consume the whole sigma-point batch in one call.
+
+        Plants and compiled models accept the ``(N, n)`` batch contract (and a
+        ``bk``); a plain user lambda takes only ``(n,)``, so it is evaluated row
+        by row. ``self.batched`` forces the choice when set (``False`` is the
+        escape hatch for a ``bk``-aware model that is nonetheless not
+        batch-capable).
+        """
+        if self.batched is not None:
+            return self.batched
+        return fn is not None and accepts_backend(fn)
+
+    def _dynamics_batch(self, chi, u):
+        """Evaluate :math:`f` over every sigma point, ``(L, n) -> (L, n)``.
+
+        One batched call when the model is batch-capable, else a row-by-row
+        fallback so a single-point lambda keeps working. Batched is what lets a
+        trace lower as a single ``f`` subgraph instead of ``L`` copies.
+        """
+        fn=self.dynamics_fn
+        if fn is None:
+            raise RuntimeError("UnscentedKF: dynamics_fn must be set before calling estimate()")
+        if self._batchable(fn):
+            return self.bk.reshape(call_model(fn, chi, u, bk=self.bk), (chi.shape[0], self.nx))
+        rows=[self.bk.ravel(call_model(fn, chi[i], u, bk=self.bk)) for i in range(chi.shape[0])]
+        return self.bk.stack(rows)
+
+    def _measurement_batch(self, chi):
+        """Evaluate :math:`h` over every sigma point, ``(L, n) -> (L, n_y)``."""
+        if self.C is not None:
+            return chi @ self.C.T
+        fn=self.measurement_fn
+        if fn is None:
+            raise RuntimeError(
+                "UnscentedKF: measurement_fn or measurement_matrix must be set before calling estimate()"
+            )
+        if self._batchable(fn):
+            return self.bk.reshape(call_model(fn, chi, bk=self.bk), (chi.shape[0], self.ny))
+        rows=[self.bk.ravel(call_model(fn, chi[i], bk=self.bk)) for i in range(chi.shape[0])]
+        return self.bk.stack(rows)
+
     def estimate(self, measurement,control_input):
-        n=self.nx
         #flatten so a (n_u,1)/(n_y,1) column cannot broadcast into an (n,n) step
         u=self.bk.ravel(control_input)
         z=self.bk.ravel(measurement)
 
-        # --- predict: push each sigma point through the process model ---
+        # --- predict: push the whole sigma-point batch through the model ---
+        #dynamics_fn follows the EKF contract: continuous dx/dt, Euler-stepped
         chi=self._sigma_points(self.x_hat, self.P)
-        chi_pred=self.bk.zeros((2*n+1,n))
-        for i in range(2*n+1):
-            #dynamics_fn follows the EKF contract: continuous dx/dt, Euler-stepped
-            chi_pred[i]=chi[i]+self.dt*self.bk.ravel(self._dynamics(chi[i], u))
+        chi_pred=chi+self.dt*self._dynamics_batch(chi, u)
 
         x_pred=self._weighted_mean(chi_pred)
         P_pred=self._weighted_cov(chi_pred, x_pred)+self.Q
 
         # --- update: redraw sigma points around the prediction ---
         chi_upd=self._sigma_points(x_pred, P_pred)
-        z_sigma=self.bk.zeros((2*n+1,self.ny))
-        for i in range(2*n+1):
-            z_sigma[i]=self.bk.ravel(self._measurement(chi_upd[i]))
+        z_sigma=self._measurement_batch(chi_upd)
 
         z_pred=self._weighted_mean(z_sigma)
         S=self._weighted_cov(z_sigma, z_pred)+self.R
