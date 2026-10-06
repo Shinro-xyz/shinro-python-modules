@@ -1,0 +1,12 @@
+# Complementary filter seed config.
+#
+# Fuses a rate source with an absolute-angle source per axis, blending the
+# integrated rate (high frequency) with the absolute measurement (low
+# frequency). The measurement passed to estimate() is the concatenation
+# [rate_0 .. rate_{N-1}, absolute_0 .. absolute_{N-1}] (length 2*channels).
+# dt is inherited from the plant in scenario builds, so omit it there.
+type = "ComplementaryFilter"
+name = "complementary_base"
+alpha = 0.98
+channels = 1
+dt = 0.02

@@ -113,9 +113,6 @@ class TestKalmanFilter:
         R = 0.1 * bk.eye(p)
         C = bk.eye(n)
         kf = KalmanFilter(A, B, Q, R, C=C, backend=bk)
-        bk.array([[1.0], [0.0]])
-        u = bk.array([[0.0], [0.0]])
-        A @ kf.x_hat + B @ u
         P_pred = A @ kf.P @ A.T + Q
         S = C @ P_pred @ C.T + R
         eigs = np.linalg.eigvals(_to_np(S, bk))
@@ -1030,3 +1027,140 @@ class TestUnscentedKF:
 
         assert Exported is UnscentedKF
         assert _ESTIMATOR_REGISTRY["UnscentedKF"] is UnscentedKF
+
+
+class TestComplementaryFilter:
+    """Verify the complementary filter: rate+absolute fusion, blend endpoints, config.
+
+    Flat-vector convention: the estimate is (n_x,); the measurement is the
+    concatenation of the per-axis rate then the per-axis absolute, (2*n_x,).
+    """
+
+    @staticmethod
+    def _cf(bk, alpha=0.9, channels=1, dt=0.1, x0=None):
+        from shinro.estimators.complementary_filter import ComplementaryFilter
+
+        return ComplementaryFilter(alpha=alpha, channels=channels, dt=dt, x0=x0, backend=bk)
+
+    def test_estimate_shape(self, bk):
+        """estimate() returns a flat angle vector of shape (n_x,)."""
+        cf = self._cf(bk, channels=2)
+        x = cf.estimate(bk.array([1.0, 1.0, 0.5, 0.5]), bk.zeros(1))
+        assert _to_np(x, bk).shape == (2,)
+
+    def test_alpha_one_is_pure_integration(self, bk):
+        """alpha=1 ignores the absolute and integrates the rate exactly."""
+        cf = self._cf(bk, alpha=1.0, dt=0.1)
+        x = cf.x_hat
+        for _ in range(3):
+            x = cf.estimate(bk.array([2.0, 99.0]), bk.zeros(1))
+        assert np.allclose(_to_np(x, bk), [0.6], atol=1e-12)
+
+    def test_alpha_zero_is_pure_measurement(self, bk):
+        """alpha=0 ignores the rate and returns the absolute."""
+        cf = self._cf(bk, alpha=0.0)
+        x = cf.estimate(bk.array([2.0, 3.3]), bk.zeros(1))
+        assert np.allclose(_to_np(x, bk), [3.3], atol=1e-12)
+
+    def test_blend_equation(self, bk):
+        """One step follows theta = alpha*(theta + dt*rate) + (1-alpha)*absolute."""
+        alpha, dt = 0.8, 0.05
+        cf = self._cf(bk, alpha=alpha, dt=dt, x0=bk.array([0.2]))
+        rate, absolute = 1.5, -0.4
+        expected = alpha * (0.2 + dt * rate) + (1 - alpha) * absolute
+        x = cf.estimate(bk.array([rate, absolute]), bk.zeros(1))
+        assert np.allclose(_to_np(x, bk), [expected], atol=1e-12)
+
+    def test_multichannel_independent(self, bk):
+        """Each axis fuses independently."""
+        cf = self._cf(bk, alpha=0.5, channels=2, dt=0.1, x0=bk.array([1.0, 2.0]))
+        x = cf.estimate(bk.array([1.0, -1.0, 2.0, 4.0]), bk.zeros(1))
+        assert np.allclose(_to_np(x, bk), [0.5 * 1.1 + 0.5 * 2.0, 0.5 * 1.9 + 0.5 * 4.0], atol=1e-12)
+
+    def test_converges_to_absolute_angle(self, bk):
+        """With a zero rate, the estimate converges to the constant absolute."""
+        cf = self._cf(bk, alpha=0.9, dt=0.1)
+        x = cf.x_hat
+        for _ in range(200):
+            x = cf.estimate(bk.array([0.0, 1.0]), bk.zeros(1))
+        assert abs(float(_to_np(x, bk)[0]) - 1.0) < 1e-6
+
+    def test_rejects_rate_drift(self, bk):
+        """A biased rate does not drive the estimate away from the absolute.
+
+        Steady state is ``abs + alpha*dt*rate/(1-alpha)`` = 0.549, well under the
+        0.1 bound; a pure integrator would have run to ~1.0 after 1000 biased ticks.
+        """
+        cf = self._cf(bk, alpha=0.98, dt=0.01)
+        x = cf.x_hat
+        for _ in range(1000):
+            x = cf.estimate(bk.array([0.1, 0.5]), bk.zeros(1))
+        assert abs(float(_to_np(x, bk)[0]) - 0.5) < 0.1
+
+    def test_accepts_column_vector_measurement(self, bk):
+        """A (2*n,1) column measurement is flattened, not mis-sliced."""
+        cf = self._cf(bk, channels=1)
+        x = cf.estimate(bk.array([[1.0], [0.2]]), bk.zeros(1))
+        assert _to_np(x, bk).shape == (1,)
+
+    def test_reset(self, bk):
+        """reset() zeroes the estimate and accepts a new x0."""
+        cf = self._cf(bk, x0=bk.array([1.0]))
+        cf.estimate(bk.array([1.0, 1.0]), bk.zeros(1))
+        cf.reset()
+        assert np.allclose(_to_np(cf.x_hat, bk), 0.0)
+        cf.reset(bk.array([3.0]))
+        assert np.allclose(_to_np(cf.x_hat, bk), [3.0])
+
+    def test_from_config_shapes_and_defaults(self, bk):
+        """from_config reads n_x from channels; n_y = 2*n_x."""
+        from shinro.estimators.complementary_filter import ComplementaryFilter
+
+        cf = ComplementaryFilter.from_config({"alpha": 0.98, "channels": 3, "dt": 0.01}, backend=bk)
+        assert cf.n_x == 3 and cf.n_y == 6
+        assert _to_np(cf.x_hat, bk).shape == (3,)
+        assert cf.alpha == 0.98 and cf.dt == 0.01
+
+    def test_from_config_initial_state(self, bk):
+        """initial_state seeds x_hat."""
+        from shinro.estimators.complementary_filter import ComplementaryFilter
+
+        cf = ComplementaryFilter.from_config(
+            {"alpha": 0.5, "channels": 2, "dt": 0.1, "initial_state": [1.0, 2.0]}, backend=bk
+        )
+        assert np.allclose(_to_np(cf.x_hat, bk), [1.0, 2.0])
+
+    def test_from_config_requires_dt(self, bk):
+        """Standalone from_config rejects a missing dt."""
+        from shinro.estimators.complementary_filter import ComplementaryFilter
+
+        with pytest.raises(ValueError, match="dt is required"):
+            ComplementaryFilter.from_config({"alpha": 0.9, "channels": 1}, backend=bk)
+
+    def test_rejects_bad_alpha(self, bk):
+        """alpha outside [0, 1] is a loud error."""
+        with pytest.raises(ValueError, match="alpha must be in"):
+            self._cf(bk, alpha=1.5)
+
+    def test_rejects_bad_channels(self, bk):
+        """channels < 1 is a loud error."""
+        with pytest.raises(ValueError, match="channels must be"):
+            self._cf(bk, channels=0)
+
+    def test_from_config_rejects_unknown_key(self, bk):
+        """Strict config parsing rejects an unknown key."""
+        from shinro.estimators.complementary_filter import ComplementaryFilter
+
+        with pytest.raises(ValueError, match="unknown key"):
+            ComplementaryFilter.from_config(
+                {"alpha": 0.9, "channels": 1, "dt": 0.1, "nope": 1}, backend=bk
+            )
+
+    def test_registered_and_exported(self):
+        """The estimator is registered and exported from the package."""
+        from shinro.estimators import ComplementaryFilter as Exported
+        from shinro.estimators.complementary_filter import ComplementaryFilter
+        from shinro.factories.registry import _ESTIMATOR_REGISTRY
+
+        assert Exported is ComplementaryFilter
+        assert _ESTIMATOR_REGISTRY["ComplementaryFilter"] is ComplementaryFilter
