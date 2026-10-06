@@ -1,0 +1,27 @@
+# UKF + LQR closed loop on InvertedPendulum — a nonlinear plant with a PARTIAL
+# measurement (theta only, n_y = 1 < n_x = 2), the classic nonlinear UKF case.
+#
+# The plant is authoritative: it supplies n_x/n_u and the LQR's linearized model,
+# and the UKF's nonlinear process model (attach_plant -> plant.dynamics), traced
+# as ONE batched sigma-point call with the cholesky VM op.
+[scenario]
+name = "ukf_inverted_pendulum_compile"
+description = "UKF (partial theta measurement) + LQR on InvertedPendulum"
+input_limits = { min = [-5.0], max = [5.0] }
+
+[plant]
+type = "InvertedPendulum"
+config = "samples/plants/inverted_pendulum.toml"
+
+[controller]
+type = "LQR"
+config = "samples/controllers/lqr_inverted_pendulum.toml"
+
+[estimator]
+type = "UnscentedKF"
+config = "samples/estimators/ukf_inverted_pendulum.toml"
+
+[compile]
+optimize = "debug"        # "debug" | "release" (release -> ReleaseFast)
+artifact_name = "libbase"   # kernel installs as lib/<name>.so
+# n_x = 2, n_u = 1 are derived from the [plant] section.

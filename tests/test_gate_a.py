@@ -44,6 +44,21 @@ def test_gate_a_flags_a_wrong_live_component():
     assert err > TOL, f"gate A missed a real divergence: {err:.3e}"
 
 
+UKF_CARTPOLE = str(REPO_ROOT / "tests" / "integration" / "scenarios" / "ukf_cartpole_compile.toml")
+UKF_PENDULUM = str(REPO_ROOT / "tests" / "integration" / "scenarios" / "ukf_inverted_pendulum_compile.toml")
+
+
+@pytest.mark.parametrize("scenario", [UKF_CARTPOLE, UKF_PENDULUM], ids=["ukf_cartpole", "ukf_pendulum"])
+def test_gate_a_matches_live_ukf(scenario):
+    """The composed UKF graph reproduces the live unscented filter exactly
+    (batched sigma points + cholesky lowered, no finite differences)."""
+    spec = load_scenario(scenario)
+    cg = build_recipe("closed_loop_tracking", spec)
+    est, ctrl, n_x, n_u, limits = live_components(spec)
+    err = run_gate_a(cg, est, ctrl, n_x, n_u, input_limits=limits, ticks=50)
+    assert err <= TOL, f"gate A diverged: {err:.3e}"
+
+
 SMC = str(REPO_ROOT / "tests" / "integration" / "scenarios" / "smc_pendulum_compile.toml")
 
 

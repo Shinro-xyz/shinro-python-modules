@@ -30,6 +30,8 @@ MPC_SCENARIO = REPO_ROOT / "tests" / "integration" / "scenarios" / "mpc_compile.
 EKF_SCENARIO = REPO_ROOT / "tests" / "integration" / "scenarios" / "ekf_cartpole_compile.toml"
 EKF_PENDULUM_SCENARIO = REPO_ROOT / "tests" / "integration" / "scenarios" / "ekf_inverted_pendulum_compile.toml"
 SMC_SCENARIO = REPO_ROOT / "tests" / "integration" / "scenarios" / "smc_pendulum_compile.toml"
+UKF_SCENARIO = REPO_ROOT / "tests" / "integration" / "scenarios" / "ukf_cartpole_compile.toml"
+UKF_PENDULUM_SCENARIO = REPO_ROOT / "tests" / "integration" / "scenarios" / "ukf_inverted_pendulum_compile.toml"
 TEMPLATE = REPO_ROOT / "samples" / "scenarios" / "_template.toml"
 
 
@@ -515,6 +517,28 @@ def test_e2e_ekf_scenario_compiles_and_oracles(tmp_path, scenario):
     rec = json.loads((out / "lib" / "libbase.deployment.json").read_text())
     assert rec["oracle"]["status"] == "passed"
     assert rec["oracle"]["tolerance"] == 1e-9
+    assert rec["oracle"]["max_abs_err"] < rec["oracle"]["tolerance"]
+
+
+@pytest.mark.skipif(shutil.which("zig") is None, reason="zig not on PATH")
+@pytest.mark.parametrize("scenario", [UKF_SCENARIO, UKF_PENDULUM_SCENARIO], ids=["cartpole", "inverted_pendulum"])
+def test_e2e_ukf_scenario_compiles_and_oracles(tmp_path, scenario):
+    """The compiled UKF scenario (batched sigma points, cholesky op) passes gate A and oracle B.
+
+    Unlike the EKF there is no finite-difference division, so the non-QP 1e-12
+    oracle gate holds as-is (measured ~3.6e-15).
+    """
+    out = tmp_path / "ukf"
+    gen = _run(GEN, str(scenario), "--out", str(out))
+    assert gen.returncode == 0, gen.stderr
+
+    build = _run(BUILD, str(out), "--scenario", str(scenario))
+    assert build.returncode == 0, build.stderr
+    assert "gate A" in build.stdout and "0.000e+00" in build.stdout
+
+    rec = json.loads((out / "lib" / "libbase.deployment.json").read_text())
+    assert rec["oracle"]["status"] == "passed"
+    assert rec["oracle"]["tolerance"] == 1e-12
     assert rec["oracle"]["max_abs_err"] < rec["oracle"]["tolerance"]
 
 
