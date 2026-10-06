@@ -224,11 +224,11 @@ def _build_pid_composed_graph():
         backend=NumpyBackend(),
     )
     kf.P = np.eye(3) * 0.1
-    kf.x_hat = np.zeros((3, 1))
+    kf.x_hat = np.zeros(3)
     kf_graph = trace_node(
         kf,
-        input_shapes={"measurement": (3, 1), "control_input": (3, 1)},
-        state_shapes={"x_hat": (3, 1), "P": (3, 3)},
+        input_shapes={"measurement": (3,), "control_input": (3,)},
+        state_shapes={"x_hat": (3,), "P": (3, 3)},
     )
     pid_graph = trace_node(
         pid,
@@ -734,7 +734,7 @@ class TestZigLowering:
             y = rng.normal(0.0, 0.1, (3,))
             x_ref = rng.normal(0.0, 0.1, (3,))
             u_prev = rng.normal(0.0, 0.1, (3,))
-            x_hat_init = rng.normal(0.0, 0.1, (3, 1))
+            x_hat_init = rng.normal(0.0, 0.1, (3,))
             # Well-conditioned SPD covariance: S = C P_pred C^T + R must stay
             # invertible for both the Zig LU and numpy's LAPACK inv.
             P_init = rng.normal(0.0, 0.1, (3, 3))
@@ -779,7 +779,7 @@ class TestZigLowering:
         y = rng.normal(0.0, 0.1, (3,))
         x_ref = rng.normal(0.0, 0.1, (3,))
         u = rng.normal(0.0, 0.1, (3,))
-        x_hat = rng.normal(0.0, 0.1, (3, 1))
+        x_hat = rng.normal(0.0, 0.1, (3,))
         P = np.eye(3) * 0.1
 
         # Run the .so for three ticks, threading state out -> next-tick state in.
@@ -787,7 +787,7 @@ class TestZigLowering:
             inputs = _pack_inputs(cg, y, x_ref, u, x_hat, P)
             out, state = step_so(lib, inputs, n_out, n_state)
             u = out
-            x_hat = state[sl["state_x_hat"][0] : sl["state_x_hat"][1]].reshape(3, 1)
+            x_hat = state[sl["state_x_hat"][0] : sl["state_x_hat"][1]].reshape(3)
             P = state[sl["state_P"][0] : sl["state_P"][1]].reshape(3, 3)
 
         assert np.all(np.isfinite(u)), "Zig step produced non-finite control"
@@ -859,7 +859,7 @@ class TestSingleInputKfLqr:
             y = rng.normal(0.0, 0.1, (2,))
             x_ref = rng.normal(0.0, 0.1, (2,))
             u_prev = rng.normal(0.0, 0.1, (1,))
-            x_hat = rng.normal(0.0, 0.1, (2, 1))
+            x_hat = rng.normal(0.0, 0.1, (2,))
             P = rng.normal(0.0, 0.1, (2, 2))
             P = P @ P.T + 0.1 * np.eye(2)
 
@@ -1041,7 +1041,7 @@ def _scan_input_ports(cg, n_x, n_u, rng):
         "y": rng.normal(0.0, 0.1, (n_x,)),
         "x_ref": rng.normal(0.0, 0.1, (n_x,)),
         "u_prev": rng.normal(0.0, 0.1, (n_u,)),
-        "state_x_hat": rng.normal(0.0, 0.1, (n_x, 1)),
+        "state_x_hat": rng.normal(0.0, 0.1, (n_x,)),
         "state_P": _random_spd(rng, n_x),
     }
     ports = {}
@@ -1887,8 +1887,8 @@ def _make_pid():
 _CLOSED_LOOP_LIMITS = (np.array([-0.5, -0.5, -1.0]), np.array([0.5, 0.5, 1.0]))
 KF_P_INIT = np.eye(3) * 0.1
 
-KF_PORTS = (("state_x_hat", "x_hat", (3, 1)), ("state_P", "P", (3, 3)))
-LUENBERGER_PORTS = (("state_x_hat", "x_hat", (3, 1)),)
+KF_PORTS = (("state_x_hat", "x_hat", (3,)), ("state_P", "P", (3, 3)))
+LUENBERGER_PORTS = (("state_x_hat", "x_hat", (3,)),)
 PID_PORTS = (
     ("state_integral", "_integral", (3,)),
     ("state_prev_error", "_prev_error", (3,)),
@@ -2034,7 +2034,7 @@ def _run_closed_loop(lib, cg, case, ticks=100):
         else:
             for port, attr, shape in case.est_state_ports:
                 setattr(est, attr, live_est[attr].reshape(shape).copy())
-        x_hat_np = est.estimate(y.reshape(-1, 1), u_prev_np.reshape(-1, 1))
+        x_hat_np = est.estimate(y, u_prev_np)
         if case.est_seed_mode == "self":
             for port, attr, shape in case.est_state_ports:
                 live_est[attr] = np.asarray(getattr(est, attr)).reshape(shape).copy()

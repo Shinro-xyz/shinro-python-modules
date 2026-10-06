@@ -69,7 +69,7 @@ class TestTraceKalman:
 
         # KF.estimate signature: estimate(self, measurement, control_input)
         # Both are (n_x, 1) column vectors; n_x = 3 for the base config.
-        input_shapes = {"measurement": (3, 1), "control_input": (3, 1)}
+        input_shapes = {"measurement": (3,), "control_input": (3,)}
 
         # Snapshot the initial state so each trial starts from the same P and
         # x_hat. The KF carries both across calls; if we don't reset them, the
@@ -78,9 +78,9 @@ class TestTraceKalman:
         initial_P = kf_np.P.copy()
 
         for trial in range(50):
-            y = rng.normal(0.0, 0.1, (3, 1))
-            u = rng.normal(0.0, 0.1, (3, 1))
-            x_hat_init = rng.normal(0.0, 0.1, (3, 1))
+            y = rng.normal(0.0, 0.1, (3,))
+            u = rng.normal(0.0, 0.1, (3,))
+            x_hat_init = rng.normal(0.0, 0.1, (3,))
 
             # Ground truth: run the live numpy KF from a fresh state.
             kf_np.P = initial_P.copy()
@@ -95,7 +95,7 @@ class TestTraceKalman:
             node_graph = trace_node(
                 kf_trace,
                 input_shapes=input_shapes,
-                state_shapes={"x_hat": (3, 1)},
+                state_shapes={"x_hat": (3,)},
             )
 
             # Interpret the captured graph on the same inputs.
@@ -117,11 +117,11 @@ class TestTraceKalman:
     def test_graph_has_matmul_and_inv_nodes(self):
         """The captured KF graph contains matmul and inv ops (predict + update)."""
         kf = _load_kalman()
-        kf.x_hat = np.zeros((3, 1))
+        kf.x_hat = np.zeros(3)
         node_graph = trace_node(
             kf,
-            input_shapes={"measurement": (3, 1), "control_input": (3, 1)},
-            state_shapes={"x_hat": (3, 1)},
+            input_shapes={"measurement": (3,), "control_input": (3,)},
+            state_shapes={"x_hat": (3,)},
         )
         ops = {n.op for n in node_graph.graph.nodes}
         assert "matmul" in ops, f"KF graph missing matmul; ops = {sorted(ops)}"
@@ -130,11 +130,11 @@ class TestTraceKalman:
     def test_state_x_hat_detected(self):
         """The tracer detects x_hat as a mutated state attr."""
         kf = _load_kalman()
-        kf.x_hat = np.zeros((3, 1))
+        kf.x_hat = np.zeros(3)
         node_graph = trace_node(
             kf,
-            input_shapes={"measurement": (3, 1), "control_input": (3, 1)},
-            state_shapes={"x_hat": (3, 1)},
+            input_shapes={"measurement": (3,), "control_input": (3,)},
+            state_shapes={"x_hat": (3,)},
         )
         assert "x_hat" in node_graph.state_attrs, f"x_hat not detected as state; detected = {node_graph.state_attrs}"
 
@@ -871,7 +871,7 @@ class TestInferContract:
 
     def test_kalman_contract(self):
         kf = _load_kalman()
-        contract = infer_contract(kf, {"measurement": (3, 1), "control_input": (3, 1)})
+        contract = infer_contract(kf, {"measurement": (3,), "control_input": (3,)})
         assert contract.method_name == "estimate"
         assert contract.input_names == ["measurement", "control_input"]
 
@@ -914,15 +914,15 @@ class TestTraceNode:
     def test_missing_input_shape_raises_keyerror(self):
         kf = _load_kalman()
         with pytest.raises(KeyError, match="measurement"):
-            trace_node(kf, input_shapes={"control_input": (3, 1)})
+            trace_node(kf, input_shapes={"control_input": (3,)})
 
     def test_backend_restored_after_trace(self):
         kf = _load_kalman()
         original_bk = kf.bk
         trace_node(
             kf,
-            input_shapes={"measurement": (3, 1), "control_input": (3, 1)},
-            state_shapes={"x_hat": (3, 1)},
+            input_shapes={"measurement": (3,), "control_input": (3,)},
+            state_shapes={"x_hat": (3,)},
         )
         assert kf.bk is original_bk
 
@@ -930,18 +930,18 @@ class TestTraceNode:
         kf = _load_kalman()
         trace_node(
             kf,
-            input_shapes={"measurement": (3, 1), "control_input": (3, 1)},
-            state_shapes={"x_hat": (3, 1)},
+            input_shapes={"measurement": (3,), "control_input": (3,)},
+            state_shapes={"x_hat": (3,)},
         )
         assert isinstance(kf.P, np.ndarray), "P leaked a Tracer"
         assert isinstance(kf.x_hat, np.ndarray), "x_hat leaked a Tracer"
 
     def test_trace_node_with_state_returns_restored_values(self):
         kf = _load_kalman()
-        x_hat_init = np.zeros((3, 1))
+        x_hat_init = np.zeros(3)
         node_graph, state_outputs = trace_node_with_state(
             kf,
-            input_shapes={"measurement": (3, 1), "control_input": (3, 1)},
+            input_shapes={"measurement": (3,), "control_input": (3,)},
             state_inputs={"x_hat": x_hat_init},
         )
         assert isinstance(node_graph, NodeGraph)

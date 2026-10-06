@@ -155,9 +155,8 @@ def compose(
     # The measurement port is the ESTIMATOR's, not the state's: a sensor set may
     # observe fewer channels than the state has dimensions (a partial C with
     # n_y < n_x), and the estimator already declares its own input shape. Falling
-    # back to (n_x, 1) keeps a whole-state measurement (the shipped base graph)
-    # unchanged.
-    est_meas_shape = _lookup_input_shape(estimator.graph, "measurement", default=(n_x, 1))
+    # back to (n_x,) keeps a whole-state measurement (the shipped base graph).
+    est_meas_shape = _lookup_input_shape(estimator.graph, "measurement", default=(n_x,))
     n_y = 1
     for dim in est_meas_shape:
         n_y *= dim
@@ -197,12 +196,12 @@ def compose(
 
     state_port_ids: dict[str, int] = {}
     for port in state_ports:
-        shape = _lookup_input_shape(estimator.graph, port, default=(n_x, 1))
+        shape = _lookup_input_shape(estimator.graph, port, default=(n_x,))
         state_port_ids[port] = combined.input(port, shape)
 
     # --- merge the estimator ---
     # Estimator inputs: measurement (y), control_input (u_prev), state ports.
-    # The KF expects (n,1) column vectors; y and u_prev are (n,) flat → reshape.
+    # All flat (n,) — estimator and composer share one vector convention.
     est_input_map = {
         "measurement": y_id,
         "control_input": u_prev_id,
@@ -226,7 +225,7 @@ def compose(
     else:
         est_out_id = est_remap[est_out_key]
     x_hat_flat_id = _ensure_shape(
-        combined, est_out_id, _lookup_input_shape(estimator.graph, "state_x_hat", default=(n_x, 1)), (n_x,)
+        combined, est_out_id, _lookup_input_shape(estimator.graph, "state_x_hat", default=(n_x,)), (n_x,)
     )
 
     # --- merge the plant-derived model (f_x / g_x), when one was supplied ---

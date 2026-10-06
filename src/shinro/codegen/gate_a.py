@@ -140,7 +140,7 @@ def run_gate_a(cg, est, ctrl, n_x, n_u, input_limits=None, ticks: int = 50, seed
         outs, state_outs = interpret_step(cg.graph, graph_inputs)
         u_graph = np.asarray(outs["u"], dtype=np.float64).ravel()
 
-        x_hat = np.asarray(est.estimate(y.reshape(-1, 1), u_prev.reshape(-1, 1)), dtype=np.float64).ravel()
+        x_hat = np.asarray(est.estimate(y, u_prev), dtype=np.float64).ravel()
         kwargs = _controller_kwargs(input_names, x_hat, x_ref, u_prev, host_values, plant=plant)
         u_live = np.asarray(ctrl.compute(**kwargs), dtype=np.float64).ravel()
         if input_limits is not None:

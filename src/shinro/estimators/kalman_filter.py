@@ -39,7 +39,8 @@ class KalmanFilter(StateEstimator):
     Tracks the posterior state estimate :math:`\\hat{x}` and error covariance
     :math:`P` through the standard Kalman filter equations.
 
-    Uses column vectors :math:`(n, 1)` throughout (not flat :math:`(n,)`).
+    Uses flat vectors :math:`(n,)` throughout (not column :math:`(n, 1)`),
+    matching the rest of the control stack.
 
     Args:
         A: State transition matrix (n_x, n_x).
@@ -48,7 +49,7 @@ class KalmanFilter(StateEstimator):
         R: Measurement noise covariance (n_y, n_y).
         C: Observation matrix (n_y, n_x). Defaults to identity.
         D: Feedthrough matrix (n_y, n_u). Defaults to zeros.
-        x0: Initial state estimate (n_x, 1). Defaults to zeros.
+        x0: Initial state estimate (n_x,). Defaults to zeros.
         backend: Array backend. Defaults to NumpyBackend.
     """
 
@@ -72,7 +73,7 @@ class KalmanFilter(StateEstimator):
         self.C = self.bk.eye(A.shape[0]) if C is None else C
         self.D = self.bk.zeros((self.C.shape[0], B.shape[1])) if D is None else D
 
-        self.x_hat = self.bk.zeros((A.shape[0], 1)) if x0 is None else self.bk.copy(x0)
+        self.x_hat = self.bk.zeros(A.shape[0]) if x0 is None else self.bk.ravel(self.bk.copy(x0))
         self.P = self.bk.eye(A.shape[0]) * 0.1
 
     def estimate(self, measurement, control_input):
@@ -90,11 +91,11 @@ class KalmanFilter(StateEstimator):
            :math:`P = (I - K C) P_{\\text{pred}}`
 
         Args:
-            measurement: Observation vector (n_y, 1) from sensors.
-            control_input: Control vector (n_u, 1) applied at this step.
+            measurement: Observation vector (n_y,) from sensors.
+            control_input: Control vector (n_u,) applied at this step.
 
         Returns:
-            Posterior state estimate :math:`\\hat{x}` (n_x, 1).
+            Posterior state estimate :math:`\\hat{x}` (n_x,).
         """
         x_pred = self.A @ self.x_hat + self.B @ control_input
         self.P = self.A @ self.P @ self.A.T + self.Q
@@ -114,9 +115,9 @@ class KalmanFilter(StateEstimator):
         """Reset the filter to its initial state.
 
         Args:
-            x0: Initial state estimate (n_x, 1). Defaults to zeros.
+            x0: Initial state estimate (n_x,). Defaults to zeros.
         """
-        self.x_hat = self.bk.zeros((self.A.shape[0], 1)) if x0 is None else self.bk.copy(x0)
+        self.x_hat = self.bk.zeros(self.A.shape[0]) if x0 is None else self.bk.ravel(self.bk.copy(x0))
         self.P = self.bk.eye(self.A.shape[0]) * 0.1
 
     Config = KalmanFilterConfig
@@ -161,6 +162,6 @@ class KalmanFilter(StateEstimator):
             R=R,
             C=bk.array(cfg.C) if cfg.C is not None else bk.eye(n),
             D=bk.array(cfg.D) if cfg.D is not None else bk.zeros((n_y, B.shape[1])),
-            x0=bk.zeros((n, 1)),
+            x0=bk.zeros(n),
             backend=bk,
         )

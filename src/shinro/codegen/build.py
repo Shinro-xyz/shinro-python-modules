@@ -191,7 +191,7 @@ def _controller_input_shape(name: str, n_x: int, n_u: int) -> tuple[int, ...]:
 def build_composed_graph_from_instances(est, ctrl, n_x, n_u, input_limits=None, plant=None):
     """Trace + compose already-instantiated components into a closed-loop step graph."""
     n_y = _measurement_dim(est, n_x)
-    est_input_shapes = {"measurement": (n_y, 1), "control_input": (n_u, 1)}
+    est_input_shapes = {"measurement": (n_y,), "control_input": (n_u,)}
     ctrl_input_shapes = {
         name: _controller_input_shape(name, n_x, n_u)
         for name in inspect.signature(ctrl.compute).parameters

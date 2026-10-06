@@ -20,10 +20,10 @@ class TestKalmanFilter:
         R = 0.1 * bk.eye(p)
         C = bk.eye(n)
         kf = KalmanFilter(A, B, Q, R, C=C, backend=bk)
-        y = bk.array([[1.0], [0.0]])
-        u = bk.array([[0.0]])
+        y = bk.array([1.0, 0.0])
+        u = bk.array([0.0])
         x = kf.estimate(y, u)
-        assert _to_np(x, bk).shape == (n, 1)
+        assert _to_np(x, bk).shape == (n,)
 
     def test_kalman_predict_update_equations(self, bk):
         """The estimate follows the standard KF predict-update equations exactly."""
@@ -35,8 +35,8 @@ class TestKalmanFilter:
         R = 0.2 * bk.eye(n)
         C = bk.eye(n)
         kf = KalmanFilter(A, B, Q, R, C=C, backend=bk)
-        y = bk.array([[1.0], [0.0]])
-        u = bk.array([[0.0]])
+        y = bk.array([1.0, 0.0])
+        u = bk.array([0.0])
 
         x_pred_manual = A @ kf.x_hat + B @ u
         P_pred_manual = A @ kf.P @ A.T + Q
@@ -59,9 +59,9 @@ class TestKalmanFilter:
         R = 0.01 * bk.eye(n)
         C = bk.eye(n)
         kf = KalmanFilter(A, B, Q, R, C=C, backend=bk)
-        kf.x_hat = bk.array([[1.0], [2.0]])
+        kf.x_hat = bk.array([1.0, 2.0])
         y = C @ (A @ kf.x_hat)
-        u = bk.zeros((1, 1))
+        u = bk.zeros(1)
         x_hat_before = bk.copy(kf.x_hat)
         x_hat_after = kf.estimate(y, u)
         assert np.allclose(_to_np(x_hat_after, bk), _to_np(x_hat_before, bk), atol=1e-10)
@@ -76,8 +76,8 @@ class TestKalmanFilter:
         R = 0.1 * bk.eye(n)
         C = bk.eye(n)
         kf = KalmanFilter(A, B, Q, R, C=C, backend=bk)
-        y = bk.array([[1.0], [0.0]])
-        u = bk.array([[0.0], [0.0]])
+        y = bk.array([1.0, 0.0])
+        u = bk.array([0.0, 0.0])
         traces = []
         for _ in range(5):
             kf.estimate(y, u)
@@ -95,8 +95,8 @@ class TestKalmanFilter:
         R = 0.1 * bk.eye(p)
         C = bk.eye(n)
         kf = KalmanFilter(A, B, Q, R, C=C, backend=bk)
-        y = bk.array([[1.0], [0.0]])
-        u = bk.array([[0.0], [0.0]])
+        y = bk.array([1.0, 0.0])
+        u = bk.array([0.0, 0.0])
         for _ in range(10):
             kf.estimate(y, u)
         P = kf.P
@@ -127,14 +127,14 @@ class TestKalmanFilter:
         R = bk.array([[0.1]])
         C = bk.array([[1.0]])
         kf = KalmanFilter(A, B, Q, R, C=C, backend=bk)
-        true_state = np.array([[5.0]])
-        x = bk.zeros((1, 1))
+        true_state = np.array([5.0])
+        x = bk.zeros(1)
         for _ in range(30):
-            y = bk.from_numpy(true_state + 0.1 * np.random.randn(1, 1))
-            u = bk.array([[0.0]])
+            y = bk.from_numpy(true_state + 0.1 * np.random.randn(1))
+            u = bk.array([0.0])
             x = kf.estimate(y, u)
             true_state = 0.9 * true_state
-        error = np.abs(_to_np(x, bk)[0, 0] - true_state[0, 0])
+        error = np.abs(_to_np(x, bk)[0] - true_state[0])
         assert error < 1.0
 
     def test_reset(self, bk):
@@ -147,8 +147,8 @@ class TestKalmanFilter:
         R = 0.1 * bk.eye(n)
         C = bk.eye(n)
         kf = KalmanFilter(A, B, Q, R, C=C, backend=bk)
-        y = bk.array([[1.0], [0.0]])
-        u = bk.array([[0.0], [0.0]])
+        y = bk.array([1.0, 0.0])
+        u = bk.array([0.0, 0.0])
         kf.estimate(y, u)
         kf.reset()
         assert np.allclose(_to_np(kf.x_hat, bk), 0.0)
@@ -165,10 +165,10 @@ class TestKalmanFilter:
         }
         kf = KalmanFilter.from_config(cfg, backend=bk)
         assert _to_np(kf.D, bk).shape == (2, 1)
-        y = bk.array([[0.1], [0.0]])
-        u = bk.array([[0.5]])
+        y = bk.array([0.1, 0.0])
+        u = bk.array([0.5])
         x = kf.estimate(y, u)
-        assert _to_np(x, bk).shape == (2, 1)
+        assert _to_np(x, bk).shape == (2,)
 
 
 class TestLuenbergerObserver:
@@ -183,10 +183,10 @@ class TestLuenbergerObserver:
         L = bk.array([[0.5, 0.0], [0.0, 0.5]])
         C = bk.eye(n)
         obs = LuenbergerObserver(A, B, L, C=C, backend=bk)
-        y = bk.array([[1.0], [0.0]])
-        u = bk.array([[0.0]])
+        y = bk.array([1.0, 0.0])
+        u = bk.array([0.0])
         x = obs.estimate(y, u)
-        assert _to_np(x, bk).shape == (n, 1)
+        assert _to_np(x, bk).shape == (n,)
 
     def test_luenberger_observer_equation(self, bk):
         """The estimate follows x_hat = A x_hat + B u + L (y - C (A x_hat + B u)) exactly."""
@@ -197,8 +197,8 @@ class TestLuenbergerObserver:
         L = bk.array([[0.5, 0.0], [0.0, 0.5]])
         C = bk.eye(n)
         obs = LuenbergerObserver(A, B, L, C=C, backend=bk)
-        y = bk.array([[1.0], [0.0]])
-        u = bk.array([[0.0]])
+        y = bk.array([1.0, 0.0])
+        u = bk.array([0.0])
 
         x_pred_manual = A @ obs.x_hat + B @ u
         x_hat_manual = x_pred_manual + L @ (y - C @ x_pred_manual)
@@ -215,9 +215,9 @@ class TestLuenbergerObserver:
         L = 0.5 * bk.eye(n)
         C = bk.eye(n)
         obs = LuenbergerObserver(A, B, L, C=C, backend=bk)
-        obs.x_hat = bk.array([[1.0], [2.0]])
+        obs.x_hat = bk.array([1.0, 2.0])
         y = C @ (A @ obs.x_hat)
-        u = bk.zeros((1, 1))
+        u = bk.zeros(1)
         x_hat_before = bk.copy(obs.x_hat)
         x_hat_after = obs.estimate(y, u)
         assert np.allclose(_to_np(x_hat_after, bk), _to_np(x_hat_before, bk), atol=1e-10)
@@ -256,14 +256,14 @@ class TestLuenbergerObserver:
         L = bk.array([[0.5]])
         C = bk.array([[1.0]])
         obs = LuenbergerObserver(A, B, L, C=C, backend=bk)
-        true_state = np.array([[5.0]])
-        x = bk.zeros((1, 1))
+        true_state = np.array([5.0])
+        x = bk.zeros(1)
         for _ in range(30):
             y = bk.from_numpy(true_state)
-            u = bk.array([[0.0]])
+            u = bk.array([0.0])
             x = obs.estimate(y, u)
             true_state = 0.9 * true_state
-        error = np.abs(_to_np(x, bk)[0, 0] - true_state[0, 0])
+        error = np.abs(_to_np(x, bk)[0] - true_state[0])
         assert error < 0.1
 
     def test_reset(self, bk):
@@ -275,8 +275,8 @@ class TestLuenbergerObserver:
         L = 0.5 * bk.eye(n)
         C = bk.eye(n)
         obs = LuenbergerObserver(A, B, L, C=C, backend=bk)
-        y = bk.array([[1.0], [0.0]])
-        u = bk.array([[0.0], [0.0]])
+        y = bk.array([1.0, 0.0])
+        u = bk.array([0.0, 0.0])
         obs.estimate(y, u)
         obs.reset()
         assert np.allclose(_to_np(obs.x_hat, bk), 0.0)
@@ -292,10 +292,10 @@ class TestLuenbergerObserver:
         }
         obs = LuenbergerObserver.from_config(cfg, backend=bk)
         assert _to_np(obs.D, bk).shape == (2, 1)
-        y = bk.array([[0.1], [0.0]])
-        u = bk.array([[0.5]])
+        y = bk.array([0.1, 0.0])
+        u = bk.array([0.5])
         x = obs.estimate(y, u)
-        assert _to_np(x, bk).shape == (2, 1)
+        assert _to_np(x, bk).shape == (2,)
 
     def test_from_config_partial_C_builds_d_by_output_dim(self, bk):
         """from_config with a partial C (n_y != n) builds D as (n_y, n_u) and estimates.
@@ -312,8 +312,8 @@ class TestLuenbergerObserver:
         }
         obs = LuenbergerObserver.from_config(cfg, backend=bk)
         assert _to_np(obs.D, bk).shape == (1, 1)
-        x = obs.estimate(bk.array([[1.0]]), bk.array([[0.0]]))
-        assert _to_np(x, bk).shape == (2, 1)
+        x = obs.estimate(bk.array([1.0]), bk.array([0.0]))
+        assert _to_np(x, bk).shape == (2,)
 
 
 class TestExtendedKalmanFilter:
@@ -362,8 +362,8 @@ class TestExtendedKalmanFilter:
             bk.eye(2) + dt * Ac, dt * Bc, ekf.Q, ekf.R, C=C, D=bk.zeros((1, 1)), backend=bk
         )
         x_ekf = ekf.estimate(bk.array([0.7]), bk.array([0.3]))
-        x_kf = kf.estimate(bk.array([[0.7]]), bk.array([[0.3]]))  # KF is column-vector
-        assert np.allclose(_to_np(x_ekf, bk), _to_np(x_kf, bk).ravel(), atol=1e-8)
+        x_kf = kf.estimate(bk.array([0.7]), bk.array([0.3]))
+        assert np.allclose(_to_np(x_ekf, bk), _to_np(x_kf, bk), atol=1e-8)
         assert np.allclose(_to_np(ekf.P, bk), _to_np(kf.P, bk), atol=1e-8)
 
     def test_predict_update_equations(self, bk):
@@ -709,8 +709,8 @@ class TestUnscentedKF:
             bk.eye(2) + dt * Ac, dt * Bc, ukf.Q, ukf.R, C=C, D=bk.zeros((1, 1)), backend=bk
         )
         x_ukf = ukf.estimate(bk.array([0.7]), bk.array([0.3]))
-        x_kf = kf.estimate(bk.array([[0.7]]), bk.array([[0.3]]))  # KF is column-vector
-        assert np.allclose(_to_np(x_ukf, bk), _to_np(x_kf, bk).ravel(), atol=1e-8)
+        x_kf = kf.estimate(bk.array([0.7]), bk.array([0.3]))
+        assert np.allclose(_to_np(x_ukf, bk), _to_np(x_kf, bk), atol=1e-8)
         assert np.allclose(_to_np(ukf.P, bk), _to_np(kf.P, bk), atol=1e-8)
 
     def test_covariance_stays_psd(self, bk):

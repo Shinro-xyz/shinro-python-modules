@@ -41,7 +41,8 @@ class LuenbergerObserver(StateEstimator):
     and does not assume noise statistics. No matrix inverses are needed
     at runtime — just three matrix-vector multiplies.
 
-    Uses column vectors :math:`(n, 1)` throughout (not flat :math:`(n,)`).
+    Uses flat vectors :math:`(n,)` throughout (not column :math:`(n, 1)`),
+    matching the rest of the control stack.
 
     Args:
         A: State transition matrix (n_x, n_x).
@@ -50,7 +51,7 @@ class LuenbergerObserver(StateEstimator):
             eigenvalues of (A - LC) inside the unit circle.
         C: Output matrix (n_y, n_x). Defaults to identity.
         D: Feedthrough matrix (n_y, n_u). Defaults to zeros.
-        x0: Initial state estimate (n_x, 1). Defaults to zeros.
+        x0: Initial state estimate (n_x,). Defaults to zeros.
         backend: Array backend. Defaults to NumpyBackend.
     """
 
@@ -70,7 +71,7 @@ class LuenbergerObserver(StateEstimator):
         self.C = self.bk.eye(A.shape[0]) if C is None else C
         self.D = self.bk.zeros((self.C.shape[0], B.shape[1])) if D is None else D
         self.L = observer_gain
-        self.x_hat = self.bk.zeros((A.shape[0], 1)) if x0 is None else self.bk.copy(x0)
+        self.x_hat = self.bk.zeros(A.shape[0]) if x0 is None else self.bk.ravel(self.bk.copy(x0))
 
     def estimate(self, measurement, control_input):
         """Perform one step of state estimation.
@@ -84,11 +85,11 @@ class LuenbergerObserver(StateEstimator):
             \\hat{x}_{k+1} = A \\hat{x}_k + B u_k + L (y_k - C (A \\hat{x}_k + B u_k) - D u_k)
 
         Args:
-            measurement: Output measurement :math:`y_k` (n_y, 1).
-            control_input: Control input :math:`u_k` (n_u, 1).
+            measurement: Output measurement :math:`y_k` (n_y,).
+            control_input: Control input :math:`u_k` (n_u,).
 
         Returns:
-            Updated state estimate :math:`\\hat{x}_{k+1}` (n_x, 1).
+            Updated state estimate :math:`\\hat{x}_{k+1}` (n_x,).
         """
         x_pred = self.A @ self.x_hat + self.B @ control_input
         innovations = measurement - (self.C @ x_pred + self.D @ control_input)
@@ -99,9 +100,9 @@ class LuenbergerObserver(StateEstimator):
         """Reset the observer to its initial state.
 
         Args:
-            x0: Initial state estimate (n_x, 1). Defaults to zeros.
+            x0: Initial state estimate (n_x,). Defaults to zeros.
         """
-        self.x_hat = self.bk.zeros((self.A.shape[0], 1)) if x0 is None else self.bk.copy(x0)
+        self.x_hat = self.bk.zeros(self.A.shape[0]) if x0 is None else self.bk.ravel(self.bk.copy(x0))
 
     Config = LuenbergerObserverConfig
 
@@ -142,6 +143,6 @@ class LuenbergerObserver(StateEstimator):
             observer_gain=gain,
             C=C,
             D=bk.array(cfg.D) if cfg.D is not None else bk.zeros((C.shape[0], B.shape[1])),
-            x0=bk.zeros((n, 1)),
+            x0=bk.zeros(n),
             backend=bk,
         )
