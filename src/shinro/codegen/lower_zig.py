@@ -241,7 +241,7 @@ def lower_zig(
     lines.append("")
     lines.append("pub const Op = enum {")
     lines.append("    cst, cst_f32, inp, out, matmul, add, sub, mul, div, ne, neg,")
-    lines.append("    transpose, inv, reshape, clip, where_op, any,")
+    lines.append("    transpose, inv, cholesky, reshape, clip, where_op, any,")
     lines.append("    copy, tanh, relu, exp, argmax, one_hot, slice,")
     lines.append("    sin, cos, stack, solve_qp,")
     lines.append("    abs, sign, pow, lt, min, gemm, sigmoid, softmax, gelu, elu, layernorm,")

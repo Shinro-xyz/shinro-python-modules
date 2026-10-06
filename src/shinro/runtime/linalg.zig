@@ -782,3 +782,29 @@ pub fn layernorm_rows(comptime rows:usize, comptime cols:usize, a:[]const f64, s
     }
     return out;
 }
+
+/// Cholesky factorization of a symmetric positive-definite (n, n) row-major
+/// matrix: returns the lower-triangular L with L @ L.T == a.
+///
+/// The accumulation subtracts products of the already-computed factor `out`
+/// (L[i][k]*L[j][k]), never the original matrix.
+pub fn cholesky(comptime n: usize, a: []const f64) [n * n]f64 {
+    var out: [n * n]f64 = undefined;
+    for (0..n) |i| {
+        for (0..i + 1) |j| {
+            var sum: f64 = a[i * n + j];
+            for (0..j) |k| {
+                sum -= out[i * n + k] * out[j * n + k];
+            }
+            if (i == j) {
+                out[i * n + j] = @sqrt(sum);
+            } else {
+                out[i * n + j] = sum / out[j * n + j];
+            }
+        }
+        for (i + 1..n) |j| {
+            out[i * n + j] = 0.0;
+        }
+    }
+    return out;
+}

@@ -107,6 +107,10 @@ class TraceBackend:
     def inv(self, x: Tracer) -> Tracer:
         return self._emit("inv", [x], x.shape)
 
+    def cholesky(self, x: Tracer) -> Tracer:
+        # Symmetric positive-definite (n, n) -> lower-triangular L, same shape.
+        return self._emit("cholesky", [x], x.shape)
+
     def solve(self, A: Tracer, b: Tracer) -> Tracer:
         # solve(A, b) returns x with A.shape[1] (= A.shape[0]) and b.shape[1]
         # if b is 2D, else b.shape[0] if 1D.

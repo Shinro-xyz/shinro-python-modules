@@ -1145,6 +1145,13 @@ def _glue_probe_case(name):
 
         rng = np.random.default_rng(7)
         return build, [("x", (8,))], {"x": rng.normal(0, 2, 8)}
+    if name == "cholesky-spd":
+
+        def build(g):
+            return {"l": g.emit("cholesky", [g.input("a", (3, 3))], (3, 3))}
+
+        a = np.array([[25.0, 15.0, -5.0], [15.0, 18.0, 0.0], [-5.0, 0.0, 11.0]])
+        return build, [("a", (3, 3))], {"a": a}
     raise ValueError(name)
 
 
@@ -1160,6 +1167,7 @@ GLUE_CASES = [
     "ew2-col-broadcast",
     "slice-1d-control",
     "transcendentals",
+    "cholesky-spd",
 ]
 
 
