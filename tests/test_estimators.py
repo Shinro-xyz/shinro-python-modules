@@ -641,3 +641,216 @@ class TestExtendedKalmanFilter:
         ekf = ExtendedKalmanFilter(None, None, dt=0.01, Q=bk.eye(1), R=bk.eye(1), backend=bk)
         with pytest.raises(ValueError, match="no dynamics"):
             ekf.attach_plant(object())
+
+
+class TestUnscentedKF:
+    """Verify the UKF: sigma-point weights, UT exactness, convergence, config, reset.
+
+    Flat-vector convention throughout: state (n_x,), control (n_u,),
+    measurement (n_y,). ``dynamics_fn`` is continuous-time dx/dt, Euler-
+    discretized at dt (the same contract as ExtendedKalmanFilter).
+    """
+
+    @staticmethod
+    def _linear_ukf(bk, dt=0.01, alpha=1.0, beta=2.0, kappa=0.0):
+        """UKF over a linear integrator chain: f = Ac x + Bc u, h = C x.
+
+        alpha=1 / kappa=0 keeps the scaled-UKF weights well conditioned so the
+        unscented transform is exact for the linear model (checked against KF).
+        """
+        from shinro.estimators.unscented_kf import UnscentedKF
+
+        Ac = bk.array([[0.0, 1.0], [0.0, 0.0]])
+        Bc = bk.array([[0.0], [1.0]])
+        C = bk.array([[1.0, 0.0]])
+        ukf = UnscentedKF(
+            lambda x, u: Ac @ x + Bc @ u,
+            lambda x: C @ x,
+            dt=dt,
+            alpha=alpha,
+            beta=beta,
+            kappa=kappa,
+            Q=0.01 * bk.eye(2),
+            R=0.1 * bk.eye(1),
+            backend=bk,
+        )
+        return ukf, Ac, Bc, C
+
+    def test_estimate_shape(self, bk):
+        """estimate() returns a flat state vector of shape (n_x,)."""
+        ukf, *_ = self._linear_ukf(bk)
+        x = ukf.estimate(bk.array([0.7]), bk.array([0.3]))
+        assert _to_np(x, bk).shape == (2,)
+
+    def test_weights_normalized(self, bk):
+        """Mean weights sum to 1; covariance weights sum to 2 - alpha^2 + beta."""
+        ukf, *_ = self._linear_ukf(bk, alpha=1.0, beta=2.0)
+        assert abs(float(_to_np(bk.sum(ukf.w_mean), bk)) - 1.0) < 1e-12
+        expected = 2.0 - ukf.alpha**2 + ukf.beta
+        assert abs(float(_to_np(bk.sum(ukf.w_covar), bk)) - expected) < 1e-12
+        assert _to_np(ukf.w_mean, bk).shape == (2 * ukf.nx + 1,)
+        assert _to_np(ukf.w_covar, bk).shape == (2 * ukf.nx + 1,)
+
+    def test_sigma_points_recover_mean_and_covariance(self, bk):
+        """The unscented transform recovers (x, P) exactly from its sigma points."""
+        ukf, *_ = self._linear_ukf(bk)
+        x = bk.array([0.3, -0.2])
+        P = bk.array([[0.5, 0.1], [0.1, 0.4]])
+        chi = ukf._sigma_points(x, P)
+        mean = ukf._weighted_mean(chi)
+        cov = ukf._weighted_cov(chi, mean)
+        assert np.allclose(_to_np(mean, bk), _to_np(x, bk), atol=1e-10)
+        assert np.allclose(_to_np(cov, bk), _to_np(P, bk), atol=1e-10)
+
+    def test_matches_kalman_filter_linear(self, bk):
+        """For linear f, h the UKF reproduces a KalmanFilter (the UT is exact for linear maps)."""
+        from shinro.estimators.kalman_filter import KalmanFilter
+
+        dt = 0.01
+        ukf, Ac, Bc, C = self._linear_ukf(bk, dt=dt)
+        kf = KalmanFilter(
+            bk.eye(2) + dt * Ac, dt * Bc, ukf.Q, ukf.R, C=C, D=bk.zeros((1, 1)), backend=bk
+        )
+        x_ukf = ukf.estimate(bk.array([0.7]), bk.array([0.3]))
+        x_kf = kf.estimate(bk.array([[0.7]]), bk.array([[0.3]]))  # KF is column-vector
+        assert np.allclose(_to_np(x_ukf, bk), _to_np(x_kf, bk).ravel(), atol=1e-8)
+        assert np.allclose(_to_np(ukf.P, bk), _to_np(kf.P, bk), atol=1e-8)
+
+    def test_covariance_stays_psd(self, bk):
+        """P stays positive semidefinite after repeated updates."""
+        ukf, *_ = self._linear_ukf(bk)
+        for _ in range(20):
+            ukf.estimate(bk.array([0.7]), bk.array([0.3]))
+        eigs = np.linalg.eigvals(_to_np(ukf.P, bk))
+        assert np.all(eigs > -1e-10)
+
+    def test_converges_nonlinear_measurement(self, bk):
+        """With a nonlinear h(x) = x^2 the estimate converges to the true state."""
+        from shinro.estimators.unscented_kf import UnscentedKF
+
+        ukf = UnscentedKF(
+            lambda x, u: bk.zeros(1),
+            lambda x: bk.array([x[0] * x[0]]),
+            dt=0.01,
+            alpha=1.0,
+            beta=2.0,
+            kappa=0.0,
+            Q=1e-4 * bk.eye(1),
+            R=0.01 * bk.eye(1),
+            x0=bk.array([1.0]),
+            backend=bk,
+        )
+        y, u = bk.array([4.0]), bk.zeros(1)
+        x = ukf.x_hat
+        for _ in range(60):
+            x = ukf.estimate(y, u)
+        assert abs(float(_to_np(x, bk)[0]) - 2.0) < 1e-3
+
+    def test_accepts_column_vector_measurement(self, bk):
+        """A (n_y,1) measurement stays a flat (n_y,) innovation (no (n,n) broadcast)."""
+        ukf, *_ = self._linear_ukf(bk)
+        x = ukf.estimate(bk.array([[0.7]]), bk.array([[0.3]]))
+        assert _to_np(x, bk).shape == (2,)
+
+    def test_estimate_without_callables_raises(self, bk):
+        """A from_config filter with no injected callables raises a clear RuntimeError."""
+        from shinro.estimators.unscented_kf import UnscentedKF
+
+        ukf = UnscentedKF.from_config(
+            {"process_noise": [0.01], "measurement_noise": [0.1], "dt": 0.02}, backend=bk
+        )
+        with pytest.raises(RuntimeError, match="dynamics_fn"):
+            ukf.estimate(bk.array([1.0]), bk.array([0.0]))
+
+    def test_reset(self, bk):
+        """reset() restores x_hat=0 / P=0.1*I and accepts a new x0."""
+        ukf, *_ = self._linear_ukf(bk)
+        ukf.estimate(bk.array([0.7]), bk.array([0.3]))
+        ukf.reset()
+        assert np.allclose(_to_np(ukf.x_hat, bk), 0.0)
+        assert np.allclose(_to_np(ukf.P, bk), 0.1 * np.eye(2))
+        ukf.reset(bk.array([3.0, 4.0]))
+        assert np.allclose(_to_np(ukf.x_hat, bk), [3.0, 4.0])
+
+    def test_reset_accepts_column_vector(self, bk):
+        """reset(x0) flattens an (n,1) x0 so the sigma-point step cannot broadcast-fail."""
+        ukf, *_ = self._linear_ukf(bk)
+        ukf.reset(bk.array([[3.0], [4.0]]))
+        assert _to_np(ukf.x_hat, bk).shape == (2,)
+        assert np.allclose(_to_np(ukf.x_hat, bk), [3.0, 4.0])
+
+    def test_from_config_shapes_and_defaults(self, bk):
+        """from_config reads n_x from Q and n_y from R; callables start None."""
+        from shinro.estimators.unscented_kf import UnscentedKF
+
+        ukf = UnscentedKF.from_config(
+            {"process_noise": [0.01, 0.02, 0.03], "measurement_noise": [0.1, 0.1], "dt": 0.02},
+            backend=bk,
+        )
+        assert ukf.nx == 3 and ukf.ny == 2
+        assert _to_np(ukf.Q, bk).shape == (3, 3)
+        assert _to_np(ukf.R, bk).shape == (2, 2)
+        assert _to_np(ukf.x_hat, bk).shape == (3,)
+        assert _to_np(ukf.w_mean, bk).shape == (7,)
+        assert (ukf.alpha, ukf.beta, ukf.kappa) == (1e-3, 2.0, 0.0)
+        assert ukf.dynamics_fn is None and ukf.measurement_fn is None
+
+    def test_from_config_full_matrix_and_initial_state(self, bk):
+        """Nested lists parse as full matrices; initial_state and scale params are carried."""
+        from shinro.estimators.unscented_kf import UnscentedKF
+
+        ukf = UnscentedKF.from_config(
+            {
+                "process_noise": [[0.01, 0.0], [0.0, 0.02]],
+                "measurement_noise": [0.1],
+                "dt": 0.1,
+                "initial_state": [1.0, 2.0],
+                "alpha": 0.5,
+                "beta": 2.0,
+                "kappa": 1.0,
+            },
+            backend=bk,
+        )
+        assert np.allclose(_to_np(ukf.Q, bk), [[0.01, 0.0], [0.0, 0.02]])
+        assert np.allclose(_to_np(ukf.x_hat, bk), [1.0, 2.0])
+        assert (ukf.alpha, ukf.beta, ukf.kappa) == (0.5, 2.0, 1.0)
+
+    def test_from_config_inject_and_estimate(self, bk):
+        """A from_config filter works once the callables are injected."""
+        from shinro.estimators.unscented_kf import UnscentedKF
+
+        ukf = UnscentedKF.from_config(
+            {"process_noise": [0.01], "measurement_noise": [0.1], "dt": 0.02}, backend=bk
+        )
+        ukf.dynamics_fn = lambda x, u: bk.zeros(1)
+        ukf.measurement_fn = lambda x: bk.array([x[0]])
+        x = ukf.estimate(bk.array([1.0]), bk.zeros(1))
+        assert _to_np(x, bk).shape == (1,)
+
+    def test_from_config_requires_dt(self, bk):
+        """Standalone from_config rejects a missing dt."""
+        from shinro.estimators.unscented_kf import UnscentedKF
+
+        with pytest.raises(ValueError, match="dt is required"):
+            UnscentedKF.from_config(
+                {"process_noise": [0.01], "measurement_noise": [0.1]}, backend=bk
+            )
+
+    def test_from_config_rejects_unknown_key(self, bk):
+        """Strict config parsing rejects an unknown key."""
+        from shinro.estimators.unscented_kf import UnscentedKF
+
+        with pytest.raises(ValueError, match="unknown key"):
+            UnscentedKF.from_config(
+                {"process_noise": [0.01], "measurement_noise": [0.1], "dt": 0.1, "nope": 1},
+                backend=bk,
+            )
+
+    def test_registered_and_exported(self):
+        """The estimator is registered and exported from the package."""
+        from shinro.estimators import UnscentedKF as Exported
+        from shinro.estimators.unscented_kf import UnscentedKF
+        from shinro.factories.registry import _ESTIMATOR_REGISTRY
+
+        assert Exported is UnscentedKF
+        assert _ESTIMATOR_REGISTRY["UnscentedKF"] is UnscentedKF
