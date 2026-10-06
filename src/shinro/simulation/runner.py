@@ -318,7 +318,7 @@ def iter_scenario(scenario, steps: int | None = None, seed: int | None = None) -
         measurement, faulted = _inject_adversarial(measurement, scenario.config.get("adversarial"), step)
 
         estimate = np.asarray(
-            est.estimate(measurement.reshape(-1, 1), u_prev.reshape(-1, 1)), dtype=np.float64
+            est.estimate(measurement, u_prev), dtype=np.float64
         ).flatten()
         if np.any(np.isnan(estimate)) or np.any(np.isinf(estimate)):
             raise ValueError(

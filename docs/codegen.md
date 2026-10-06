@@ -40,9 +40,11 @@ The pipeline lives in `src/shinro/codegen/`; the Zig VM lives in `src/shinro/run
    property: shapes and parameters are baked at trace time.
 2. **Compose** (`compose`). Stitch the per-component graphs into a single
    graph representing one tick of the closed loop, wiring them per the fixed
-   ABC dataflow. Shape mismatches (e.g. the KF's `(n,1)` column vector vs the
-   LQR's `(n,)` flat) are bridged by auto-inserted `reshape` nodes — the XLA
-   approach.
+   ABC dataflow. Estimators and controllers share one vector convention — flat
+   `(n,)` — so the component boundary needs no reshaping. Where a controller's
+   inputs do not map 1:1 to the estimator's outputs (e.g. a regulator without a
+   reference input receives the error `x̂ − x_ref`), compose inserts the bridging
+   ops — the XLA approach.
 3. **Interpret** (`interpret`). Replay the graph on real numpy inputs as a
    correctness oracle. If the interpreter's output matches a live
    `NumpyBackend` run to float-exactness, the tracer is sound.

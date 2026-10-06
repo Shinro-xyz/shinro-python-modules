@@ -33,14 +33,6 @@ def _from_list(data: list[float]):
     return np.array(data, dtype=np.float64)
 
 
-def _to_col(data: list[float]):
-    return np.array(data, dtype=np.float64).reshape(-1, 1)
-
-
-def _from_col(arr):
-    return arr.flatten().tolist()
-
-
 def _set_mpc_default_constraints(ctrl: Any) -> None:
     if not hasattr(ctrl, "A_constraints"):
         import scipy.sparse as sp
@@ -320,8 +312,7 @@ def estimator_estimate(
 ) -> str:
     """Run one predict-update cycle of a named estimator.
 
-    Both estimators use column vectors internally. The server converts
-    flat lists to (n, 1) columns and back.
+    Estimators take flat vectors; the server passes the lists through directly.
 
     Args:
         name: Name of the stored estimator instance.
@@ -333,11 +324,11 @@ def estimator_estimate(
 
     est = _store[name]
     bk = est.bk
-    meas_col = bk.array(measurement).reshape(-1, 1)
-    ctrl_col = bk.array(control_input).reshape(-1, 1)
+    meas = bk.array(measurement)
+    ctrl = bk.array(control_input)
 
     try:
-        x_hat = est.estimate(meas_col, ctrl_col)
+        x_hat = est.estimate(meas, ctrl)
     except Exception as e:
         return f"Error in estimate: {e}"
 
