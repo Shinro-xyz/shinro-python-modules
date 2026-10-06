@@ -74,6 +74,7 @@ implement `estimate(measurement, control_input)` and `reset()`.
 | `KalmanFilter` | `KalmanFilter` | `estimators/kalman_filter.py` | `samples/estimators/kalman_base.toml`, `kalman_arm.toml`, `kalman_pendulum.toml`, `kalman_cartpole.toml` |
 | `LuenbergerObserver` | `LuenbergerObserver` | `estimators/luenberger_observer.py` | `samples/estimators/luenberger_base.toml`, `luenberger_arm.toml`, `luenberger_pendulum.toml`, `luenberger_cartpole.toml` |
 | `ExtendedKalmanFilter` | `ExtendedKalmanFilter` | `estimators/extended_kf.py` | `samples/estimators/ekf_base.toml`, `ekf_cartpole.toml`, `ekf_inverted_pendulum.toml` |
+| `UnscentedKF` | `UnscentedKF` | `estimators/unscented_kf.py` | `samples/estimators/ukf_cartpole.toml`, `ukf_inverted_pendulum.toml` |
 
 ## Trajectories
 
