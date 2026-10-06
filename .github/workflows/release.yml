@@ -25,17 +25,24 @@ jobs:
       - name: Verify version matches tag
         run: |
           tag="${GITHUB_REF_NAME#v}"
-          version=$(python -c "import sys; sys.path.insert(0, '.'); from shinro import __version__; print(__version__.split('+')[0])" 2>/dev/null || true)
+          version=$(python -c "import sys; sys.path.insert(0, 'src'); \
+            from shinro import __version__; \
+            print(__version__.split('+')[0])" 2>/dev/null || true)
           echo "tag=$tag version=$version"
-          # setuptools-scm should report exactly the tagged version on a clean tag build
+          # setuptools-scm reports the tagged version on a clean build
           if [ "$version" != "$tag" ]; then
-            echo "::warning::setuptools-scm version '$version' does not match tag '$tag' — check for uncommitted changes"
+            echo "::warning::version '$version' != tag '$tag'"
           fi
       - name: Run smoke tests on the built wheel
         run: |
           pip install dist/*.whl
-          python -c "import shinro; from shinro.factories import ControllerFactory; print(shinro.__version__)"
-          python -c "from shinro.factories import ControllerFactory; ControllerFactory('configs/controllers/lqr_base.toml').create(); print('config ok')"
+          python -c "import shinro; \
+            from shinro.factories import ControllerFactory; \
+            print(shinro.__version__)"
+          python -c "from shinro.factories import ControllerFactory; \
+            ControllerFactory( \
+              'samples/controllers/lqr_base.toml').create(); \
+            print('config ok')"
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
