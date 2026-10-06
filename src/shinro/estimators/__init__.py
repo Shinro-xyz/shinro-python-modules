@@ -8,11 +8,19 @@ Available estimators:
     KalmanFilter         — Optimal stochastic filter (predict-update cycle)
     ExtendedKalmanFilter — Nonlinear EKF (local linearization of f, h)
     UnscentedKF          — Nonlinear UKF (deterministic sigma-point propagation)
+    ComplementaryFilter  — Rate + absolute-angle fusion (no model, no noise stats)
     LuenbergerObserver   — Deterministic observer with fixed gain
 """
+from .complementary_filter import ComplementaryFilter
 from .extended_kf import ExtendedKalmanFilter
 from .kalman_filter import KalmanFilter
 from .luenberger_observer import LuenbergerObserver
 from .unscented_kf import UnscentedKF
 
-__all__ = ["KalmanFilter", "ExtendedKalmanFilter", "UnscentedKF", "LuenbergerObserver"]
+__all__ = [
+    "KalmanFilter",
+    "ExtendedKalmanFilter",
+    "UnscentedKF",
+    "ComplementaryFilter",
+    "LuenbergerObserver",
+]

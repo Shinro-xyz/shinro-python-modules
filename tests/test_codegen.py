@@ -205,6 +205,54 @@ class TestTraceUnscentedKF:
         assert "x_hat" in ng.state_attrs and "P" in ng.state_attrs
 
 
+# ─── Test 1c: trace ComplementaryFilter alone ──────────────────────────────
+
+
+class TestTraceComplementaryFilter:
+    """Tracing ComplementaryFilter.estimate locks in its trace-safety."""
+
+    @staticmethod
+    def _cf(n=2):
+        from shinro.estimators.complementary_filter import ComplementaryFilter
+
+        return ComplementaryFilter(alpha=0.9, channels=n, dt=0.01, backend=NumpyBackend())
+
+    def test_trace_matches_numpy(self, rng):
+        """Interpreted complementary-filter graph == NumpyBackend on 20 random inputs."""
+        n = 2
+        for _ in range(20):
+            meas = rng.normal(0.0, 0.1, 2 * n)
+            x0 = rng.normal(0.0, 0.1, n)
+
+            cf_np = self._cf(n)
+            cf_np.reset(x0)
+            expected = cf_np.estimate(meas, np.zeros(1))
+
+            ng = trace_node(
+                self._cf(n),
+                input_shapes={"measurement": (2 * n,), "control_input": (1,)},
+                state_shapes={"x_hat": (n,)},
+            )
+            traced = interpret(
+                ng.graph,
+                {"measurement": meas, "control_input": np.zeros(1), "state_x_hat": x0},
+            )
+            got = traced.get("out", traced.get("state_x_hat"))
+            assert got is not None, f"no output; got {list(traced)}"
+            assert np.allclose(got, expected, atol=1e-12), f"trace diverged: {np.max(np.abs(got - expected))}"
+
+    def test_graph_has_slice_and_state(self):
+        """The measurement split (slice) and the recurrent x_hat are captured."""
+        ng = trace_node(
+            self._cf(3),
+            input_shapes={"measurement": (6,), "control_input": (1,)},
+            state_shapes={"x_hat": (3,)},
+        )
+        ops = {n.op for n in ng.graph.nodes}
+        assert "slice" in ops, f"ops = {sorted(ops)}"
+        assert "x_hat" in ng.state_attrs
+
+
 # ─── Test 2: trace LQR alone ───────────────────────────────────────────────
 
 
