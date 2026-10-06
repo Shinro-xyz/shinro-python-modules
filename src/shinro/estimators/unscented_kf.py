@@ -109,22 +109,33 @@ class UnscentedKF(StateEstimator):
         """Weighted mean of a stack of points, shape (L, d) -> (d,).
 
         Expressed as a matmul ``w(1,L) @ points(L,d)`` rather than a reduction,
-        so it stays inside the VM's op set when the filter is lowered.
+        so it stays inside the VM's op set when the filter is lowered. The
+        weights are baked constants: they are reshaped on the array (numpy /
+        torch), which the tracer lifts to a ``const`` node — routing a raw array
+        through ``bk.reshape`` would hit the trace backend and cannot infer ``-1``.
         """
-        w=self.bk.reshape(self.w_mean,(1,-1))
+        w=self.w_mean.reshape(1,self.w_mean.shape[0])
         return self.bk.ravel(w @ points)
 
     def _weighted_cov(self, points, mean):
-        """Weighted covariance of a stack of points about ``mean``, (L, d) -> (d, d)."""
-        w=self.bk.reshape(self.w_covar,(-1,1))
-        d=points-mean
+        """Weighted covariance of a stack of points about ``mean``, (L, d) -> (d, d).
+
+        The mean is lifted to a ``(1, d)`` row before subtracting: the tracer
+        requires matching ranks (no rank-2 minus rank-1 broadcast), unlike numpy.
+        """
+        w=self.w_covar.reshape(self.w_covar.shape[0],1)
+        d=points-self.bk.reshape(mean,(1,points.shape[1]))
         return (w*d).T @ d
 
     def _cross_cov(self, x_points, x_mean, z_points, z_mean):
-        """Weighted cross-covariance between two point sets, (d_x, d_z)."""
-        w=self.bk.reshape(self.w_covar,(-1,1))
-        dx=x_points-x_mean
-        dz=z_points-z_mean
+        """Weighted cross-covariance between two point sets, (d_x, d_z).
+
+        Both means are lifted to ``(1, d)`` rows for the same reason as
+        :meth:`_weighted_cov`.
+        """
+        w=self.w_covar.reshape(self.w_covar.shape[0],1)
+        dx=x_points-self.bk.reshape(x_mean,(1,x_points.shape[1]))
+        dz=z_points-self.bk.reshape(z_mean,(1,z_points.shape[1]))
         return (w*dx).T @ dz
 
     def _dynamics(self, x, u):

@@ -139,6 +139,72 @@ class TestTraceKalman:
         assert "x_hat" in node_graph.state_attrs, f"x_hat not detected as state; detected = {node_graph.state_attrs}"
 
 
+# ─── Test 1b: trace UnscentedKF alone ──────────────────────────────────────
+
+
+def _make_ukf(n: int = 3):
+    """A batch-capable UKF over a stable linear model with identity C."""
+    from shinro.estimators.unscented_kf import UnscentedKF
+
+    def dynamics(x, u, bk=None):
+        # batch-capable and trace-safe: no reduction ops (the trace backend has
+        # no `sum`); constant-foldable into scalar/const nodes
+        return 0.5 * x + 0.0
+
+    return UnscentedKF(
+        dynamics, None, dt=0.01, alpha=1.0, beta=2.0, kappa=0.0,
+        Q=0.01 * np.eye(n), R=0.1 * np.eye(n), backend=NumpyBackend(),
+        measurement_matrix=np.eye(n),
+    )
+
+
+class TestTraceUnscentedKF:
+    """Tracing UnscentedKF.estimate locks in its trace-safety.
+
+    Regression: the weighted mean/covariance helpers must express the sigma
+    points as a batch without numpy-only rank broadcasts. The baked weights are
+    reshaped on the array (lifting to a ``const``) and each mean is lifted to a
+    ``(1, d)`` row before subtracting. Before that, tracing raised inside
+    ``bk.reshape`` and on a rank-2 minus rank-1 broadcast.
+    """
+
+    def test_trace_matches_numpy(self, rng):
+        """Interpreted UKF graph == NumpyBackend UKF on 20 random inputs."""
+        n = 3
+        for _ in range(20):
+            y = rng.normal(0.0, 0.1, n)
+            u = rng.normal(0.0, 0.1, 1)
+            x0 = rng.normal(0.0, 0.1, n)
+
+            ukf_np = _make_ukf(n)
+            ukf_np.reset(x0)
+            expected = ukf_np.estimate(y, u)
+
+            ng = trace_node(
+                _make_ukf(n),
+                input_shapes={"measurement": (n,), "control_input": (1,)},
+                state_shapes={"x_hat": (n,), "P": (n, n)},
+            )
+            traced = interpret(
+                ng.graph,
+                {"measurement": y, "control_input": u, "state_x_hat": x0, "state_P": 0.1 * np.eye(n)},
+            )
+            got = traced.get("out", traced.get("state_x_hat"))
+            assert got is not None, f"no output; got {list(traced)}"
+            assert np.allclose(got, expected, atol=1e-10), f"UKF trace diverged: {np.max(np.abs(got - expected))}"
+
+    def test_graph_has_cholesky_and_state(self):
+        """The sigma-point ops (cholesky/concat/matmul/inv) and state attrs are captured."""
+        ng = trace_node(
+            _make_ukf(3),
+            input_shapes={"measurement": (3,), "control_input": (1,)},
+            state_shapes={"x_hat": (3,), "P": (3, 3)},
+        )
+        ops = {n.op for n in ng.graph.nodes}
+        assert {"cholesky", "concat", "matmul", "inv"}.issubset(ops), f"ops = {sorted(ops)}"
+        assert "x_hat" in ng.state_attrs and "P" in ng.state_attrs
+
+
 # ─── Test 2: trace LQR alone ───────────────────────────────────────────────
 
 
