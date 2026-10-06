@@ -182,6 +182,17 @@ pub fn Vm(comptime Ctx: type) type {
                         const r = la.inv(node.rows, s);
                         for (0..node.rows * node.cols) |j| out[j] = r[j];
                     },
+                    .cholesky => {
+                        // Square symmetric-PD matrix only: L @ L.T == a. Non-square or
+                        // 1-D operands have no Cholesky factor, so reject at comptime.
+                        comptime {
+                            if (node.vec or node.rows != node.cols)
+                                @compileError("cholesky op requires a square 2-D matrix");
+                        }
+                        const s = node_input(g.nodes[0..], node, &workspace);
+                        const r = la.cholesky(node.rows, s);
+                        for (0..node.rows * node.cols) |j| out[j] = r[j];
+                    },
                     .reshape => {
                         const s = node_input(g.nodes[0..], node, &workspace);
                         for (0..node.rows * node.cols) |j| out[j] = s[j];

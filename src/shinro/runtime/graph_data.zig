@@ -3,7 +3,7 @@
 
 pub const Op = enum {
     cst, cst_f32, inp, out, matmul, add, sub, mul, div, ne, neg,
-    transpose, inv, reshape, clip, where_op, any,
+    transpose, inv, cholesky, reshape, clip, where_op, any,
     copy, tanh, relu, exp, argmax, one_hot, slice,
     sin, cos, stack, solve_qp,
     abs, sign, pow, lt, min, gemm, sigmoid, softmax, gelu, elu, layernorm,

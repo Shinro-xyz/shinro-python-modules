@@ -146,6 +146,18 @@ def _inv(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray
     return np.linalg.inv(values[node.inputs[0]])
 
 
+@register_op("cholesky")
+def _cholesky(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
+    """Lower-triangular Cholesky factor ``L`` with ``L @ L.T == a``.
+
+    The numpy oracle for the Zig ``linalg.cholesky`` kernel: ``interpret()``,
+    the ONNX importer's eager evaluation, and the compiled ``.so`` are all
+    checked against this. Raises ``LinAlgError`` on a non-PD input, so the
+    oracle and the kernel agree on the failure case too.
+    """
+    return np.linalg.cholesky(values[node.inputs[0]])
+
+
 @register_op("solve_qp")
 def _solve_qp(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     """Solve ``min ½ uᵀ H u + qᵀ u`` s.t. ``lb ≤ A u ≤ ub``.

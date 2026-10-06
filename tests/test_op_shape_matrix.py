@@ -81,6 +81,13 @@ def _linalg_graph(g: Graph):
     outs["inv_2x2"] = g.emit("inv", [i2], (2, 2))
     outs["inv_4x4"] = g.emit("inv", [i4], (4, 4))
 
+    c1 = g.input("c1", (1, 1))
+    c2 = g.input("c2", (2, 2))
+    c4 = g.input("c4", (4, 4))
+    outs["cholesky_1x1"] = g.emit("cholesky", [c1], (1, 1))
+    outs["cholesky_2x2"] = g.emit("cholesky", [c2], (2, 2))
+    outs["cholesky_4x4"] = g.emit("cholesky", [c4], (4, 4))
+
     r6 = g.input("r6", (6,))
     r23 = g.input("r23", (2, 3))
     # the interpreter's reshape handler reads attrs["target_shape"] (the
@@ -118,6 +125,9 @@ def _linalg_graph(g: Graph):
         "i1": ((1, 1), "spd"),
         "i2": ((2, 2), "spd"),
         "i4": ((4, 4), "spd"),
+        "c1": ((1, 1), "spd"),
+        "c2": ((2, 2), "spd"),
+        "c4": ((4, 4), "spd"),
         "r6": ((6,), "free"),
         "r23": ((2, 3), "free"),
     }

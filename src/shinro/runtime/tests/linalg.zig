@@ -106,6 +106,36 @@ test "inv round-trips 3x3: inv(A) @ A == I" {
     }
 }
 
+test "cholesky 2x2: lower-triangular L with L @ L.T == A" {
+    const a = [_]f64{ 4, 2, 2, 3 };
+    const l = la.cholesky(2, &a);
+    // hand-computed: [[2, 0], [1, sqrt(2)]]
+    try std.testing.expectEqual(@as(f64, 2.0), l[0]);
+    try std.testing.expectEqual(@as(f64, 0.0), l[1]);
+    try std.testing.expectEqual(@as(f64, 1.0), l[2]);
+    try std.testing.expectApproxEqAbs(@sqrt(@as(f64, 2.0)), l[3], 1e-12);
+    // L @ L.T reconstructs A (L.T of a flat lower-triangular L is [l0, l2, l1, l3]).
+    const lt = [_]f64{ l[0], l[2], l[1], l[3] };
+    const r = la.matmul(2, 2, 2, &l, &lt);
+    for (0..4) |i| try std.testing.expectApproxEqAbs(a[i], r[i], 1e-12);
+}
+
+test "cholesky 3x3: exact integer factor" {
+    const a = [_]f64{ 25, 15, -5, 15, 18, 0, -5, 0, 11 };
+    const l = la.cholesky(3, &a);
+    try std.testing.expectEqual([_]f64{ 5, 0, 0, 3, 3, 0, -1, 1, 3 }, l);
+}
+
+test "cholesky 2x2 with an off-diagonal reconstructs A" {
+    const a = [_]f64{ 2.0, 0.8, 0.8, 1.5 };
+    const l = la.cholesky(2, &a);
+    // lower-triangular
+    try std.testing.expectEqual(@as(f64, 0.0), l[1]);
+    const lt = [_]f64{ l[0], l[2], l[1], l[3] };
+    const r = la.matmul(2, 2, 2, &l, &lt);
+    for (0..4) |i| try std.testing.expectApproxEqAbs(a[i], r[i], 1e-12);
+}
+
 test "relu clips negatives to 0" {
     const a = [_]f64{ -1, 0, 0.5, 2 };
     const r = la.relu(4, &a);

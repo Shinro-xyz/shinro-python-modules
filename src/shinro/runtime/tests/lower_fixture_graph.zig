@@ -37,6 +37,7 @@ pub const Op = enum {
     neg,
     transpose,
     inv,
+    cholesky,
     reshape,
     clip,
     where_op,
