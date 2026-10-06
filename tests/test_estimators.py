@@ -846,6 +846,128 @@ class TestUnscentedKF:
                 backend=bk,
             )
 
+    def test_measurement_matrix_gives_exact_measurement(self, bk):
+        """A linear measurement_matrix supplies h(x) = C x with no callable."""
+        from shinro.estimators.unscented_kf import UnscentedKF
+
+        C = bk.array([[1.0, 0.0], [0.0, 1.0]])
+        ukf = UnscentedKF(
+            lambda x, u: bk.zeros(2),
+            None,
+            dt=0.01,
+            alpha=1.0,
+            beta=2.0,
+            kappa=0.0,
+            Q=0.01 * bk.eye(2),
+            R=0.1 * bk.eye(2),
+            backend=bk,
+            measurement_matrix=C,
+        )
+        x = bk.array([1.5, -2.0])
+        assert np.allclose(_to_np(ukf._measurement(x), bk), _to_np(C @ x, bk))
+        out = ukf.estimate(bk.array([1.5, -2.0]), bk.zeros(2))
+        assert _to_np(out, bk).shape == (2,)
+
+    def test_measurement_matrix_shape_mismatch_is_loud(self, bk):
+        """A C that does not match R's n_y and Q's n_x is rejected at construction."""
+        from shinro.estimators.unscented_kf import UnscentedKF
+
+        with pytest.raises(ValueError, match="measurement_matrix shape"):
+            UnscentedKF(
+                lambda x, u: bk.zeros(2),
+                None,
+                dt=0.01,
+                alpha=1.0,
+                beta=2.0,
+                kappa=0.0,
+                Q=0.01 * bk.eye(2),
+                R=0.1 * bk.eye(2),
+                backend=bk,
+                measurement_matrix=bk.array([[1.0, 0.0]]),  # (1, 2) but R is (2, 2)
+            )
+
+    def test_from_config_parses_measurement_matrix(self, bk):
+        """from_config carries measurement_matrix into the filter; a C-only filter estimates."""
+        from shinro.estimators.unscented_kf import UnscentedKF
+
+        ukf = UnscentedKF.from_config(
+            {
+                "process_noise": [0.01, 0.01],
+                "measurement_noise": [0.1, 0.1],
+                "dt": 0.02,
+                "alpha": 1.0,
+                "measurement_matrix": [[1.0, 0.0], [0.0, 1.0]],
+            },
+            backend=bk,
+        )
+        assert ukf.C is not None
+        assert _to_np(ukf.C, bk).shape == (2, 2)
+        assert ukf.measurement_fn is None
+        ukf.dynamics_fn = lambda x, u: bk.zeros(2)
+        assert _to_np(ukf.estimate(bk.array([1.0, 2.0]), bk.zeros(2)), bk).shape == (2,)
+
+    def test_bk_aware_callable_receives_the_backend(self, bk):
+        """A callable taking ``bk`` is given the filter's backend (the tracing route)."""
+        from shinro.estimators.unscented_kf import UnscentedKF
+
+        seen = []
+
+        def dynamics(x, u, bk=None):
+            seen.append(bk)
+            assert bk is not None
+            return bk.zeros(2)
+
+        ukf = UnscentedKF(
+            dynamics, None, dt=0.01, alpha=1.0, beta=2.0, kappa=0.0,
+            Q=0.01 * bk.eye(2), R=0.1 * bk.eye(2), backend=bk, measurement_matrix=bk.eye(2),
+        )
+        ukf.estimate(bk.array([1.0, 2.0]), bk.zeros(2))
+        assert seen, "bk-aware dynamics was never called"
+        assert all(s is bk for s in seen), "the filter did not forward its own backend"
+
+    def test_attach_plant_injects_dynamics(self, bk):
+        """attach_plant fills an unset dynamics_fn with the plant's model; explicit wins."""
+        import tomllib as _tomllib
+
+        from shinro.estimators.unscented_kf import UnscentedKF
+        from shinro.factories.registry import _PLANT_REGISTRY
+        from shinro.utils.array_backend import NumpyBackend
+        from shinro.utils.config_resolver import resolve_config_path
+
+        with open(resolve_config_path("samples/plants/cartpole.toml"), "rb") as f:
+            plant = _PLANT_REGISTRY["CartPole"].from_config(_tomllib.load(f), backend=NumpyBackend())
+
+        ukf = UnscentedKF.from_config(
+            {
+                "process_noise": [0.01] * 4,
+                "measurement_noise": [0.1] * 4,
+                "dt": 0.01,
+                "alpha": 1.0,
+                "measurement_matrix": [[1.0, 0, 0, 0], [0, 1.0, 0, 0], [0, 0, 1.0, 0], [0, 0, 0, 1.0]],
+            },
+            backend=bk,
+        )
+        assert ukf.dynamics_fn is None
+        ukf.attach_plant(plant)
+        assert ukf.dynamics_fn is not None
+        assert _to_np(ukf.estimate(bk.array([0.1, 0.0, 0.2, 0.0]), bk.zeros(1)), bk).shape == (4,)
+
+        explicit = lambda x, u: bk.zeros(4)  # noqa: E731
+        ukf.dynamics_fn = explicit
+        ukf.attach_plant(plant)
+        assert ukf.dynamics_fn is explicit, "attach_plant overwrote an explicit dynamics_fn"
+
+    def test_attach_plant_without_dynamics_is_loud(self, bk):
+        """A plant exposing no dynamics and a filter with none is a loud error."""
+        from shinro.estimators.unscented_kf import UnscentedKF
+
+        ukf = UnscentedKF(
+            None, None, dt=0.01, alpha=1.0, beta=2.0, kappa=0.0,
+            Q=bk.eye(1), R=bk.eye(1), backend=bk,
+        )
+        with pytest.raises(ValueError, match="no dynamics"):
+            ukf.attach_plant(object())
+
     def test_registered_and_exported(self):
         """The estimator is registered and exported from the package."""
         from shinro.estimators import UnscentedKF as Exported

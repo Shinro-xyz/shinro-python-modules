@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from shinro.components import StateEstimator
+from shinro.estimators.model_call import call_model
 from shinro.factories.registry import register_estimator
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend, parse_matrix
 
@@ -14,13 +15,16 @@ class UnscentedKFConfig:
     ``dynamics_fn`` / ``measurement_fn`` are callables and cannot be serialized
     to TOML: :meth:`UnscentedKF.from_config` leaves them ``None`` and the caller
     injects them after construction. ``dt`` is optional — scenario builds inject
-    it from the plant.
+    it from the plant. ``measurement_matrix`` (a linear ``C``) is
+    TOML-serializable and supplies ``h`` without a callable, which is how a
+    config-only filter gets a measurement model.
     """
 
     process_noise: list[float] | list[list[float]]
     measurement_noise: list[float] | list[list[float]]
     dt: float | None = None
     initial_state: list[float] | None = None
+    measurement_matrix: list[list[float]] | None = None
     alpha: float = 1e-3
     beta: float = 2.0
     kappa: float = 0.0
@@ -40,7 +44,8 @@ class UnscentedKF(StateEstimator):
         Q: Any,
         R:Any,
         x0: Any | None= None,
-        backend: ArrayBackend | None= None
+        backend: ArrayBackend | None= None,
+        measurement_matrix: Any | None = None,
         ):
             self.bk= backend or NumpyBackend()
             self.dynamics_fn= dynamics_fn
@@ -54,6 +59,14 @@ class UnscentedKF(StateEstimator):
 
             self.nx=Q.shape[0] #process noise
             self.ny= R.shape[0] #measurement noise
+
+            #optional linear measurement model: h(x) = C x, no callable needed
+            self.C= None if measurement_matrix is None else self.bk.array(measurement_matrix)
+            if self.C is not None and tuple(self.C.shape) != (self.ny, self.nx):
+                raise ValueError(
+                    f"measurement_matrix shape {tuple(self.C.shape)} does not match R's {self.ny} "
+                    f"measurements x Q's {self.nx} states"
+                )
 
             # initializing the kalman algo values
             self.x_hat= self.bk.zeros(self.nx) if x0 is None else self.bk.ravel(self.bk.copy(x0))
@@ -114,13 +127,17 @@ class UnscentedKF(StateEstimator):
         """Evaluate the process model, raising when none was supplied."""
         if self.dynamics_fn is None:
             raise RuntimeError("UnscentedKF: dynamics_fn must be set before calling estimate()")
-        return self.dynamics_fn(x, u)
+        return call_model(self.dynamics_fn, x, u, bk=self.bk)
 
     def _measurement(self, x):
-        """Evaluate the measurement model, raising when none was supplied."""
+        """Evaluate :math:`h(x)` — the linear ``C`` when configured, else the callable."""
+        if self.C is not None:
+            return self.C @ x
         if self.measurement_fn is None:
-            raise RuntimeError("UnscentedKF: measurement_fn must be set before calling estimate()")
-        return self.measurement_fn(x)
+            raise RuntimeError(
+                "UnscentedKF: measurement_fn or measurement_matrix must be set before calling estimate()"
+            )
+        return call_model(self.measurement_fn, x, bk=self.bk)
 
     def estimate(self, measurement,control_input):
         n=self.nx
@@ -166,6 +183,33 @@ class UnscentedKF(StateEstimator):
         self.x_hat= self.bk.zeros(self.nx) if x0 is None else self.bk.ravel(self.bk.copy(x0))
         self.P=self.bk.eye(self.nx)*0.1
 
+    def attach_plant(self, plant: Any) -> None:
+        """Inject the plant's process model into a filter that has none.
+
+        The compiled/served path hands the UKF the plant so its ``dynamics_fn``
+        is the plant's model — written with the rank helpers and an optional
+        ``bk``, so it traces and lowers — instead of a hand-wired lambda. Only an
+        **unset** ``dynamics_fn`` is filled, so an explicit injection wins.
+
+        The measurement side is not touched: plants carry no measurement model
+        today, so a config-only UKF takes ``h`` from its ``measurement_matrix``.
+
+        Args:
+            plant: The plant whose :meth:`~shinro.components.Plant.dynamics` to use.
+
+        Raises:
+            ValueError: If the plant exposes no dynamics and none was injected.
+        """
+        if self.dynamics_fn is not None:
+            return
+        dynamics = getattr(plant, "dynamics", None)
+        if dynamics is None or not callable(dynamics):
+            raise ValueError(
+                f"attach_plant: {type(plant).__name__} exposes no dynamics(), and the filter "
+                f"has no dynamics_fn — inject one explicitly (ukf.dynamics_fn = ...)."
+            )
+        self.dynamics_fn = dynamics
+
     Config = UnscentedKFConfig
 
     @classmethod
@@ -174,7 +218,9 @@ class UnscentedKF(StateEstimator):
 
         The ``dynamics_fn`` / ``measurement_fn`` callables cannot be serialized
         to TOML: they are created as ``None`` and must be injected after
-        construction (``ukf.dynamics_fn = ...``), or filled from a plant.
+        construction (``ukf.dynamics_fn = ...``), or filled from a plant. A
+        config may instead carry a linear ``measurement_matrix`` (``C``), in which
+        case ``measurement_fn`` is never needed.
 
         Args:
             config: TOML config dict or UnscentedKFConfig.
@@ -207,4 +253,5 @@ class UnscentedKF(StateEstimator):
             R=R,
             x0=x0,
             backend=bk,
+            measurement_matrix=cfg.measurement_matrix,
         )

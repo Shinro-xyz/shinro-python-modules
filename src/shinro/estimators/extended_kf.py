@@ -7,41 +7,14 @@ model is a continuous-time derivative ``f(x, u) -> dx/dt`` (the same contract
 as :meth:`shinro.components.Plant.dynamics`), Euler-discretized at ``dt``.
 """
 
-import inspect
 from collections.abc import Callable
 from dataclasses import dataclass
-from functools import cache
 from typing import Any
 
 from shinro.components import StateEstimator
+from shinro.estimators.model_call import call_model
 from shinro.factories.registry import register_estimator
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend, parse_matrix
-
-
-@cache
-def _accepts_backend(fn: Any) -> bool:
-    """Whether a model callable takes a backend (a ``bk`` parameter or ``**kwargs``)."""
-    try:
-        params = inspect.signature(fn).parameters
-    except (TypeError, ValueError):  # builtins / C callables expose no signature
-        return False
-    if "bk" in params:
-        return True
-    return any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
-
-
-def _call_model(fn: Any, *args: Any, bk: Any) -> Any:
-    """Call a model callable, passing the backend when its signature accepts one.
-
-    ``Plant.dynamics`` (and any model written for the compiled path) takes an
-    optional ``bk`` — that is how a traced component routes the plant's ops
-    through its :class:`~shinro.codegen.trace_backend.TraceBackend` instead of the
-    plant's concrete backend. A plain user lambda takes only the model arguments.
-    Passing ``bk`` only when accepted keeps both conventions working.
-    """
-    if _accepts_backend(fn):
-        return fn(*args, bk=bk)
-    return fn(*args)
 
 
 @dataclass(frozen=True)
@@ -206,18 +179,18 @@ class ExtendedKalmanFilter(StateEstimator):
 
     def _dynamics(self, x, u):
         """Evaluate :math:`f(x, u)` through the filter's backend."""
-        return self._flat(_call_model(self._dynamics_fn(), x, u, bk=self.bk), self.n_x)
+        return self._flat(call_model(self._dynamics_fn(), x, u, bk=self.bk), self.n_x)
 
     def _measurement(self, x):
         """Evaluate :math:`h(x)` — the linear ``C`` when configured, else the callable."""
         if self.C is not None:
             return self.C @ x
-        return self._flat(_call_model(self._measurement_fn(), x, bk=self.bk), self.n_y)
+        return self._flat(call_model(self._measurement_fn(), x, bk=self.bk), self.n_y)
 
     def _dynamics_jacobian(self, x, u):
         """Return :math:`F = \\partial f/\\partial x` at ``(x, u)``, shape (n_x, n_x)."""
         dynamics_fn = self._dynamics_fn()
-        return self.bk.jacobian(lambda x_: self._flat_or_batch(_call_model(dynamics_fn, x_, u, bk=self.bk)), x)
+        return self.bk.jacobian(lambda x_: self._flat_or_batch(call_model(dynamics_fn, x_, u, bk=self.bk)), x)
 
     def _measurement_jacobian(self, x):
         """Return :math:`H = \\partial h/\\partial x` at ``x``, shape (n_y, n_x).
@@ -228,7 +201,7 @@ class ExtendedKalmanFilter(StateEstimator):
         if self.C is not None:
             return self.C
         measurement_fn = self._measurement_fn()
-        return self.bk.jacobian(lambda x_: self._flat_or_batch(_call_model(measurement_fn, x_, bk=self.bk)), x)
+        return self.bk.jacobian(lambda x_: self._flat_or_batch(call_model(measurement_fn, x_, bk=self.bk)), x)
 
     def estimate(self, measurement, control_input):
         """Run one predict-update cycle and return the posterior state estimate.
@@ -258,7 +231,7 @@ class ExtendedKalmanFilter(StateEstimator):
         z = self._flat(measurement, self.n_y)
 
         # --- predict: Euler-discretize the continuous-time process model ---
-        f = self._flat(_call_model(dynamics_fn, x, u, bk=self.bk), self.n_x)
+        f = self._flat(call_model(dynamics_fn, x, u, bk=self.bk), self.n_x)
         x_pred = x + self.dt * f
         F = self.bk.eye(self.n_x) + self.dt * self._dynamics_jacobian(x, u)
         P_pred = F @ self.P @ F.T + self.Q
