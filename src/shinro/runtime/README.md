@@ -18,7 +18,7 @@ pipeline narrative and the XLA-fidelity model.
 | `lower.zig` | The comptime VM, graph-agnostic. `pub fn Vm(Ctx)` instantiates it over an injected graph context; its `step` runs one tick by one `inline for` over the node table, dispatching each node's op with `rows`/`cols` as comptime constants. |
 | `linalg.zig` | Shared linear-algebra kernels (matmul, elementwise ops, `inv`, ...) used by the VM. |
 | `qp.zig` | The `.solve_qp` op wrapper: drives the generated static OSQP solver (update q → solve → copy solution out). |
-| `graph_data.zig` | **Generated** — the graph as Zig constants (op enum, node table, offsets, `const_blob`, `has_solve_qp`). Produced by `scripts/gen_base.py` / `shinro.codegen.lower_zig`. Not hand-edited. |
+| `graph_data.zig` | **Generated** — the graph as Zig constants (op enum, node table, offsets, `has_solve_qp`). The baked numeric blobs live in the sibling `<stem>_consts.bin` (f64) and `<stem>_weights.bin` (f32) sidecars (raw little-endian), `@embedFile`d at compile time. Produced by `scripts/gen_base.py` / `shinro.codegen.lower_zig`. Not hand-edited. |
 | `codegen/emosqp/` | **Generated** — the statically-allocated OSQP solver for the base MPC problem (no malloc, no libosqp). Emitted by `scripts/gen_emosqp_test.py`. |
 | `tests/linalg.zig` | Zig unit tests for the linear-algebra kernels. |
 | `tests/lower.zig` | Zig-native C-ABI tests for `lower.zig`: drives `shinro_step` in-process, no `.so`/ctypes/Python. |
@@ -76,6 +76,17 @@ against the Python interpreter lives in `tests/test_zig_lowering.py` (the
 `.solve_qp` op is exercised by the MPC graph fixture, which traces
 `MPC_LTI` and compares `shinro_step` against `interpret()`).
 
+A graph with baked numeric blobs lowers to `graph_data.zig` plus one or both
+sidecars: `graph_data_consts.bin` (the f64 `const_blob` — NN biases, estimator
+gains, state matrices, ...) and `graph_data_weights.bin` (the f32
+`const_blob_f32` — contraction weights). Each is raw little-endian and embedded
+by the `.zig` with `@embedFile` + `std.mem.bytesAsSlice(f64|f32, ...)`, so the
+values still end up baked into the `.so` — they just never pass through the Zig
+parser (a 1M-parameter policy would otherwise be a ~20 MB `.zig`). A sidecar
+must sit next to the `.zig` (as `make zig-gen` writes it); `-Dgraph=<path>` picks
+up the siblings. A blob that is empty (e.g. no f32 contraction weights in
+KF+LQR) emits no sidecar for that blob.
+
 `zig build test` also runs `tests/lower.zig`, which instantiates the VM with
 `lower.Vm(Ctx).step(...)` and drives the C-ABI entry path **natively** —
 directly in the test process, compiled against the committed fixture graph
@@ -125,7 +136,9 @@ zig build --build-file src/shinro/runtime/build.zig --prefix build/ \
 
 - `-Dgraph` — the generated graph (default `graph_data.zig`). `entry.zig`
   imports it as an anonymous module, so a build can consume a graph from any
-  path (e.g. a pytest tmp dir).
+  path (e.g. a pytest tmp dir). When the graph has baked numeric blobs, their
+  `<stem>_consts.bin` / `<stem>_weights.bin` sidecars must sit next to it
+  (`@embedFile` resolves relative to the `.zig`).
 - `-Dsolver_dir` — the baked OSQP codegen solver tree (default
   `codegen/emosqp`). The C sources and include paths are rooted there, and the
   bake's `solver_meta.zig` (`pub const n_vars`) is imported for the comptime

@@ -1,11 +1,10 @@
 """Generate the Zig-native VM test fixtures (graph + compact weights + vectors).
 
 For each fixture this lowers a composed graph with
-:func:`shinro.codegen.lower_zig.lower_zig`, then post-processes the emitted
-``graph_data.zig`` to shrink the f32 weight blob: the ``const_blob_f32`` values
-are written as a raw little-endian ``.bin`` and re-exposed at compile time via
-``@embedFile`` + ``std.mem.bytesAsSlice`` (a ~5x reduction vs. hex literals —
-the go2 MLP drops from ~4 MB to ~0.75 MB). The oracle vectors come from
+:func:`shinro.codegen.lower_zig.lower_zig` (which now emits both numeric blobs
+— f64 constants and f32 weights — as raw little-endian ``.bin`` files embedded
+at compile time, so they never land in the ``.zig``) and then prepends a
+fixture-specific header. The oracle vectors come from
 :func:`shinro.codegen.interpret` on seeded random inputs, so the committed graph
 and its expected outputs are generated together and stay self-consistent.
 
@@ -28,9 +27,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
-import re
 import shutil
-import struct
 import subprocess
 import sys
 from pathlib import Path
@@ -108,32 +105,29 @@ def _build_composed(name: str, spec: dict[str, Any], bench_root: Path):
     )
 
 
-def _compact_f32_blob(name: str, graph_path: Path, header: str) -> None:
-    """Replace ``const_blob_f32`` hex literals with an embedded raw f32 blob.
-
-    Graphs with no f32 weights (e.g. an all-f64 classical graph) keep their
-    empty blob as-is; the generated header is always replaced with ``header``.
-    """
+def _rewrite_header(graph_path: Path, header: str) -> None:
+    """Swap lower_zig's generic header for the fixture-specific one."""
     text = graph_path.read_text()
-    m = re.search(r"pub const const_blob_f32 = \[_\]f32\{(.*?)\};", text)
-    if m is None or not m.group(1).strip():
-        graph_path.write_text(text.replace(_ORIG_HEADER, header))
-        return
-    body = m.group(1)
-    values = [float.fromhex(tok.strip()) for tok in body.split(",") if tok.strip()]
-    raw = b"".join(struct.pack("<f", v) for v in values)
-    weights_name = f"{name}_weights.bin"
-    (graph_path.parent / weights_name).write_bytes(raw)
-    decl = (
-        f"const _weights: [{len(raw)}]u8 align(@alignOf(f32)) = "
-        f'@embedFile("{weights_name}").*;\n'
-        f"pub const const_blob_f32: []const f32 = std.mem.bytesAsSlice(f32, &_weights);"
-    )
-    text = text.replace(m.group(0), decl)
-    # The embed form needs std; the generated file does not import it.
-    text = text.replace(_ORIG_HEADER, header + 'const std = @import("std");\n')
-    graph_path.write_text(text)
-    assert len(values) * 4 == len(raw)
+    graph_path.write_text(text.replace(_ORIG_HEADER, header))
+
+
+def _rename_sidecars(name: str, graph_path: Path) -> None:
+    """Rename lower_zig's ``<stem>_*.bin`` sidecars to the fixture's ``<name>_*.bin``.
+
+    lower_zig names each sidecar after the graph file stem (``<name>_graph``); the
+    committed fixtures use ``<name>_weights.bin`` / ``<name>_consts.bin``. A blob
+    with no values writes no sidecar, so that case is a no-op.
+    """
+    for suffix in ("weights", "consts"):
+        generated = graph_path.with_name(f"{graph_path.stem}_{suffix}.bin")
+        if not generated.exists():
+            continue
+        target = graph_path.with_name(f"{name}_{suffix}.bin")
+        generated.replace(target)
+        text = graph_path.read_text().replace(
+            f'@embedFile("{generated.name}")', f'@embedFile("{target.name}")'
+        )
+        graph_path.write_text(text)
 
 
 def _emit_vectors(name: str, cg, data_path: Path, tol: float) -> tuple[int, int, int]:
@@ -194,7 +188,8 @@ def generate(name: str, spec: dict[str, Any], bench_root: Path, out_dir: Path) -
     data_path = out_dir / f"{name}_data.zig"
     lower_zig(cg, str(graph_path))
     graph_path.with_name(graph_path.stem + "_manifest.json").unlink(missing_ok=True)
-    _compact_f32_blob(name, graph_path, header)
+    _rename_sidecars(name, graph_path)
+    _rewrite_header(graph_path, header)
     n_in, n_out, n_state = _emit_vectors(name, cg, data_path, spec.get("tol", TOL))
 
     graph_kb = graph_path.stat().st_size / 1024
