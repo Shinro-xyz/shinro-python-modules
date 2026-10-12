@@ -2,7 +2,7 @@
 
 Reads a scenario TOML's ``[controller]`` / ``[estimator]`` config paths,
 ``[scenario].input_limits``, and the ``[compile]`` section (``n_x`` / ``n_u`` /
-``recipe`` / ``out``), dispatches to a registered :mod:`shinro.codegen.recipes`
+``recipe`` / ``out``), dispatches to a registered :mod:`shinro.scenarios.recipes`
 recipe to compose the step graph, and lowers it to an **isolated** path
 (``--out``) — the shipped ``src/shinro/runtime/graph_data.zig`` is never
 touched, so compiling a custom scenario never clobbers the shipped graph.
@@ -23,7 +23,7 @@ compose wiring (``closed_loop_tracking`` by default; ``policy_only`` when
 
 Run::
 
-    python3 -m shinro.codegen.scenario_gen tests/integration/scenarios/base_tracking.toml --out build/base
+    python3 -m shinro.scenarios.gen tests/integration/scenarios/base_tracking.toml --out build/base
 
 Exit codes: 0 ok · 1 untraceable · 2 usage/config error.
 """
@@ -39,8 +39,8 @@ from pathlib import Path
 import numpy as np
 
 from shinro.codegen import lower_zig
-from shinro.codegen.bake import SOLVERS
-from shinro.codegen.recipes import available_graphs, build_recipe, tool_versions, type_from_component_config
+from shinro.scenarios.bake import SOLVERS
+from shinro.scenarios.recipes import available_graphs, build_recipe, tool_versions, type_from_component_config
 from shinro.utils.config_resolver import resolve_config_path
 
 EXIT_OK = 0
@@ -234,7 +234,7 @@ def gen_scenario(scenario_path: str, out_dir: str) -> tuple:
     """Trace + compose + lower a scenario into an isolated graph pair.
 
     Dispatches to the scenario's resolved ``[compile].recipe`` (a registered
-    :mod:`shinro.codegen.recipes` graph recipe), so the compose wiring is chosen
+    :mod:`shinro.scenarios.recipes` graph recipe), so the compose wiring is chosen
     explicitly rather than by which sections the scenario happens to declare.
 
     Args:

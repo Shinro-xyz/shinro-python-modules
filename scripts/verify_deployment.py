@@ -1,11 +1,11 @@
-"""Thin shim — the deployment-verification logic now lives in ``shinro.codegen.verify``.
+"""Thin shim — the deployment-verification logic now lives in ``shinro.verification.verify``.
 
 Kept so ``from scripts.verify_deployment import ...`` keeps working for the test
 suite and repo-internal tooling. New code should import from
-``shinro.codegen.verify``.
+``shinro.verification.verify``.
 """
 
-from shinro.codegen.verify import (  # noqa: F401
+from shinro.verification.verify import (  # noqa: F401
     _check,
     _sha256_file,
     main,

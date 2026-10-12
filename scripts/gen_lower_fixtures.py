@@ -88,7 +88,7 @@ FI = {
 def _build_composed(name: str, spec: dict[str, Any], bench_root: Path):
     """Build the ComposedGraph for one fixture spec."""
     if spec["kind"] == "classical":
-        from shinro.codegen import recipes
+        from shinro.scenarios import recipes
 
         return getattr(recipes, spec["recipe"])()
     root = REPO if spec["root"] == "repo" else bench_root
@@ -136,7 +136,7 @@ def _emit_vectors(name: str, cg, data_path: Path, tol: float) -> tuple[int, int,
 
     from shinro.codegen import interpret
     from shinro.codegen.lower_zig import _zig_floats
-    from shinro.codegen.oracle import output_split, pack_arrays, random_inputs
+    from shinro.verification.oracle import output_split, pack_arrays, random_inputs
 
     n_out, n_state = output_split(cg)
     rng = np.random.default_rng(SEED)

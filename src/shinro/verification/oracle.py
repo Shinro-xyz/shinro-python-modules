@@ -3,7 +3,7 @@
 ONE home for the comparison conventions every consumer shares: seeded random
 inputs (square 2-D state ports made SPD), flat C-ABI packing, per-port max-abs
 comparison, and the QP/non-QP tolerance tier. Consumed by the build-time gate
-(:mod:`shinro.codegen.scenario_build`), the pytest oracle suite
+(:mod:`shinro.scenarios.build`), the pytest oracle suite
 (``tests/test_zig_lowering.py`` and friends), and shinro-bench's fidelity
 payload builder. The on-target compare script stays numpy-free by design —
 payload production is laptop-side, which is this module.

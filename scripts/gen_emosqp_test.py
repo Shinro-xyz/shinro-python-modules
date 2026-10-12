@@ -1,6 +1,6 @@
 """Generate the OSQP codegen static solver + the Zig oracle test vectors.
 
-Wraps :func:`shinro.codegen.bake.bake_emosqp` — which emits the
+Wraps :func:`shinro.scenarios.bake.bake_emosqp` — which emits the
 statically-allocated solver into ``<out-dir>/`` (no malloc, no libosqp
 dependency) and the ``<out-dir>/solver_meta.zig`` the VM comptime-checks
 against — and additionally writes ``src/shinro/runtime/tests/emosqp_data.zig``,
@@ -44,8 +44,8 @@ import numpy as np
 import osqp
 from scipy import sparse
 
-from shinro.codegen.bake import EPS, Bake, bake_emosqp
 from shinro.codegen.lower_zig import _zig_floats
+from shinro.scenarios.bake import EPS, Bake, bake_emosqp
 
 DEFAULT_CONFIG = "samples/controllers/mpc_lti_base.toml"
 DEFAULT_OUT_DIR = "src/shinro/runtime/codegen/emosqp"

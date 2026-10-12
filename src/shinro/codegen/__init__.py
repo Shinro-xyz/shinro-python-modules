@@ -20,11 +20,11 @@ Public API:
   a Zig data table (``src/shinro/runtime/graph_data.zig``); ``make zig-build``
   compiles it to ``build/base.so`` with the handwritten comptime VM in
   ``src/shinro/runtime/lower.zig``.
-- :func:`~shinro.codegen.scenario_gen.gen_scenario` — trace + compose + lower
+- :func:`~shinro.scenarios.gen.gen_scenario` — trace + compose + lower
   a scenario TOML into an isolated graph pair (zig-free stage).
-- :func:`~shinro.codegen.scenario_build.build_scenario` — compile a generated
+- :func:`~shinro.scenarios.build.build_scenario` — compile a generated
   graph into a verified, stamped ``libbase.so`` (zig stage).
-- :func:`~shinro.codegen.cli.main` — the ``shinro-compile`` console entry
+- :func:`~shinro.cli.compile.main` — the ``shinro-compile`` console entry
   point chaining the two stages.
 
 See ``lab-notes/daily/`` for the design narrative.

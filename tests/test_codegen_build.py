@@ -262,8 +262,8 @@ class TestLoadConfigPlantInjection:
 def test_derived_plant_scenario_matches_explicit(tmp_path):
     """A [plant] scenario (no A/B, no n_x/n_u) composes the SAME graph as the
     explicit-A/B path — the derivation is faithful, not a reimplementation."""
-    from shinro.codegen.scenario_gen import gen_scenario
     from shinro.factories.registry import _PLANT_REGISTRY
+    from shinro.scenarios.gen import gen_scenario
     from shinro.utils.array_backend import NumpyBackend
     from shinro.utils.config_resolver import resolve_config_path
     from shinro.utils.linearization import derive_model
@@ -484,7 +484,7 @@ def test_ekf_scenario_expands_its_jacobian_batched(tmp_path, scenario, n_x, n_u,
     import numpy as np
 
     from shinro.codegen.interpreter import interpret_step
-    from shinro.codegen.scenario_gen import gen_scenario
+    from shinro.scenarios.gen import gen_scenario
 
     cg, _ = gen_scenario(f"tests/integration/scenarios/{scenario}", str(tmp_path / "ekf"))
     ops = [n.op for n in cg.graph.nodes]
@@ -514,7 +514,7 @@ def test_smc_composes_with_a_plant_derived_model(tmp_path):
     config — the [plant] is attached and compose emits the subgraph, so the model
     lowers with everything else (no `jacobian` op, no hand-maintained g).
     """
-    from shinro.codegen.scenario_gen import gen_scenario
+    from shinro.scenarios.gen import gen_scenario
 
     cg, _ = gen_scenario("tests/integration/scenarios/smc_pendulum_compile.toml", str(tmp_path / "smc"))
     assert "f_x" not in cg.inputs and "g_x" not in cg.inputs, "model terms must be baked, not host ports"

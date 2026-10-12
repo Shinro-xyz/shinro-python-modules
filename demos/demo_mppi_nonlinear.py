@@ -47,11 +47,11 @@ import numpy as np
 from shinro.codegen import interpret
 from shinro.codegen.compose import ComposedGraph
 from shinro.codegen.lower_zig import lower_zig
-from shinro.codegen.oracle import load_so, output_split, pack_arrays, step_so
 from shinro.codegen.trace_node import trace_node
 from shinro.controllers.mppi import MPPIController
 from shinro.plants.inverted_pendulum import InvertedPendulum
 from shinro.utils.array_backend import NumpyBackend
+from shinro.verification.oracle import load_so, output_split, pack_arrays, step_so
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RUNTIME = REPO_ROOT / "src" / "shinro" / "runtime"

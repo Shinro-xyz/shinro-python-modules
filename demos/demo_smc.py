@@ -52,9 +52,9 @@ import numpy as np
 from shinro.codegen import interpret
 from shinro.codegen.compose import ComposedGraph
 from shinro.codegen.lower_zig import lower_zig
-from shinro.codegen.oracle import load_so, output_split, pack_arrays, step_so
 from shinro.codegen.trace_node import trace_node
 from shinro.controllers.smc import SlidingModeController
+from shinro.verification.oracle import load_so, output_split, pack_arrays, step_so
 
 BUILD_SO = "--build" in sys.argv
 

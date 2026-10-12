@@ -1,4 +1,4 @@
-"""Tests for :mod:`shinro.codegen.bake` — the OSQP codegen solver bake.
+"""Tests for :mod:`shinro.scenarios.bake` — the OSQP codegen solver bake.
 
 ``bake_emosqp`` generates the static solver + ``solver_meta.zig``;
 ``bake_is_current`` is the reuse check the on-demand build path relies on.
@@ -8,7 +8,7 @@ graph↔bake wiring itself is covered by ``tests/test_compile_scenario.py``.
 
 from __future__ import annotations
 
-from shinro.codegen.bake import SOLVERS, bake_emosqp, bake_is_current
+from shinro.scenarios.bake import SOLVERS, bake_emosqp, bake_is_current
 
 CONFIG = "samples/controllers/mpc_lti_base.toml"
 

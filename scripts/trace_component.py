@@ -1,12 +1,12 @@
-"""Thin shim — the component tracer now lives in ``shinro.codegen.component_cli``.
+"""Thin shim — the component tracer now lives in ``shinro.cli.components``.
 
 Kept so ``from scripts.trace_component import ...`` keeps working for the test
 suite and repo-internal tooling. New code should import from
-``shinro.codegen.component_cli`` (or use the ``shinro check`` / ``shinro trace``
+``shinro.cli.components`` (or use the ``shinro check`` / ``shinro trace``
 verbs).
 """
 
-from shinro.codegen.component_cli import (  # noqa: F401
+from shinro.cli.components import (  # noqa: F401
     CONFIG_DIR,
     EXIT_OK,
     EXIT_ORACLE,

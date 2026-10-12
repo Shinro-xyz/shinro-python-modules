@@ -32,8 +32,8 @@ from test_zig_lowering import _build_so
 
 from shinro.codegen import interpret
 from shinro.codegen.compose import ComposedGraph
-from shinro.codegen.oracle import output_split, step_so
 from shinro.codegen.tracing import Graph
+from shinro.verification.oracle import output_split, step_so
 
 TOL = 1e-12
 N_FEEDS = 10

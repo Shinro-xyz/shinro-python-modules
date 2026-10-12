@@ -118,13 +118,13 @@ def test_load_scenario_rejects_unknown_solver(tmp_path):
 
 
 def test_resolve_native_ref_none_when_absent(tmp_path):
-    from shinro.codegen.scenario_build import _resolve_native_ref
+    from shinro.scenarios.build import _resolve_native_ref
 
     assert _resolve_native_ref(tmp_path / "debug-aarch64-linux-gnu", "debug", "libbase", None) is None
 
 
 def test_resolve_native_ref_finds_per_mode_sibling(tmp_path):
-    from shinro.codegen.scenario_build import _resolve_native_ref
+    from shinro.scenarios.build import _resolve_native_ref
 
     rec = tmp_path / "debug-native" / "lib" / "libbase.deployment.json"
     rec.parent.mkdir(parents=True)
@@ -138,7 +138,7 @@ def test_resolve_native_ref_finds_per_mode_sibling(tmp_path):
 
 
 def test_resolve_native_ref_prefers_explicit(tmp_path):
-    from shinro.codegen.scenario_build import _resolve_native_ref
+    from shinro.scenarios.build import _resolve_native_ref
 
     explicit = tmp_path / "elsewhere.json"
     explicit.write_text(json.dumps({"master_hash": "explicit", "slots": {}}))
@@ -355,7 +355,7 @@ def test_toy_onnx_fixture_matches_its_generator(tmp_path):
 
 def test_policy_scenario_omits_estimator(tmp_path):
     """A policy-only scenario (no [estimator]) loads and lowers standalone."""
-    from shinro.codegen.scenario_gen import gen_scenario, load_scenario
+    from shinro.scenarios.gen import gen_scenario, load_scenario
 
     pytest.importorskip("onnx")
     spec = load_scenario(str(TOY_SCENARIO))
@@ -371,7 +371,7 @@ def test_policy_scenario_omits_estimator(tmp_path):
 
 def test_policy_scenario_provenance_pins_onnx_weights(tmp_path):
     """The deployment record's config slot commits to the exact .onnx file."""
-    from shinro.codegen.scenario_gen import gen_scenario
+    from shinro.scenarios.gen import gen_scenario
 
     pytest.importorskip("onnx")
     out = tmp_path / "g"
@@ -383,7 +383,7 @@ def test_policy_scenario_provenance_pins_onnx_weights(tmp_path):
 
 def test_non_policy_scenario_still_requires_estimator(tmp_path):
     """Only onnx_rl may drop [estimator]; a classical controller still needs one."""
-    from shinro.codegen.scenario_gen import load_scenario
+    from shinro.scenarios.gen import load_scenario
 
     scenario = _policy_scenario(
         tmp_path,
@@ -396,7 +396,7 @@ def test_non_policy_scenario_still_requires_estimator(tmp_path):
 
 def test_compile_rejects_unsafe_artifact_name(tmp_path):
     """artifact_name is a file-name stem: separators must be rejected."""
-    from shinro.codegen.scenario_gen import load_scenario
+    from shinro.scenarios.gen import load_scenario
 
     bad = _scenario_toml(tmp_path, '[compile]\nn_x = 3\nn_u = 3\nartifact_name = "../evil"\n')
     with pytest.raises(ValueError, match="artifact_name"):
@@ -452,7 +452,7 @@ def test_toy_recurrent_fixture_matches_its_generator(tmp_path):
 
 def test_recurrent_policy_scenario_exposes_state_ports(tmp_path):
     """A recurrent policy-only scenario lowers with live state ports."""
-    from shinro.codegen.scenario_gen import gen_scenario
+    from shinro.scenarios.gen import gen_scenario
 
     pytest.importorskip("onnx")
     out = tmp_path / "g"
@@ -465,7 +465,7 @@ def test_recurrent_policy_scenario_exposes_state_ports(tmp_path):
 
 def test_recurrent_scenario_provenance_pins_onnx_weights(tmp_path):
     """The deployment record's config slot commits to the exact .onnx file."""
-    from shinro.codegen.scenario_gen import gen_scenario
+    from shinro.scenarios.gen import gen_scenario
 
     pytest.importorskip("onnx")
     out = tmp_path / "g"

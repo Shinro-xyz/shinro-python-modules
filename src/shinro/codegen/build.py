@@ -107,7 +107,7 @@ def instantiate(estimator_config, controller_config, plant=None):
 
     The single construction site: :func:`build_composed_graph` composes the
     traced graphs from these instances, and gate A
-    (:mod:`shinro.codegen.gate_a`) drives the *same* instances live, so the
+    (:mod:`shinro.verification.gate_a`) drives the *same* instances live, so the
     graph and the live loop cannot be built from different components.
 
     The plant is attached to any component exposing ``attach_plant`` — the

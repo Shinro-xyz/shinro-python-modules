@@ -20,7 +20,7 @@ after a tick.
 A mismatch means the tracer or composer lost or garbled a computation, so the
 build refuses to stamp a "verified" artifact for the wrong math.
 
-The live side is built by :func:`shinro.codegen.recipes.live_components` — the
+The live side is built by :func:`shinro.scenarios.recipes.live_components` — the
 same construction the recipe traces — so gate A and the graph can never be
 built from different components.
 """
@@ -107,7 +107,7 @@ def run_gate_a(cg, est, ctrl, n_x, n_u, input_limits=None, ticks: int = 50, seed
     """Drive the live loop and ``interpret_step(cg)`` over ``ticks``; return max abs err.
 
     Args:
-        cg: The composed graph (from :func:`shinro.codegen.recipes.build_recipe`).
+        cg: The composed graph (from :func:`shinro.scenarios.recipes.build_recipe`).
         est: The live estimator instance.
         ctrl: The live controller instance.
         n_x: Plant state dimension.

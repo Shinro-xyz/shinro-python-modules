@@ -10,7 +10,7 @@ files are always re-hashed (the drift-detection core). ``--graph`` and
 ``--solver-dir`` verify the build-environment artifacts that are compiled
 into the binary.
 
-Run: ``python3 -m shinro.codegen.verify --record build/lib/libbase.deployment.json``
+Run: ``python3 -m shinro.verification.verify --record build/lib/libbase.deployment.json``
 """
 
 from __future__ import annotations
@@ -21,8 +21,8 @@ import json
 import sys
 from pathlib import Path
 
-from shinro.codegen.stamp import _slot_from_dir
 from shinro.utils.config_resolver import resolve_config_path
+from shinro.verification.stamp import _slot_from_dir
 
 
 def _sha256_file(path: Path) -> str:

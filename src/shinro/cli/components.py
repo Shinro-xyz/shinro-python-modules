@@ -24,9 +24,9 @@ Exit codes: 0 all green · 1 untraceable op · 2 usage/config error · 3 oracle 
 Run (also reachable as ``shinro check`` / ``shinro trace``; ``scripts/
 trace_component.py`` is a kept-for-compatibility shim)::
 
-    python3 -m shinro.codegen.component_cli
-    python3 -m shinro.codegen.component_cli --list samples/estimators/kalman_base.toml
-    python3 -m shinro.codegen.component_cli samples/controllers/lqr_base.toml \\
+    python3 -m shinro.cli.components
+    python3 -m shinro.cli.components --list samples/estimators/kalman_base.toml
+    python3 -m shinro.cli.components samples/controllers/lqr_base.toml \\
         --shape current_state=3 --shape target_state=3
 """
 

@@ -1,7 +1,7 @@
 """Compile a generated scenario graph into a verified, stamped ``libbase.so``.
 
 The zig-required stage of the e2e pipeline. Takes the graph pair produced by
-:func:`shinro.codegen.scenario_gen.gen_scenario` (``graph_data.zig`` + its
+:func:`shinro.scenarios.gen.gen_scenario` (``graph_data.zig`` + its
 manifest), compiles the comptime VM via the packaged ``runtime/build.zig``,
 and — when ``--scenario`` is given — verifies the result before stamping:
 
@@ -45,7 +45,7 @@ check — and prints a loud warning that the artifact is unverified.
 
 Run::
 
-    python3 -m shinro.codegen.scenario_build build/base --scenario tests/integration/scenarios/base_tracking.toml
+    python3 -m shinro.scenarios.build build/base --scenario tests/integration/scenarios/base_tracking.toml
 
 Exit codes: 0 ok · 2 usage/config · 3 oracle mismatch · 4 build/verify failure · 5 zig missing.
 """
@@ -60,11 +60,11 @@ import sys
 import tempfile
 from pathlib import Path
 
-from shinro.codegen.oracle import load_so, run_oracle, tol_for
 from shinro.codegen.runtime_paths import runtime_root
-from shinro.codegen.scenario_gen import gen_scenario, load_scenario
-from shinro.codegen.stamp import stamp
-from shinro.codegen.verify import verify
+from shinro.scenarios.gen import gen_scenario, load_scenario
+from shinro.verification.oracle import load_so, run_oracle, tol_for
+from shinro.verification.stamp import stamp
+from shinro.verification.verify import verify
 
 RUNTIME = runtime_root()
 
@@ -118,10 +118,10 @@ def _bake_on_demand(solver_name: str, spec: dict, graph_dir: Path, manifest: dic
     """Bake the QP solver for the scenario's controller into ``<graph_dir>/emosqp``.
 
     Reuses an existing bake when its ``n_vars`` and controller-config sha match
-    (:func:`shinro.codegen.bake.bake_is_current`), so re-running a build does not
+    (:func:`shinro.scenarios.bake.bake_is_current`), so re-running a build does not
     regenerate the solver. Returns the bake dir to pass as ``solver_dir``.
     """
-    from shinro.codegen.bake import SOLVERS, bake_emosqp, bake_is_current
+    from shinro.scenarios.bake import SOLVERS, bake_emosqp, bake_is_current
 
     if solver_name not in SOLVERS:
         raise ValueError(f"unknown solver '{solver_name}' (registered: {sorted(SOLVERS)})")
@@ -192,8 +192,8 @@ def _run_gate_a(cg, spec: dict, seed: int) -> int | None:
     ``closed_loop_tracking`` recipe has an estimator+controller pair to drive
     live; a policy-only graph has no live closed loop to compare.
     """
-    from shinro.codegen.gate_a import run_gate_a
-    from shinro.codegen.recipes import live_components_and_plant
+    from shinro.scenarios.recipes import live_components_and_plant
+    from shinro.verification.gate_a import run_gate_a
 
     try:
         est, ctrl, n_x, n_u, limits, plant = live_components_and_plant(spec)
@@ -232,7 +232,7 @@ def build_scenario(
 
     Args:
         graph_dir: Directory containing ``graph_data.zig`` + its manifest
-            (the ``--out`` of :func:`shinro.codegen.scenario_gen.gen_scenario`).
+            (the ``--out`` of :func:`shinro.scenarios.gen.gen_scenario`).
         scenario: Scenario TOML path. When given, enables the integrity check
             and the oracle; when omitted, the artifact is built and stamped but
             NOT verified (a loud warning is printed).
