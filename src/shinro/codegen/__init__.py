@@ -34,6 +34,7 @@ from shinro.codegen.build import build_composed_graph
 from shinro.codegen.interpreter import interpret, interpret_step
 from shinro.codegen.lower_zig import lower_zig
 from shinro.codegen.ops import available_ops, has_op, register_op
+from shinro.codegen.optimize import fold_constants
 from shinro.codegen.trace_backend import TraceBackend
 from shinro.codegen.trace_node import NodeGraph, trace_node, trace_node_with_state
 from shinro.codegen.tracing import Graph, Node, ShapeMismatchError, Tracer
@@ -47,6 +48,7 @@ __all__ = [
     "Tracer",
     "available_ops",
     "build_composed_graph",
+    "fold_constants",
     "has_op",
     "interpret",
     "interpret_step",

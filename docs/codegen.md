@@ -56,6 +56,12 @@ The pipeline lives in `src/shinro/codegen/`; the Zig VM lives in `src/shinro/run
    **schema-driven**: per-op lowering metadata (the Zig enum name, baked f64
    tables, packed `aux`) is declared on each `@register_op` as a `VmOp` (see
    `codegen/vm_schema.py`), so adding a VM op needs no edit to `lower_zig.py`.
+   Before layout the graph is **constant-folded** (`codegen/optimize.py`):
+   all-constant intrinsic subgraphs are evaluated with the same numpy handlers
+   `interpret()` uses (bit-exact), identical constants are deduped, and dead
+   nodes are dropped. The fold runs *inside* lowering, so `interpret()` stays
+   the untouched oracle while the emitted table/manifest describe the folded
+graph.
 
 ## Module map
 
@@ -70,6 +76,7 @@ The pipeline lives in `src/shinro/codegen/`; the Zig VM lives in `src/shinro/run
 | `codegen/interpreter.py` | `interpret` / `interpret_step` — replay a graph on real numpy inputs. |
 | `codegen/compose.py` | `compose` — merge per-component graphs into one closed-loop step graph, auto-inserting `reshape`/`clip`. |
 | `codegen/lower_zig.py` | Emit `src/shinro/runtime/graph_data.zig` (the graph as Zig constants) from a composed graph. Schema-driven: no per-op code. |
+| `codegen/optimize.py` | Compile-time constant folding (`fold_constants`): folds all-constant intrinsic subgraphs (bit-exact, via the interpreter's numpy handlers), dedupes identical constants, drops dead nodes. Applied inside `lower_zig`. |
 | `demos/demo_codegen.py` | Runnable demo: traces KF+LQR for the base and cartpole plants, composes, and verifies each stage against a live numpy loop. |
 | `src/shinro/runtime/` (Zig) | `build.zig` (build script), `entry.zig` (deployment entry: binds the graph and exports `shinro_step`), `lower.zig` (graph-agnostic comptime-unrolled VM), `linalg.zig` (shared linear-algebra kernels), `graph_data.zig` (generated graph). |
 | `scenarios/recipes.py` | The graph-recipe registry (`@register_graph` / `build_recipe`) + the shipped recipes (`closed_loop_tracking`, `policy_only`) and the two shipped default graphs (`build_base_graph` / `build_mpc_composed_graph`). |
