@@ -15,8 +15,8 @@ so different scenarios, build modes, and targets never clobber each other; pass
 ``--out`` to override.
 
 Each verb is a thin dispatcher over the existing package APIs
-(:mod:`shinro.codegen.component_cli`, :mod:`shinro.codegen.cli`,
-:mod:`shinro.codegen.verify`, :class:`shinro.factories.ScenarioFactory`) — this
+(:mod:`shinro.cli.components`, :mod:`shinro.cli.compile`,
+:mod:`shinro.verification.verify`, :class:`shinro.factories.ScenarioFactory`) — this
 module owns no pipeline logic of its own.
 
 Third-party components: ``--import MODULE`` (repeatable) imports a module
@@ -34,8 +34,8 @@ import sys
 import tomllib
 from pathlib import Path
 
-from shinro.codegen.cli import compile_scenario
-from shinro.codegen.component_cli import (
+from shinro.cli.compile import compile_scenario
+from shinro.cli.components import (
     EXIT_OK,
     EXIT_USAGE,
     _parse_pairs,
@@ -44,10 +44,10 @@ from shinro.codegen.component_cli import (
     cmd_inventory,
     cmd_trace,
 )
-from shinro.codegen.scenario_gen import load_scenario
-from shinro.codegen.verify import verify
+from shinro.scenarios.gen import load_scenario
 from shinro.utils.config_resolver import resolve_config_path
 from shinro.utils.plugin_loader import PluginImportError, import_modules
+from shinro.verification.verify import verify
 
 EXIT_GATE = 1
 

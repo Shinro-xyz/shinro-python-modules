@@ -18,7 +18,7 @@ sample count / tolerance / max error). Neither is folded into the master hash:
 the binary slot already distinguishes a Debug from a ReleaseFast build, so
 those fields explain *why* the hash changed rather than defining it.
 
-Run: ``python3 -m shinro.codegen.stamp --prefix build/``
+Run: ``python3 -m shinro.verification.stamp --prefix build/``
 (wired into ``make zig-build``).
 """
 

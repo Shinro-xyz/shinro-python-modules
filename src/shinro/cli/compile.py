@@ -22,8 +22,8 @@ from __future__ import annotations
 import argparse
 import sys
 
-from shinro.codegen.scenario_build import build_scenario
-from shinro.codegen.scenario_gen import EXIT_UNTRACEABLE, EXIT_USAGE, gen_scenario
+from shinro.scenarios.build import build_scenario
+from shinro.scenarios.gen import EXIT_UNTRACEABLE, EXIT_USAGE, gen_scenario
 from shinro.utils.plugin_loader import PluginImportError, import_modules
 
 

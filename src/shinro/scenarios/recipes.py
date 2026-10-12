@@ -78,7 +78,7 @@ def build_recipe(name: str, spec: dict) -> ComposedGraph:
     Args:
         name: A registered recipe name (see :func:`available_graphs`).
         spec: The dict returned by
-            :func:`shinro.codegen.scenario_gen.load_scenario` (must carry
+            :func:`shinro.scenarios.gen.load_scenario` (must carry
             ``scenario_path`` for error messages).
 
     Returns:

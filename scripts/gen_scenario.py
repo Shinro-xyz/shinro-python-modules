@@ -1,11 +1,11 @@
-"""Thin shim — the compile pipeline now lives in ``shinro.codegen.scenario_gen``.
+"""Thin shim — the compile pipeline now lives in ``shinro.scenarios.gen``.
 
 Kept so ``from scripts.gen_scenario import ...`` keeps working for the test
 suite and repo-internal tooling. New code should import from
-``shinro.codegen.scenario_gen``.
+``shinro.scenarios.gen``.
 """
 
-from shinro.codegen.scenario_gen import (  # noqa: F401
+from shinro.scenarios.gen import (  # noqa: F401
     _ALLOWED_OPTIMIZE,
     _COMPILE_KEYS,
     EXIT_OK,

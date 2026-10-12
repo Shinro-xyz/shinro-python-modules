@@ -29,7 +29,6 @@ from scripts.gen_base import build_base_graph
 from shinro.codegen import interpret
 from shinro.codegen.compose import ComposedGraph, compose
 from shinro.codegen.lower_zig import lower_zig
-from shinro.codegen.oracle import input_shape, output_split, pack_arrays, run_oracle, state_slices, step_so
 from shinro.codegen.trace_node import trace_node
 from shinro.codegen.tracing import Graph
 from shinro.controllers.mppi import MPPIController
@@ -38,6 +37,7 @@ from shinro.controllers.smc import SlidingModeController
 from shinro.factories.controller_factory import ControllerFactory
 from shinro.factories.estimator_factory import EstimatorFactory
 from shinro.utils.array_backend import NumpyBackend
+from shinro.verification.oracle import input_shape, output_split, pack_arrays, run_oracle, state_slices, step_so
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RUNTIME = REPO_ROOT / "src/shinro/runtime"

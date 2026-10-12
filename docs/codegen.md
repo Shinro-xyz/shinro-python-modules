@@ -72,10 +72,14 @@ The pipeline lives in `src/shinro/codegen/`; the Zig VM lives in `src/shinro/run
 | `codegen/lower_zig.py` | Emit `src/shinro/runtime/graph_data.zig` (the graph as Zig constants) from a composed graph. Schema-driven: no per-op code. |
 | `demos/demo_codegen.py` | Runnable demo: traces KF+LQR for the base and cartpole plants, composes, and verifies each stage against a live numpy loop. |
 | `src/shinro/runtime/` (Zig) | `build.zig` (build script), `entry.zig` (deployment entry: binds the graph and exports `shinro_step`), `lower.zig` (graph-agnostic comptime-unrolled VM), `linalg.zig` (shared linear-algebra kernels), `graph_data.zig` (generated graph). |
-| `codegen/recipes.py` | The graph-recipe registry (`@register_graph` / `build_recipe`) + the shipped recipes (`closed_loop_tracking`, `policy_only`) and the two shipped default graphs (`build_base_graph` / `build_mpc_composed_graph`). |
-| `scripts/gen_base.py` / `scripts/gen_mpc.py` | Shims over `codegen/recipes.py` (`make zig-gen` / `make zig-mpc-gen` run them). |
-| `codegen/component_cli.py` | The "does my component trace?" gate (`shinro check` / `shinro trace`, plus the kept `scripts/trace_component.py` shim): inventory of registered components, inferred trace contract (`--list`), and trace + interpret-vs-live oracle check (bit-exact) for any config TOML. |
-| `cli.py` | The unified `shinro` console script — dispatches `check` / `run` / `trace` / `build` / `verify` over the existing module APIs. |
+| `scenarios/recipes.py` | The graph-recipe registry (`@register_graph` / `build_recipe`) + the shipped recipes (`closed_loop_tracking`, `policy_only`) and the two shipped default graphs (`build_base_graph` / `build_mpc_composed_graph`). |
+| `scenarios/gen.py` / `scenarios/build.py` | The two-stage scenario → verified `.so` pipeline: zig-free trace+compose+lower, then zig compile + oracle + stamp + verify. |
+| `scenarios/bake.py` | The statically-allocated OSQP codegen solver bake the MPC graphs compile against. |
+| `verification/oracle.py` / `gate_a.py` | The `.so`-vs-`interpret()` differential oracle and the interpret-vs-live numpy gate. |
+| `verification/stamp.py` / `verify.py` | The deployment record writer (master hash) and the artifact re-hash drift gate. |
+| `scripts/gen_base.py` / `scripts/gen_mpc.py` | Shims over `scenarios/recipes.py` (`make zig-gen` / `make zig-mpc-gen` run them). |
+| `cli/components.py` | The "does my component trace?" gate (`shinro check` / `shinro trace`, plus the kept `scripts/trace_component.py` shim): inventory of registered components, inferred trace contract (`--list`), and trace + interpret-vs-live oracle check (bit-exact) for any config TOML. |
+| `cli/__init__.py` | The unified `shinro` console script — dispatches `check` / `run` / `trace` / `build` / `verify` over the existing module APIs. |
 
 ## The tracing model
 
@@ -426,7 +430,7 @@ and `[compile]` dims. Copy it, fill in the values, and run `make compile`.
 
 ### Graph recipes
 
-The compose wiring is a named, registered *recipe* (`shinro.codegen.recipes`),
+The compose wiring is a named, registered *recipe* (`shinro.scenarios.recipes`),
 selected by the scenario's optional `[compile].recipe`. Two ship:
 `closed_loop_tracking` (the default — estimator + controller into the fixed ABC
 dataflow) and `policy_only` (a standalone ONNX policy, inferred when

@@ -1,11 +1,11 @@
-"""Thin shim — the deployment-record logic now lives in ``shinro.codegen.stamp``.
+"""Thin shim — the deployment-record logic now lives in ``shinro.verification.stamp``.
 
 Kept so ``from scripts.stamp_deployment import ...`` keeps working for the test
 suite and repo-internal tooling. New code should import from
-``shinro.codegen.stamp``.
+``shinro.verification.stamp``.
 """
 
-from shinro.codegen.stamp import (  # noqa: F401
+from shinro.verification.stamp import (  # noqa: F401
     SENTINEL,
     _master,
     _sha256_bytes,

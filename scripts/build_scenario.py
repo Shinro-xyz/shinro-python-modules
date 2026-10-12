@@ -1,12 +1,11 @@
-"""Thin shim — the compile pipeline now lives in ``shinro.codegen.scenario_build``.
+"""Thin shim — the compile pipeline now lives in ``shinro.scenarios.build``.
 
 Kept so ``from scripts.build_scenario import ...`` keeps working for the test
 suite and repo-internal tooling. New code should import from
-``shinro.codegen.scenario_build``.
+``shinro.scenarios.build``.
 """
 
-from shinro.codegen.oracle import TOL_NON_QP, TOL_QP  # noqa: F401
-from shinro.codegen.scenario_build import (  # noqa: F401
+from shinro.scenarios.build import (  # noqa: F401
     EXIT_BUILD,
     EXIT_NO_ZIG,
     EXIT_OK,
@@ -16,6 +15,7 @@ from shinro.codegen.scenario_build import (  # noqa: F401
     build_scenario,
     main,
 )
+from shinro.verification.oracle import TOL_NON_QP, TOL_QP  # noqa: F401
 
 if __name__ == "__main__":
     import sys

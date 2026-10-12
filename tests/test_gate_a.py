@@ -1,7 +1,7 @@
 """Tests for gate A — ``interpret(composed graph)`` vs the live components.
 
 Gate A is the pre-compile equivalence check the build now runs (see
-:mod:`shinro.codegen.gate_a`): the composed graph must reproduce what the real
+:mod:`shinro.verification.gate_a`): the composed graph must reproduce what the real
 estimator/controller compute over a closed loop. These pin that the shipped
 scenario cases pass with zero error and that a real divergence is caught.
 """
@@ -12,9 +12,9 @@ from pathlib import Path
 
 import pytest
 
-from shinro.codegen.gate_a import run_gate_a
-from shinro.codegen.recipes import build_recipe, live_components
-from shinro.codegen.scenario_gen import load_scenario
+from shinro.scenarios.gen import load_scenario
+from shinro.scenarios.recipes import build_recipe, live_components
+from shinro.verification.gate_a import run_gate_a
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BASE = str(REPO_ROOT / "tests" / "integration" / "scenarios" / "base_tracking.toml")
@@ -65,7 +65,7 @@ SMC = str(REPO_ROOT / "tests" / "integration" / "scenarios" / "smc_pendulum_comp
 def test_gate_a_drives_a_plant_derived_model():
     """SMC's f_x/g_x are composed in from the plant; gate A feeds the live side the
     same plant model (this is what makes a composed SMC meaningful at all)."""
-    from shinro.codegen.recipes import live_components_and_plant
+    from shinro.scenarios.recipes import live_components_and_plant
 
     spec = load_scenario(SMC)
     cg = build_recipe("closed_loop_tracking", spec)
@@ -78,7 +78,7 @@ def test_gate_a_drives_a_plant_derived_model():
 
 def test_gate_a_without_a_plant_for_model_terms_is_loud():
     """A controller wanting f_x/g_x with no plant to derive them from raises."""
-    from shinro.codegen.recipes import live_components
+    from shinro.scenarios.recipes import live_components
 
     spec = load_scenario(SMC)
     cg = build_recipe("closed_loop_tracking", spec)

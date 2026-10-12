@@ -16,6 +16,9 @@ Subpackages:
     shinro.simulation    — Generic robot simulation factory
     shinro.mcp           — Model Context Protocol server exposing the control suite
     shinro.codegen       — Trace → compose → interpret → lower pipeline
+    shinro.verification  — Oracle, gates, and the deployment record
+    shinro.scenarios     — Scenario → verified .so pipeline + shipped recipes
+    shinro.cli           — The unified ``shinro`` command
     shinro.utils         — Array backend, linearization, controllability analysis
 """
 

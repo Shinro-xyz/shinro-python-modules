@@ -1,4 +1,4 @@
-"""Tests for the graph-recipe registry (:mod:`shinro.codegen.recipes`).
+"""Tests for the graph-recipe registry (:mod:`shinro.scenarios.recipes`).
 
 The registry is the named seam the e2e pipeline dispatches through: a scenario's
 ``[compile].recipe`` selects the compose wiring. These tests pin the shipped
@@ -12,13 +12,13 @@ from pathlib import Path
 
 import pytest
 
-from shinro.codegen.recipes import (
+from shinro.scenarios.gen import load_scenario
+from shinro.scenarios.recipes import (
     available_graphs,
     build_base_graph,
     build_recipe,
     register_graph,
 )
-from shinro.codegen.scenario_gen import load_scenario
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BASE_TRACKING = str(REPO_ROOT / "tests" / "integration" / "scenarios" / "base_tracking.toml")

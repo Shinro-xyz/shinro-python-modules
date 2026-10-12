@@ -29,8 +29,8 @@ from test_zig_lowering import ALL_SCAN_CASES, NumpyBackend, _build_so, _plant_gr
 
 from shinro.codegen import interpret
 from shinro.codegen.compose import ComposedGraph
-from shinro.codegen.oracle import output_split, pack_arrays, state_slices, step_so
 from shinro.codegen.trace_node import trace_node
+from shinro.verification.oracle import output_split, pack_arrays, state_slices, step_so
 
 N_TICKS = 100
 TOL = 1e-12
