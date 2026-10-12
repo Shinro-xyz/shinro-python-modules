@@ -40,6 +40,7 @@ from shinro.codegen.tracing import (
     _lift,
     _matmul_out_shape,
 )
+from shinro.codegen.vm_schema import VmOp
 from shinro.components import Controller
 from shinro.controllers.lqr import LQR
 from shinro.estimators.kalman_filter import KalmanFilter
@@ -797,9 +798,11 @@ class TestOps:
         assert "register_op" in str(err)
 
     def test_register_op_round_trip(self):
+        from shinro.codegen import vm_schema
+
         name = "test_only_double"
 
-        @register_op(name)
+        @register_op(name, vm=VmOp())
         def _double(node, values, inputs):
             return 2.0 * values[node.inputs[0]]
 
@@ -813,7 +816,69 @@ class TestOps:
             assert result["out"] == 42.0
         finally:
             OP_HANDLERS.pop(name, None)
+            vm_schema.unregister_vm_op(name)
         assert not has_op(name)
+
+
+# ─── the op -> Zig lowering schema ────────────────────────────────────────
+
+
+class TestVmSchema:
+    """The op -> Zig lowering schema is the single source of truth.
+
+    These guard the turnkey property: the emitted ``Op`` enum and the baked
+    per-op tables are derived from this registry, so an op that forgets its
+    schema (or a rename) surfaces here rather than as a silent mis-lowering.
+    """
+
+    def test_every_registered_op_maps_to_a_valid_zig_variant(self):
+        from shinro.codegen import vm_schema
+
+        # Zig reserved words the enum cannot collide with.
+        reserved = {
+            "fn", "const", "var", "pub", "return", "error", "union", "struct",
+            "enum", "switch", "op", "type", "test", "and", "or", "if", "else",
+            "for", "while",
+        }
+        for op in available_ops():
+            name = vm_schema.vm_op_name(op)
+            assert name.isidentifier(), f"{op} -> {name!r} is not a Zig identifier"
+            assert name not in reserved, f"{op} -> {name!r} collides with a Zig keyword"
+
+    def test_renamed_and_attributed_ops_declared(self):
+        from shinro.codegen import vm_schema
+
+        assert vm_schema.vm_op_name("where") == "where_op"
+        gemm = vm_schema.get_vm_op("gemm")
+        assert [a.name for a in gemm.attrs] == ["alpha", "beta"] and gemm.flags == ("transB",)
+        assert vm_schema.get_vm_op("layernorm").attrs[0].name == "eps"
+        assert vm_schema.get_vm_op("clip").array_attrs == ("lo", "hi")
+        assert vm_schema.get_vm_op("slice").slot == "attr:start"
+        assert vm_schema.get_vm_op("min").slot == "axis_code"
+
+    def test_every_registered_op_declares_a_schema(self):
+        """No op may register without a VmOp: the schema set == the handler set."""
+        from shinro.codegen import vm_schema
+
+        assert vm_schema.missing_schemas(available_ops()) == []
+
+    def test_register_op_requires_a_schema(self):
+        """``register_op`` without ``vm=`` is a TypeError, not a silent default."""
+        with pytest.raises(TypeError):
+            register_op("no_schema_here")  # type: ignore[call-arg]
+
+    def test_emitted_enum_covers_every_registered_op(self, tmp_path):
+        """An enum derived from the registry can never silently drop an op."""
+        from shinro.codegen import vm_schema
+        from shinro.codegen.compose import ComposedGraph
+        from shinro.codegen.lower_zig import lower_zig
+
+        out = tmp_path / "graph_data.zig"
+        lower_zig(ComposedGraph(graph=Graph()), str(out))
+        enum = out.read_text().split("pub const Op = enum {", 1)[1].split("};", 1)[0]
+        variants = {tok.strip() for line in enum.splitlines() for tok in line.replace(",", " ").split()}
+        for op in available_ops():
+            assert vm_schema.vm_op_name(op) in variants, f"{op} missing from emitted enum"
 
 
 # ─── interpreter dispatch and errors ───────────────────────────────────────

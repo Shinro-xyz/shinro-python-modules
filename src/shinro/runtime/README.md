@@ -3,7 +3,11 @@
 This directory holds the Zig half of the codegen pipeline: a comptime-unrolled
 virtual machine that executes a generated control-loop graph as native code.
 The graph is serialized from Python by `shinro.codegen.lower_zig`; the VM that
-runs it is handwritten here once and never regenerated.
+runs it is handwritten here once and never regenerated. The serializer is
+**schema-driven**: per-op lowering metadata (the Zig enum name, baked f64
+scalar/array tables, `aux` packing) is declared on each `@register_op` as a
+`shinro.codegen.vm_schema.VmOp`, so adding a VM op means adding a switch arm
+here plus a schema entry in `ops.py` — never a serializer edit.
 
 See [`../../../docs/codegen.md`](../../../docs/codegen.md) for the full
 pipeline narrative and the XLA-fidelity model.
@@ -18,7 +22,7 @@ pipeline narrative and the XLA-fidelity model.
 | `lower.zig` | The comptime VM, graph-agnostic. `pub fn Vm(Ctx)` instantiates it over an injected graph context; its `step` runs one tick by one `inline for` over the node table, dispatching each node's op with `rows`/`cols` as comptime constants. |
 | `linalg.zig` | Shared linear-algebra kernels (matmul, elementwise ops, `inv`, ...) used by the VM. |
 | `qp.zig` | The `.solve_qp` op wrapper: drives the generated static OSQP solver (update q → solve → copy solution out). |
-| `graph_data.zig` | **Generated** — the graph as Zig constants (op enum, node table, offsets, `has_solve_qp`). The baked numeric blobs live in the sibling `<stem>_consts.bin` (f64) and `<stem>_weights.bin` (f32) sidecars (raw little-endian), `@embedFile`d at compile time. Produced by `scripts/gen_base.py` / `shinro.codegen.lower_zig`. Not hand-edited. |
+| `graph_data.zig` | **Generated** — the graph as Zig constants (op enum, node table, offsets, per-op f64 tables, `has_solve_qp`). The baked numeric blobs live in the sibling `<stem>_consts.bin` (f64) and `<stem>_weights.bin` (f32) sidecars (raw little-endian), `@embedFile`d at compile time. Produced by `scripts/gen_base.py` / `shinro.codegen.lower_zig`. Not hand-edited. |
 | `codegen/emosqp/` | **Generated** — the statically-allocated OSQP solver for the base MPC problem (no malloc, no libosqp). Emitted by `scripts/gen_emosqp_test.py`. |
 | `tests/linalg.zig` | Zig unit tests for the linear-algebra kernels. |
 | `tests/lower.zig` | Zig-native C-ABI tests for `lower.zig`: drives `shinro_step` in-process, no `.so`/ctypes/Python. |

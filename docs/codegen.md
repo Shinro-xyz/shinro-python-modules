@@ -52,7 +52,10 @@ The pipeline lives in `src/shinro/codegen/`; the Zig VM lives in `src/shinro/run
    written to `src/shinro/runtime/graph_data.zig`; the comptime VM that executes
    it is `src/shinro/runtime/lower.zig` (graph-agnostic, instantiated via
    `Vm(Ctx)`), and `src/shinro/runtime/entry.zig` binds that graph and exposes
-   the `shinro_step` C-ABI function, compiled to a `.so`.
+   the `shinro_step` C-ABI function, compiled to a `.so`. The serializer is
+   **schema-driven**: per-op lowering metadata (the Zig enum name, baked f64
+   tables, packed `aux`) is declared on each `@register_op` as a `VmOp` (see
+   `codegen/vm_schema.py`), so adding a VM op needs no edit to `lower_zig.py`.
 
 ## Module map
 
@@ -62,10 +65,11 @@ The pipeline lives in `src/shinro/codegen/`; the Zig VM lives in `src/shinro/run
 | `codegen/trace_backend.py` | `TraceBackend` — a recording `ArrayBackend` that emits nodes for the named `bk.*` methods components call. |
 | `codegen/trace_node.py` | `trace_node` / `trace_node_with_state` — run one component call under a `TraceBackend` and return a `NodeGraph`. |
 | `codegen/infer_contract.py` | Auto-infer a component's I/O contract from its ABC (`Controller` → `compute`, `StateEstimator` → `estimate`) and `inspect.signature`; detect recurrent state via attr-diff. |
-| `codegen/ops.py` | Op-handler registry (`OP_HANDLERS`). The data-driven "switch" — adding a new op is one `@register_op` decorator. |
+| `codegen/ops.py` | Op-handler registry (`OP_HANDLERS`). The data-driven "switch" — adding a new op is one `@register_op` decorator carrying its mandatory `vm=VmOp(...)` lowering schema. |
+| `codegen/vm_schema.py` | The op → Zig lowering schema (`VmOp`/`AttrSpec`). The single source of truth `lower_zig` derives the `Op` enum, baked f64 tables, `aux` packing, and manifest from. |
 | `codegen/interpreter.py` | `interpret` / `interpret_step` — replay a graph on real numpy inputs. |
 | `codegen/compose.py` | `compose` — merge per-component graphs into one closed-loop step graph, auto-inserting `reshape`/`clip`. |
-| `codegen/lower_zig.py` | Emit `src/shinro/runtime/graph_data.zig` (the graph as Zig constants) from a composed graph. |
+| `codegen/lower_zig.py` | Emit `src/shinro/runtime/graph_data.zig` (the graph as Zig constants) from a composed graph. Schema-driven: no per-op code. |
 | `demos/demo_codegen.py` | Runnable demo: traces KF+LQR for the base and cartpole plants, composes, and verifies each stage against a live numpy loop. |
 | `src/shinro/runtime/` (Zig) | `build.zig` (build script), `entry.zig` (deployment entry: binds the graph and exports `shinro_step`), `lower.zig` (graph-agnostic comptime-unrolled VM), `linalg.zig` (shared linear-algebra kernels), `graph_data.zig` (generated graph). |
 | `codegen/recipes.py` | The graph-recipe registry (`@register_graph` / `build_recipe`) + the shipped recipes (`closed_loop_tracking`, `policy_only`) and the two shipped default graphs (`build_base_graph` / `build_mpc_composed_graph`). |

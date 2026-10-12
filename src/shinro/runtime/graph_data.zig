@@ -3,13 +3,15 @@
 const std = @import("std");
 
 pub const Op = enum {
-    cst, cst_f32, inp, out, matmul, add, sub, mul, div, ne, neg,
-    transpose, inv, cholesky, reshape, clip, where_op, any,
-    copy, tanh, relu, exp, argmax, one_hot, slice,
-    sin, cos, stack, solve_qp,
-    abs, sign, pow, lt, min, gemm, sigmoid, softmax, gelu, elu, layernorm,
-    lstm, gru, rnn,
-    concat, gather, sqrt, log, mod, leaky_relu,
+    cst, cst_f32, abs, add, any, argmax,
+    cholesky, clip, concat, copy, cos, div,
+    elu, exp, gather, gelu, gemm, gru,
+    inp, inv, layernorm, leaky_relu, log, lstm,
+    lt, matmul, min, mod, mul, ne,
+    neg, one_hot, out, pow, relu, reshape,
+    rnn, sigmoid, sign, sin, slice, softmax,
+    solve_qp, sqrt, stack, sub, tanh, transpose,
+    where_op,
 };
 
 pub const Node = struct {
@@ -82,10 +84,10 @@ pub const nodes = [_]Node{
 const _consts: [1008]u8 align(@alignOf(f64)) = @embedFile("graph_data_consts.bin").*;
 pub const const_blob: []const f64 = std.mem.bytesAsSlice(f64, &_consts);
 pub const const_blob_f32 = [_]f32{};
-pub const clip_lo = [_]f64{-0x1.0000000000000p-1, -0x1.0000000000000p-1, -0x1.0000000000000p+0};
-pub const clip_hi = [_]f64{0x1.0000000000000p-1, 0x1.0000000000000p-1, 0x1.0000000000000p+0};
 pub const gemm_alpha = [_]f64{};
 pub const gemm_beta = [_]f64{};
+pub const clip_lo = [_]f64{-0x1.0000000000000p-1, -0x1.0000000000000p-1, -0x1.0000000000000p+0};
+pub const clip_hi = [_]f64{0x1.0000000000000p-1, 0x1.0000000000000p-1, 0x1.0000000000000p+0};
 pub const elu_alpha = [_]f64{};
 pub const leaky_relu_alpha = [_]f64{};
 pub const layernorm_eps = [_]f64{};

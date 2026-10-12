@@ -34,17 +34,28 @@ import osqp
 from scipy import sparse
 
 from shinro.codegen.tracing import Node
+from shinro.codegen.vm_schema import AttrSpec, VmOp, register_vm_op
 
 OpHandler = Callable[[Node, dict[int, np.ndarray], dict[str, np.ndarray]], np.ndarray]
 
 OP_HANDLERS: dict[str, OpHandler] = {}
 
 
-def register_op(name: str) -> Callable[[OpHandler], OpHandler]:
-    """Register a handler for an op name. The data-driven switch."""
+def register_op(name: str, *, vm: VmOp) -> Callable[[OpHandler], OpHandler]:
+    """Register a handler for an op name. The data-driven switch.
+
+    ``vm`` is **mandatory**: it declares the op's Zig lowering schema (see
+    :mod:`shinro.codegen.vm_schema`). This is the *only* place a VM op's
+    serialization is declared — the lowerer derives the enum, the baked attr
+    tables, the packed ``aux`` word, and the manifest from it. An op with no
+    scalar attributes and no rename still declares ``vm=VmOp()`` explicitly, so
+    no op can lower by silent default and the schema set can never drift from
+    the handler set.
+    """
 
     def decorator(fn: OpHandler) -> OpHandler:
         OP_HANDLERS[name] = fn
+        register_vm_op(name, vm)
         return fn
 
     return decorator
@@ -53,12 +64,12 @@ def register_op(name: str) -> Callable[[OpHandler], OpHandler]:
 # ─── graph-structure ops ──────────────────────────────────────────────────
 
 
-@register_op("const")
+@register_op("const", vm=VmOp(vm_name="cst"))
 def _const(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     return node.attrs["value"]
 
 
-@register_op("input")
+@register_op("input", vm=VmOp(vm_name="inp"))
 def _input(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     name = node.attrs["name"]
     if name not in inputs:
@@ -66,7 +77,7 @@ def _input(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarr
     return inputs[name]
 
 
-@register_op("output")
+@register_op("output", vm=VmOp(vm_name="out"))
 def _output(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     # output is a marker; the interpreter collects these by name separately.
     return values[node.inputs[0]]
@@ -75,12 +86,15 @@ def _output(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndar
 # ─── linear-algebra ops ───────────────────────────────────────────────────
 
 
-@register_op("matmul")
+@register_op("matmul", vm=VmOp())
 def _matmul(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     return values[node.inputs[0]] @ values[node.inputs[1]]
 
 
-@register_op("gemm")
+@register_op(
+    "gemm",
+    vm=VmOp(attrs=(AttrSpec("alpha", 1.0), AttrSpec("beta", 1.0)), flags=("transB",)),
+)
 def _gemm(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     """Fused dense layer ``Y = alpha * (A @ B') + beta * C``.
 
@@ -99,28 +113,28 @@ def _gemm(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarra
     return node.attrs.get("alpha", 1.0) * (a @ b) + node.attrs.get("beta", 1.0) * c
 
 
-@register_op("add")
+@register_op("add", vm=VmOp())
 def _add(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     return values[node.inputs[0]] + values[node.inputs[1]]
 
 
-@register_op("sub")
+@register_op("sub", vm=VmOp())
 def _sub(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     return values[node.inputs[0]] - values[node.inputs[1]]
 
 
-@register_op("mul")
+@register_op("mul", vm=VmOp())
 def _mul(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     return values[node.inputs[0]] * values[node.inputs[1]]
 
 
-@register_op("ne")
+@register_op("ne", vm=VmOp())
 def _ne(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     """Elementwise inequality as 1.0/0.0 floats — the graph's boolean repr."""
     return (values[node.inputs[0]] != values[node.inputs[1]]).astype(np.float64)
 
 
-@register_op("lt")
+@register_op("lt", vm=VmOp())
 def _lt(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     """Elementwise ``a < b`` as 1.0/0.0 floats — the ordered sibling of ``ne``.
 
@@ -131,22 +145,22 @@ def _lt(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]
     return (values[node.inputs[0]] < values[node.inputs[1]]).astype(np.float64)
 
 
-@register_op("neg")
+@register_op("neg", vm=VmOp())
 def _neg(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     return -values[node.inputs[0]]
 
 
-@register_op("transpose")
+@register_op("transpose", vm=VmOp())
 def _transpose(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     return values[node.inputs[0]].T
 
 
-@register_op("inv")
+@register_op("inv", vm=VmOp())
 def _inv(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     return np.linalg.inv(values[node.inputs[0]])
 
 
-@register_op("cholesky")
+@register_op("cholesky", vm=VmOp())
 def _cholesky(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     """Lower-triangular Cholesky factor ``L`` with ``L @ L.T == a``.
 
@@ -158,7 +172,7 @@ def _cholesky(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.nd
     return np.linalg.cholesky(values[node.inputs[0]])
 
 
-@register_op("solve_qp")
+@register_op("solve_qp", vm=VmOp())
 def _solve_qp(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     """Solve ``min ½ uᵀ H u + qᵀ u`` s.t. ``lb ≤ A u ≤ ub``.
 
@@ -187,7 +201,7 @@ def _solve_qp(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.nd
 # ─── shape / selection glue ops (used by compose.py and PID) ──────────────
 
 
-@register_op("reshape")
+@register_op("reshape", vm=VmOp())
 def _reshape(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     target = node.attrs.get("target_shape")
     if target is None:
@@ -195,12 +209,12 @@ def _reshape(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.nda
     return values[node.inputs[0]].reshape(target)
 
 
-@register_op("clip")
+@register_op("clip", vm=VmOp(array_attrs=("lo", "hi")))
 def _clip(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     return np.clip(values[node.inputs[0]], node.attrs["lo"], node.attrs["hi"])
 
 
-@register_op("where")
+@register_op("where", vm=VmOp(vm_name="where_op"))
 def _where(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     cond = values[node.inputs[0]]
     a = values[node.inputs[1]]
@@ -208,17 +222,17 @@ def _where(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarr
     return np.where(cond, a, b)
 
 
-@register_op("copy")
+@register_op("copy", vm=VmOp())
 def _copy(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     return values[node.inputs[0]].copy()
 
 
-@register_op("any")
+@register_op("any", vm=VmOp())
 def _any(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     return np.asarray(np.any(values[node.inputs[0]]))
 
 
-@register_op("stack")
+@register_op("stack", vm=VmOp())
 def _stack(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     # stack([a, b, ...]) along a new leading axis (numpy's default axis=0).
     # All inputs share the same shape; output is (len(inputs),) + that shape.
@@ -228,19 +242,19 @@ def _stack(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarr
 # ─── deterministic-policy ops (NN controllers in deterministic mode) ──────
 
 
-@register_op("tanh")
+@register_op("tanh", vm=VmOp())
 def _tanh(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     return np.tanh(values[node.inputs[0]])
 
 
-@register_op("sigmoid")
+@register_op("sigmoid", vm=VmOp())
 def _sigmoid(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     """Logistic sigmoid, matching ONNX ``Sigmoid``: 1 / (1 + exp(-x))."""
     x = values[node.inputs[0]]
     return 1.0 / (1.0 + np.exp(-x))
 
 
-@register_op("softmax")
+@register_op("softmax", vm=VmOp())
 def _softmax(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     """Softmax over the last axis (numpy ``axis=-1``), shape-preserving.
 
@@ -254,7 +268,7 @@ def _softmax(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.nda
     return e / np.sum(e, axis=-1, keepdims=True)
 
 
-@register_op("gelu")
+@register_op("gelu", vm=VmOp())
 def _gelu(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     """GELU, tanh approximation: 0.5x(1+tanh(sqrt(2/pi)(x+0.044715x^3))).
 
@@ -267,7 +281,7 @@ def _gelu(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarra
     return 0.5 * x * (1.0 + np.tanh(np.sqrt(2.0 / np.pi) * (x + 0.044715 * x * x * x)))
 
 
-@register_op("elu")
+@register_op("elu", vm=VmOp(attrs=(AttrSpec("alpha", 1.0),)))
 def _elu(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     """ELU: ``x if x > 0 else alpha * (exp(x) - 1)``; ``alpha`` defaults to 1.0."""
     x = values[node.inputs[0]]
@@ -275,7 +289,7 @@ def _elu(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray
     return np.where(x > 0.0, x, alpha * (np.exp(x) - 1.0))
 
 
-@register_op("leaky_relu")
+@register_op("leaky_relu", vm=VmOp(attrs=(AttrSpec("alpha", 0.01),)))
 def _leaky_relu(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     """LeakyReLU: ``x if x >= 0 else alpha * x``; ``alpha`` defaults to 0.01.
 
@@ -288,7 +302,7 @@ def _leaky_relu(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.
     return np.where(x >= 0.0, x, alpha * x)
 
 
-@register_op("layernorm")
+@register_op("layernorm", vm=VmOp(attrs=(AttrSpec("eps", 1e-5),)))
 def _layernorm(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     """Layer normalization over the last axis, the torch/ONNX canonical form.
 
@@ -327,7 +341,7 @@ def _logistic(x: np.ndarray) -> np.ndarray:
     return 1.0 / (1.0 + np.exp(-x))
 
 
-@register_op("lstm")
+@register_op("lstm", vm=VmOp())
 def _lstm(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     """Fused LSTM cell: returns ``[h_next(H) ‖ c_next(H)]``.
 
@@ -353,7 +367,7 @@ def _lstm(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarra
     return np.concatenate([h_next, c_next])
 
 
-@register_op("gru")
+@register_op("gru", vm=VmOp(flags=("linear_before_reset",)))
 def _gru(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     """Fused GRU cell: returns ``h_next(H)``.
 
@@ -385,7 +399,7 @@ def _gru(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray
     return (1.0 - z) * n + z * h
 
 
-@register_op("rnn")
+@register_op("rnn", vm=VmOp())
 def _rnn(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     """Vanilla Elman RNN cell: ``h_next = tanh(x·Wᵀ + h·Rᵀ + Wb + Rb)``.
 
@@ -400,7 +414,7 @@ def _rnn(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray
     return np.tanh(x @ w.T + h @ r.T + b[:H] + b[H:])
 
 
-@register_op("concat")
+@register_op("concat", vm=VmOp(slot="attr:axis"))
 def _concat(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     """Concatenate along an existing axis (ONNX ``Concat``).
 
@@ -412,7 +426,7 @@ def _concat(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndar
     return np.concatenate([values[i] for i in node.inputs], axis=axis)
 
 
-@register_op("gather")
+@register_op("gather", vm=VmOp(slot="attr:axis"))
 def _gather(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     """Index-select along one axis (ONNX ``Gather``).
 
@@ -425,44 +439,44 @@ def _gather(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndar
     return np.take(values[node.inputs[0]], idx, axis=axis)
 
 
-@register_op("sin")
+@register_op("sin", vm=VmOp())
 def _sin(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     return np.sin(values[node.inputs[0]])
 
 
-@register_op("cos")
+@register_op("cos", vm=VmOp())
 def _cos(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     return np.cos(values[node.inputs[0]])
 
 
-@register_op("relu")
+@register_op("relu", vm=VmOp())
 def _relu(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     return np.maximum(values[node.inputs[0]], 0.0)
 
 
-@register_op("div")
+@register_op("div", vm=VmOp())
 def _div(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     return values[node.inputs[0]] / values[node.inputs[1]]
 
 
-@register_op("exp")
+@register_op("exp", vm=VmOp())
 def _exp(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     return np.exp(values[node.inputs[0]])
 
 
-@register_op("sqrt")
+@register_op("sqrt", vm=VmOp())
 def _sqrt(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     """Elementwise square root (ONNX ``Sqrt``); a negative operand is NaN."""
     return np.sqrt(values[node.inputs[0]])
 
 
-@register_op("log")
+@register_op("log", vm=VmOp())
 def _log(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     """Elementwise natural logarithm (ONNX ``Log``, the C ``log``)."""
     return np.log(values[node.inputs[0]])
 
 
-@register_op("mod")
+@register_op("mod", vm=VmOp(flags=("fmod",)))
 def _mod(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     """Elementwise modulo (ONNX ``Mod``), numpy semantics.
 
@@ -480,28 +494,28 @@ def _mod(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray
     return np.fmod(a, b) if node.attrs.get("fmod", False) else np.mod(a, b)
 
 
-@register_op("abs")
+@register_op("abs", vm=VmOp())
 def _abs(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     return np.abs(values[node.inputs[0]])
 
 
-@register_op("sign")
+@register_op("sign", vm=VmOp())
 def _sign(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     """Sign function matching ``np.sign``: -1 / 0 / +1 (0 maps to 0)."""
     return np.sign(values[node.inputs[0]])
 
 
-@register_op("pow")
+@register_op("pow", vm=VmOp())
 def _pow(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     return np.power(values[node.inputs[0]], values[node.inputs[1]])
 
 
-@register_op("argmax")
+@register_op("argmax", vm=VmOp())
 def _argmax(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     return np.asarray(np.argmax(values[node.inputs[0]]))
 
 
-@register_op("min")
+@register_op("min", vm=VmOp(slot="axis_code"))
 def _min(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     """Minimum reduction, numpy ``min`` semantics.
 
@@ -515,7 +529,7 @@ def _min(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray
     return np.min(values[node.inputs[0]], axis=node.attrs.get("axis"))
 
 
-@register_op("one_hot")
+@register_op("one_hot", vm=VmOp())
 def _one_hot(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     # one_hot(x, depth): x is a scalar index → one-hot row vector.
     depth = node.attrs["depth"]
@@ -525,7 +539,7 @@ def _one_hot(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.nda
     return out
 
 
-@register_op("slice")
+@register_op("slice", vm=VmOp(slot="attr:start"))
 def _slice(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     # slice(x, start, stop): x[start:stop] along the first axis.
     start = node.attrs["start"]

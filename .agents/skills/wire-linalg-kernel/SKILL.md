@@ -4,17 +4,20 @@ description: After writing a kernel in src/shinro/runtime/linalg.zig, wire a new
 ---
 # Wire a Linalg Kernel Into the Graph VM
 
-A new op touches **six surfaces**. Miss one and either the build breaks or a
+A new op touches **five surfaces**. Miss one and either the build breaks or a
 silent shape/stride bug survives. This skill is the checklist plus the traps.
 
 ## When to Use
 
 Use when a kernel has been (or will be) written in
-`src/shinro/runtime/linalg.zig` and needs to become a graph op. Covers the six
-surfaces: `ops.py` numpy handler, `TraceBackend` method, `lower_zig.py`
-serialization, the `lower.zig` comptime VM arm, the tests, and the ONNX
-importer when the op is an ONNX op. Also use when adding an ONNX op that needs
-a **new** VM op (as opposed to composing one from existing ops).
+`src/shinro/runtime/linalg.zig` and needs to become a graph op. Covers the five
+surfaces: the `ops.py` numpy handler **plus its `vm=VmOp(...)` lowering schema**,
+the `TraceBackend` method, the `lower.zig` comptime VM arm, the tests, and the
+ONNX importer when the op is an ONNX op. Also use when adding an ONNX op that
+needs a **new** VM op (as opposed to composing one from existing ops).
+
+`lower_zig.py` is deliberately **not** on the list: it is schema-driven and
+needs no per-op edit.
 
 ## Procedure
 
@@ -39,15 +42,18 @@ a **new** VM op (as opposed to composing one from existing ops).
    (numpy rank conventions; 1-D stays 1-D), then
    `self._emit("<op>", [ids...], out_shape, **attrs)`.
 
-5. **`src/shinro/codegen/lower_zig.py`** —
-   (a) add the op name to the emitted `Op` enum list;
-   (b) if it has f64 attrs, add a pre-pass collecting them into parallel lists
-   plus an aux-packing dict (the `clip_offsets` / `gemm_aux` pattern), emit
-   `pub const <op>_<attr> = [_]f64{...};` after `clip_hi`, and pack
-   `aux = (table_index << nflag_bits) | flags`;
-   (c) map it in `_node_vm_info`: `if node.op == "<op>": return "<vm_op>", packed_aux`.
-   Thread any new dict through `_node_line`, `_graph_manifest`, and their
-   `_node_vm_info` call sites.
+5. **`src/shinro/codegen/ops.py` — declare the lowering schema.** Attach a
+   `VmOp` to the same `@register_op` that carries the numpy handler (import
+   `AttrSpec, VmOp` from `shinro.codegen.vm_schema`):
+   `@register_op("foo", vm=VmOp(attrs=(AttrSpec("alpha", 1.0),), flags=("my_flag",)))`.
+   `lower_zig.py` derives the `Op` enum, the baked `<op>_<attr>` f64 tables, the
+   packed `aux` word, and the manifest from this registry — **no serializer
+   edit**. Only ops with a rename (`vm_name=`), f64 scalar attrs (`attrs=`),
+   bool attrs (`flags=`), array attrs (`array_attrs=`, e.g. `clip`'s `lo`/`hi`),
+   or an integer selector (`slot="attr:<name>"` / `"axis_code"`) need a `vm=`;
+   the ~35 identity ops declare `vm=VmOp()`. `vm=` is **mandatory** —
+   `register_op` rejects a handler with no schema, and `lower_zig` asserts the
+   registry is complete, so an op can never lower by silent default.
 
 6. **`src/shinro/runtime/lower.zig`** — add the switch arm next to the related
    op. Pull operands with `node_input` / `node_input_at`, derive comptime dims
@@ -97,11 +103,12 @@ a **new** VM op (as opposed to composing one from existing ops).
 
 ## Pitfalls
 
-- **`aux` is one `usize` with no float channel.** f64 attributes (alpha/beta,
-  eps) must be baked into parallel f64 tables emitted by `lower_zig` (the
-  `clip_lo`/`clip_hi` pattern) or passed as const-node scalar inputs. Pack a
-  table index and small flags: `aux = (index << nbits) | flags`
-  (gemm: `(idx << 1) | transB`).
+- **`aux` is one `usize` with no float channel.** Declare f64 attributes as
+  `attrs=(AttrSpec(...),)` in the op's `VmOp`; the serializer bakes them into a
+  `<op>_<attr>` table and packs the index (plus any `flags=`) into `aux`. Do not
+  hand-write a table or pack `aux` yourself — the schema is the only source.
+  (`aux = (index << len(flags)) | flagbits` when attrs are present, else the
+  flag bits.)
 - **Regenerate before building.** `lower.zig` always references the generated
   tables and enum variants; adding one breaks the build until `make zig-gen`
   runs. Do it first or you will chase a phantom compile error.
@@ -116,8 +123,12 @@ a **new** VM op (as opposed to composing one from existing ops).
   bind it with `comptime` or as a `const` first.
 - **1-D shapes are `rows=n, cols=1, vec=true`.** Treat a vec input as `m=1` in
   the arm; fix strides there, never with a reshape node.
-- **`_node_vm_info` is the single source of truth for `(vm_op, aux)`** — it
-  feeds both the emitted table and the manifest, and
+- **The emitted `Op` enum is derived from the registry** — never hand-edit it
+  (or `_op_enum_names`). `lower_zig` unions every registered op's `vm_name` with
+  the structural `cst`/`cst_f32`/`inp`/`out`; `tests/test_codegen.py::TestVmSchema`
+  asserts coverage, so an op can't silently drop out of the enum.
+- **`lower_zig` is the single source of truth for `(vm_op, aux)`** — it feeds
+  both the emitted table and the manifest, and
   `test_drift_guard_nodes_match_emitted_table` compares them. Never compute aux
   in two places.
 - **Lint coverage**: `make lint` runs ruff repo-wide (line length 140) but
@@ -194,24 +205,16 @@ def gemm(self, a, b, c, *, alpha=1.0, beta=1.0, transB=False):
     return self._emit("gemm", [a, b, c], out_shape, alpha=alpha, beta=beta, transB=transB)
 ```
 
-Serialization (`lower_zig.py`) — four spots: enum append, bake + aux pack,
-emitted tables, `_node_vm_info` branch:
+Serialization (`lower_zig.py`) — **no edit**. The op declares its geometry once
+in the schema, and the serializer derives the enum, tables, aux, and manifest:
 
 ```python
-lines.append("    abs, sign, pow, lt, min, gemm,")
-
-gemm_alpha, gemm_beta, gemm_aux = [], [], {}
-for i, node in enumerate(g.nodes):
-    if node.op == "gemm":
-        gemm_aux[i] = 2 * len(gemm_alpha) + (1 if bool(node.attrs.get("transB", False)) else 0)
-        gemm_alpha.append(float(node.attrs.get("alpha", 1.0)))
-        gemm_beta.append(float(node.attrs.get("beta", 1.0)))
-
-lines.append("pub const gemm_alpha = [_]f64{" + _zig_floats(gemm_alpha) + "};")
-lines.append("pub const gemm_beta = [_]f64{" + _zig_floats(gemm_beta) + "};")
-
-if node.op == "gemm":
-    return "gemm", gemm_aux[i]
+@register_op(
+    "gemm",
+    vm=VmOp(attrs=(AttrSpec("alpha", 1.0), AttrSpec("beta", 1.0)), flags=("transB",)),
+)
+def _gemm(node, values, inputs):
+    ...
 ```
 
 VM arm (`lower.zig`):
