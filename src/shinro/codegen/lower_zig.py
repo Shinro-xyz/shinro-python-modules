@@ -6,6 +6,13 @@ actual program (the comptime graph VM) is handwritten once in
 ``src/shinro/runtime/lower.zig`` and specialized at compile time over this
 table.
 
+As of the schema refactor (see :mod:`shinro.codegen.vm_schema`), this serializer
+carries **no per-op knowledge**: the op -> Zig mapping, the baked f64 scalar
+tables, the packed ``aux`` word, and the manifest are all derived from the
+declarative :class:`~shinro.codegen.vm_schema.VmOp` registrations attached to
+``@register_op``. Adding a VM op therefore needs no edit here — it needs a
+schema entry in ``ops.py`` and a switch arm in ``lower.zig``.
+
 The generated file ``src/shinro/runtime/graph_data.zig`` contains:
 
 - ``nodes``: the flat list of :class:`Node` records — op enum + input ids +
@@ -23,18 +30,18 @@ The generated file ``src/shinro/runtime/graph_data.zig`` contains:
   generated file and re-exposed here via ``@embedFile`` +
   ``std.mem.bytesAsSlice``. The bytes are baked into the compiled ``.so`` all
   the same — they just never pass through the Zig parser.
-- ``clip_lo``/``clip_hi``: clip bounds, one flat array each.
+- per-op f64 tables (``gemm_alpha``, ``clip_lo``, ``layernorm_eps``, ...): the
+  scalar/array attributes declared by each op's :class:`VmOp` schema.
 - ``has_solve_qp``: whether any node performs QP, used by the Zig build to
   decide whether to link the OSQP codegen bake.
 - ``n_outputs``, ``output_offsets``, ``state_offsets``: port packing into the
   C-ABI ``shinro_step(inputs, outputs, state_out)`` buffers.
 
-Small scalars and per-node parameter arrays (clip bounds, gemm alpha/beta,
-activation alpha/eps, offsets) stay as Zig hex floats (``float.hex()``), which
-bit-exactly round-trip the f64 the tracer baked in — the "fixed at compile
-time" property holds across the language boundary. The two large numeric blobs
-(``const_blob`` and ``const_blob_f32``) instead ship as raw little-endian
-sidecars (see above).
+Small scalars and per-node parameter arrays stay as Zig hex floats
+(``float.hex()``), which bit-exactly round-trip the f64 the tracer baked in —
+the "fixed at compile time" property holds across the language boundary. The
+two large numeric blobs (``const_blob`` and ``const_blob_f32``) instead ship as
+raw little-endian sidecars (see above).
 
 Usage:
 
@@ -49,7 +56,9 @@ import os
 
 import numpy as np
 
+from shinro.codegen import vm_schema
 from shinro.codegen.compose import ComposedGraph
+from shinro.codegen.ops import OP_HANDLERS
 from shinro.codegen.tracing import Graph, Node
 
 #: The compiled VM and every C-ABI buffer are f64, so the manifest's byte
@@ -57,6 +66,11 @@ from shinro.codegen.tracing import Graph, Node
 _FLOAT_BYTES = 8
 #: f32 bytes, for the manifest's f32 weight-blob metric.
 _FLOAT32_BYTES = 4
+
+#: The op -> Zig VM mapping is fully schema-driven; const/input/output declare
+#: their ``cst``/``inp``/``out`` renames in ``ops.py``. Only their ``aux``
+#: (blob offset / input offset / port index) is computed here rather than
+#: declared, because it is plumbing over the graph's port lists.
 
 
 def lower_zig(
@@ -91,6 +105,17 @@ def lower_zig(
                 f"tensors only"
             )
 
+    # Every registered op must declare its lowering schema (register_op requires
+    # it); assert it here too so a hand-populated registry fails loudly rather
+    # than emitting an op the VM could mis-lower.
+    missing = vm_schema.missing_schemas(OP_HANDLERS)
+    if missing:
+        raise ValueError(
+            "ops registered without a VmOp lowering schema: "
+            + ", ".join(sorted(missing))
+            + " — declare vm=VmOp(...) in @register_op"
+        )
+
     # --- buffer layout: each node owns a slot sized by its shape ---
     offsets: list[int] = []
     total = 0
@@ -119,119 +144,23 @@ def lower_zig(
         for pos, src in enumerate(cnode.inputs):
             consumers.setdefault(int(src), []).append((ci, pos))
 
-    # --- constants and clip bounds ---
-    # A const node is baked into const_blob_f32 (instead of const_blob) when it is
-    # f32-exact and only used as a contraction weight — a gemm's B (position 1)
-    # or a recurrent cell's W/R (positions 1/2). const_offsets carries the blob
-    # offset plus that dtype choice, so the VM selects the mixed-dtype kernel at
-    # comptime. This halves the per-tick weight bytes while the kernel widens
-    # each lane in a register, so the f64 result is unchanged.
+    # A const node is baked into const_blob_f32 (instead of const_blob) when it
+    # is f32-exact and only used as a contraction weight — a gemm's B (position
+    # 1) or a recurrent cell's W/R (positions 1/2). const_offsets carries the
+    # blob offset plus that dtype choice, so the VM selects the mixed-dtype
+    # kernel at comptime. This halves the per-tick weight bytes while the kernel
+    # widens each lane in a register, so the f64 result is unchanged.
     #
     # Coherence: a cell reads BOTH W and R from whichever blob they were baked
     # into, so the two must agree on the dtype — if only one is f32-eligible,
     # both stay f64 (otherwise one side would be read from the wrong blob).
-    f32_nodes = {
-        i for i, n in enumerate(g.nodes) if n.op == "const" and _is_f32_weight(i, n, consumers, g)
-    }
+    f32_nodes = {i for i, n in enumerate(g.nodes) if n.op == "const" and _is_f32_weight(i, n, consumers, g)}
     for n in g.nodes:
         if n.op in ("lstm", "gru", "rnn"):
             w_i, r_i = int(n.inputs[1]), int(n.inputs[2])
             if (w_i in f32_nodes) != (r_i in f32_nodes):
                 f32_nodes.discard(w_i)
                 f32_nodes.discard(r_i)
-
-    const_blob: list[float] = []
-    const_blob_f32: list[float] = []
-    const_offsets: dict[int, tuple[int, bool]] = {}
-    clip_lo: list[float] = []
-    clip_hi: list[float] = []
-    clip_offsets: dict[int, int] = {}
-
-    for i, node in enumerate(g.nodes):
-        if node.op == "const":
-            vals = np.asarray(node.attrs["value"], dtype=np.float64).ravel()
-            if i in f32_nodes:
-                const_offsets[i] = (len(const_blob_f32), True)
-                const_blob_f32.extend(vals.tolist())
-            else:
-                const_offsets[i] = (len(const_blob), False)
-                const_blob.extend(vals.tolist())
-        elif node.op == "clip":
-            clip_offsets[i] = len(clip_lo)
-            bounds: dict[str, list[float]] = {"lo": clip_lo, "hi": clip_hi}
-            for attr, blob in bounds.items():
-                raw = np.asarray(node.attrs[attr], dtype=np.float64)
-                try:
-                    # numpy broadcasting covers scalar, same-shape, (1, D) row,
-                    # (D,) trailing, and (N, 1) column bounds. The VM indexes
-                    # its flat blob by output element, so one entry per element
-                    # is required — e.g. MPPI clips an (N, D_u) sample batch
-                    # with per-channel (D_u,) control limits.
-                    vals = np.broadcast_to(raw, node.shape).ravel()
-                except ValueError as exc:
-                    raise ValueError(
-                        f"clip node {i}: {attr!r} bound shape {raw.shape} cannot "
-                        f"broadcast against clip shape {node.shape}"
-                    ) from exc
-                blob.extend(vals.tolist())
-
-    # --- baked gemm parameters (alpha/beta) and the transB flag ---
-    # gemm carries two f64 scalars (alpha, beta) that the ``aux: usize`` node
-    # field cannot hold. Bake them into parallel arrays (the clip_lo/clip_hi
-    # pattern) and pack the table index plus the transB flag into one aux word:
-    # aux = (index << 1) | transB.
-    gemm_alpha: list[float] = []
-    gemm_beta: list[float] = []
-    gemm_aux: dict[int, int] = {}
-    for i, node in enumerate(g.nodes):
-        if node.op == "gemm":
-            gemm_aux[i] = 2 * len(gemm_alpha) + (1 if bool(node.attrs.get("transB", False)) else 0)
-            gemm_alpha.append(float(node.attrs.get("alpha", 1.0)))
-            gemm_beta.append(float(node.attrs.get("beta", 1.0)))
-
-    # --- baked elu alpha (default 1.0) ---
-    # elu's `alpha` is an f64 scalar the `aux: usize` field cannot hold; bake it
-    # into a parallel array (the gemm_alpha pattern) with the table index in aux.
-    elu_alpha: list[float] = []
-    elu_aux: dict[int, int] = {}
-    for i, node in enumerate(g.nodes):
-        if node.op == "elu":
-            elu_aux[i] = len(elu_alpha)
-            elu_alpha.append(float(node.attrs.get("alpha", 1.0)))
-
-    # --- baked leaky_relu alpha (default 0.01) ---
-    # Same f64-scalar problem as elu's alpha: baked into leaky_relu_alpha with
-    # the table index in aux, so the VM reads a comptime-known slope.
-    leaky_relu_alpha: list[float] = []
-    leaky_relu_aux: dict[int, int] = {}
-    for i, node in enumerate(g.nodes):
-        if node.op == "leaky_relu":
-            leaky_relu_aux[i] = len(leaky_relu_alpha)
-            leaky_relu_alpha.append(float(node.attrs.get("alpha", 0.01)))
-
-    # --- baked layernorm epsilon (default 1e-5) ---
-    # Same f64-scalar problem as elu's alpha (the `aux: usize` field cannot hold a
-    # float): eps is baked into layernorm_eps with the table index in aux. The
-    # biased variance and the reciprocal-then-multiply order match
-    # linalg.layernorm_rows and the numpy handler exactly, so the three engines
-    # agree bit-for-bit rather than merely mathematically.
-    layernorm_eps: list[float] = []
-    layernorm_aux: dict[int, int] = {}
-    for i, node in enumerate(g.nodes):
-        if node.op == "layernorm":
-            layernorm_aux[i] = len(layernorm_eps)
-            layernorm_eps.append(float(node.attrs.get("eps", 1e-5)))
-
-    # --- baked gru linear_before_reset flag ---
-    # gru's `linear_before_reset` is a bool, so it rides directly in the node's
-    # `aux` bit 0 (the gemm transB pattern) — no parallel table needed. The VM
-    # folds it into a comptime parameter, because lbr moves the reset gate
-    # across the recurrent matmul and picking the wrong form silently diverges
-    # ~1e-1.
-    gru_aux: dict[int, int] = {}
-    for i, node in enumerate(g.nodes):
-        if node.op == "gru":
-            gru_aux[i] = 1 if bool(node.attrs.get("linear_before_reset", False)) else 0
 
     # --- output port packing: separate zero-indexed offsets per buffer ---
     # `outputs` and `state_out` are separate C-ABI buffers, so each needs its
@@ -247,6 +176,19 @@ def lower_zig(
         state_offsets.append(acc)
         acc += _output_size(g, name)
 
+    # --- schema-driven bake: collect per-op tables + encode every node ---
+    # The tables are pre-seeded with every schema-declared name so a table is
+    # always emitted (empty when the graph has no such node), matching the
+    # hand-written emitter's behaviour. The node encodings are the single source
+    # of truth consumed by both the emitted table and the manifest.
+    const_blob: list[float] = []
+    const_blob_f32: list[float] = []
+    tables: dict[str, list[float]] = {name: [] for name in vm_schema.table_names()}
+    encodings: list[tuple[str, int]] = [
+        _encode_node(g, i, node, f32_nodes, input_offsets, cg, tables, const_blob, const_blob_f32)
+        for i, node in enumerate(g.nodes)
+    ]
+
     lines: list[str] = []
     lines.append("// Generated by shinro.codegen.lower_zig — DO NOT EDIT.")
     lines.append("// A ComposedGraph serialized as a comptime data table.")
@@ -255,13 +197,9 @@ def lower_zig(
         lines.append('const std = @import("std");')
     lines.append("")
     lines.append("pub const Op = enum {")
-    lines.append("    cst, cst_f32, inp, out, matmul, add, sub, mul, div, ne, neg,")
-    lines.append("    transpose, inv, cholesky, reshape, clip, where_op, any,")
-    lines.append("    copy, tanh, relu, exp, argmax, one_hot, slice,")
-    lines.append("    sin, cos, stack, solve_qp,")
-    lines.append("    abs, sign, pow, lt, min, gemm, sigmoid, softmax, gelu, elu, layernorm,")
-    lines.append("    lstm, gru, rnn,")
-    lines.append("    concat, gather, sqrt, log, mod, leaky_relu,")
+    enum_names = _op_enum_names()
+    for k in range(0, len(enum_names), 6):
+        lines.append("    " + ", ".join(enum_names[k : k + 6]) + ",")
     lines.append("};")
     lines.append("")
     lines.append("pub const Node = struct {")
@@ -284,22 +222,8 @@ def lower_zig(
     lines.append("")
     lines.append("pub const nodes = [_]Node{")
     for i, node in enumerate(g.nodes):
-        rendered = _node_line(
-            g,
-            i,
-            node,
-            const_offsets,
-            clip_offsets,
-            gemm_aux,
-            elu_aux,
-            leaky_relu_aux,
-            gru_aux,
-            layernorm_aux,
-            input_offsets,
-            cg.outputs,
-            cg.state_outputs,
-        )
-        lines.append("    " + rendered + ",")
+        vm_op, aux = encodings[i]
+        lines.append("    " + _node_line(node, vm_op, aux) + ",")
     lines.append("};")
     lines.append("")
     # --- baked numeric blobs → raw sidecars + @embedFile ---
@@ -339,13 +263,11 @@ def lower_zig(
     else:
         _remove_stale(out_dir, weights_bin)
         lines.append("pub const const_blob_f32 = [_]f32{};")
-    lines.append("pub const clip_lo = [_]f64{" + _zig_floats(clip_lo) + "};")
-    lines.append("pub const clip_hi = [_]f64{" + _zig_floats(clip_hi) + "};")
-    lines.append("pub const gemm_alpha = [_]f64{" + _zig_floats(gemm_alpha) + "};")
-    lines.append("pub const gemm_beta = [_]f64{" + _zig_floats(gemm_beta) + "};")
-    lines.append("pub const elu_alpha = [_]f64{" + _zig_floats(elu_alpha) + "};")
-    lines.append("pub const leaky_relu_alpha = [_]f64{" + _zig_floats(leaky_relu_alpha) + "};")
-    lines.append("pub const layernorm_eps = [_]f64{" + _zig_floats(layernorm_eps) + "};")
+    # Per-op f64 scalar/array tables, declared unconditionally (empty when the
+    # graph has no node of that op). The VM only references a table from the
+    # switch arm of its op, which is comptime-skipped when absent.
+    for name, vals in tables.items():
+        lines.append(f"pub const {name} = [_]f64{{" + _zig_floats(vals) + "};")
     lines.append("pub const output_offsets = [_]usize{" + ", ".join(str(o) for o in output_offsets) + "};")
     lines.append("pub const state_offsets = [_]usize{" + ", ".join(str(o) for o in state_offsets) + "};")
     lines.append("")
@@ -353,21 +275,7 @@ def lower_zig(
     with open(out_path, "w") as f:
         f.write("\n".join(lines) + "\n")
 
-    manifest = _graph_manifest(
-        cg,
-        buf_len,
-        len(const_blob),
-        len(const_blob_f32),
-        offsets,
-        const_offsets,
-        clip_offsets,
-        gemm_aux,
-        elu_aux,
-        leaky_relu_aux,
-        gru_aux,
-        layernorm_aux,
-        input_offsets,
-    )
+    manifest = _graph_manifest(cg, buf_len, len(const_blob), len(const_blob_f32), offsets, encodings, input_offsets)
     if provenance:
         manifest["provenance"] = provenance
     manifest_path = os.path.splitext(out_path)[0] + "_manifest.json"
@@ -376,19 +284,144 @@ def lower_zig(
         f.write("\n")
 
 
+# ─── node encoding (schema-driven) ───────────────────────────────────────────
+
+
+def _encode_node(
+    g: Graph,
+    i: int,
+    node: Node,
+    f32_nodes: set[int],
+    input_offsets: dict[str, int],
+    cg: ComposedGraph,
+    tables: dict[str, list[float]],
+    const_blob: list[float],
+    const_blob_f32: list[float],
+) -> tuple[str, int]:
+    """Encode one graph node as its Zig ``(vm_op, aux)`` pair.
+
+    Port nodes (``const``/``input``/``output``) compute their own ``aux``
+    (blob offset / input offset / port index). Every other op is looked up in
+    the :mod:`shinro.codegen.vm_schema` registry and encoded generically:
+
+    - scalar attrs → one ``<op>_<attr>`` table each, shared index in ``aux``;
+    - flags → packed bits in ``aux`` (below the index);
+    - array attrs → broadcast to the node shape, flat offset in ``aux``;
+    - ``slot`` → structural selector (``attr:<name>`` / ``axis_code``).
+
+    Args:
+        g: The composed graph being serialized.
+        i: Node index in ``g.nodes``.
+        node: The node to encode.
+        f32_nodes: Const node indices baked into ``const_blob_f32``.
+        input_offsets: Input port name → offset in the packed input buffer.
+        cg: The composed graph (for the ``outputs``/``state_outputs`` order).
+        tables: Per-op f64 tables, mutated in place (pre-seeded with all names).
+        const_blob: f64 constants blob, appended in place.
+        const_blob_f32: f32 contraction-weights blob, appended in place.
+
+    Returns:
+        The ``(vm_op, aux)`` pair for the node.
+    """
+    if node.op == "const":
+        vals = np.asarray(node.attrs["value"], dtype=np.float64).ravel()
+        if i in f32_nodes:
+            off = len(const_blob_f32)
+            const_blob_f32.extend(vals.tolist())
+            return "cst_f32", off
+        off = len(const_blob)
+        const_blob.extend(vals.tolist())
+        return "cst", off
+    if node.op == "input":
+        return "inp", input_offsets[node.attrs["name"]]
+    if node.op == "output":
+        name = node.attrs["name"]
+        if name in cg.outputs:
+            return "out", cg.outputs.index(name)
+        return "out", len(cg.outputs) + cg.state_outputs.index(name)
+
+    spec = vm_schema.get_vm_op(node.op)
+    vm_name = spec.vm_name or node.op
+
+    if spec.array_attrs:
+        # Array attrs (only clip's lo/hi) broadcast to the output shape; the
+        # node's aux is the flat offset into the (identically-sized) tables.
+        idx = len(tables.setdefault(f"{node.op}_{spec.array_attrs[0]}", []))
+        for attr in spec.array_attrs:
+            raw = np.asarray(node.attrs[attr], dtype=np.float64)
+            try:
+                vals = np.broadcast_to(raw, node.shape).ravel()
+            except ValueError as exc:
+                raise ValueError(
+                    f"{node.op} node {i}: {attr!r} bound shape {raw.shape} cannot "
+                    f"broadcast against shape {node.shape}"
+                ) from exc
+            tables.setdefault(f"{node.op}_{attr}", []).extend(vals.tolist())
+        return vm_name, (idx << len(spec.flags)) | _flag_bits(node, spec)
+
+    if spec.attrs:
+        idx = len(tables.setdefault(f"{node.op}_{spec.attrs[0].name}", []))
+        for a in spec.attrs:
+            tables.setdefault(f"{node.op}_{a.name}", []).append(float(node.attrs.get(a.name, a.default)))
+        # alpha/beta are baked into <op>_<attr> (index = aux >> nflags); the flag
+        # bits ride in the low bits — the gemm transB pattern generalized.
+        return vm_name, (idx << len(spec.flags)) | _flag_bits(node, spec)
+
+    if spec.flags:
+        return vm_name, _flag_bits(node, spec)
+
+    if spec.slot == "none":
+        return vm_name, 0
+    if spec.slot == "axis_code":
+        axis = node.attrs.get("axis")
+        return vm_name, 0 if axis is None else int(axis) + 1
+    if spec.slot.startswith("attr:"):
+        return vm_name, int(node.attrs.get(spec.slot[len("attr:") :], 0))
+    raise ValueError(f"unknown slot source {spec.slot!r} for op {node.op!r}")
+
+
+def _flag_bits(node: Node, spec: vm_schema.VmOp) -> int:
+    """Pack a schema's bool attrs into a bitfield (declaration order, bit 0 first)."""
+    bits = 0
+    for k, name in enumerate(spec.flags):
+        if bool(node.attrs.get(name, False)):
+            bits |= 1 << k
+    return bits
+
+
+def _op_enum_names() -> list[str]:
+    """Derive the emitted Zig ``Op`` enum from the registry.
+
+    Includes the structural port variants (``cst``/``cst_f32``/``inp``/``out``)
+    and every registered op's VM name (renamed ops included). This is what makes
+    adding an op turnkey: the enum can never drift from the registered set, and a
+    missing ``lower.zig`` switch arm fails the Zig build with an exhaustive-switch
+    error rather than silently mis-lowering.
+    """
+    names = {"cst_f32"}
+    for op in OP_HANDLERS:
+        names.add(vm_schema.vm_op_name(op))
+    return ["cst", "cst_f32"] + sorted(n for n in names if n not in ("cst", "cst_f32"))
+
+
+def _node_line(node: Node, vm_op: str, aux: int) -> str:
+    """Render one node as a Zig ``Node`` struct literal."""
+    rows, cols = _rows_cols(node.shape)
+    inputs = "&.{" + ", ".join(str(x) for x in node.inputs) + "}"
+    vec = str(len(node.shape) == 1).lower()
+    return f".{{ .op = .{vm_op}, .inputs = {inputs}, .rows = {rows}, .cols = {cols}, .aux = {aux}, .vec = {vec} }}"
+
+
+# ─── manifest ───────────────────────────────────────────────────────────────
+
+
 def _graph_manifest(
     cg: ComposedGraph,
     buf_len: int,
     const_blob_len: int,
     const_blob_f32_len: int,
     offsets: list[int],
-    const_offsets: dict[int, tuple[int, bool]],
-    clip_offsets: dict[int, int],
-    gemm_aux: dict[int, int],
-    elu_aux: dict[int, int],
-    leaky_relu_aux: dict[int, int],
-    gru_aux: dict[int, int],
-    layernorm_aux: dict[int, int],
+    encodings: list[tuple[str, int]],
     input_offsets: dict[str, int],
 ) -> dict:
     """Build the deterministic graph manifest for a composed graph.
@@ -397,22 +430,17 @@ def _graph_manifest(
     executes): op histogram, the ordered node list (dual Python/Zig op names,
     wiring, shape, buffer offset, aux), the C-ABI port layout, buffer sizes,
     whether the graph contains a ``.solve_qp`` node, and, when present, the
-    n_vars that node expects. No timestamps — the
-    manifest is a pure function of the graph, so identical inputs produce
-    identical bytes.
+    n_vars that node expects. No timestamps — the manifest is a pure function
+    of the graph, so identical inputs produce identical bytes.
 
     Args:
         cg: The composed graph being serialized.
         buf_len: Total f64 buffer size for one step.
         const_blob_len: Number of f64s in the baked constants blob.
+        const_blob_f32_len: Number of f32s in the baked contraction weights.
         offsets: Per-node buffer offset (node ``i`` owns ``rows*cols`` f64s at
             ``buf[offsets[i]..]``).
-        const_offsets: Maps const node index → ``(blob offset, is_f32)``; an f32
-            constant indexes ``const_blob_f32``, every other one ``const_blob``.
-        clip_offsets: Maps clip node index → offset into ``clip_lo``/``hi``.
-        gemm_aux: Maps gemm node index → packed aux (``(table_index << 1) | transB``).
-        elu_aux: Maps elu node index → index into ``elu_alpha``.
-        layernorm_aux: Maps layernorm node index → index into ``layernorm_eps``.
+        encodings: Per-node ``(vm_op, aux)`` pairs from :func:`_encode_node`.
         input_offsets: Maps input port name → offset into the packed input
             buffer.
 
@@ -438,21 +466,7 @@ def _graph_manifest(
 
     nodes = []
     for i, node in enumerate(g.nodes):
-        vm_op, aux = _node_vm_info(
-            g,
-            i,
-            node,
-            const_offsets,
-            clip_offsets,
-            gemm_aux,
-            elu_aux,
-            leaky_relu_aux,
-            gru_aux,
-            layernorm_aux,
-            input_offsets,
-            cg.outputs,
-            cg.state_outputs,
-        )
+        vm_op, aux = encodings[i]
         rows, cols = _rows_cols(node.shape)
         nodes.append(
             {
@@ -515,173 +529,6 @@ def _input_shape(g: Graph, name: str) -> tuple[int, ...]:
 
 
 # ─── helpers ───────────────────────────────────────────────────────────────
-
-
-def _node_line(
-    g: Graph,
-    i: int,
-    node: Node,
-    const_offsets: dict[int, tuple[int, bool]],
-    clip_offsets: dict[int, int],
-    gemm_aux: dict[int, int],
-    elu_aux: dict[int, int],
-    leaky_relu_aux: dict[int, int],
-    gru_aux: dict[int, int],
-    layernorm_aux: dict[int, int],
-    input_offsets: dict[str, int],
-    outputs: list[str],
-    state_outputs: list[str],
-) -> str:
-    """Render one Python graph node as a Zig ``Node`` struct literal.
-
-    Translates the Python op/aux mapping into the Zig VM's op enum: ``const``
-    → ``cst`` (aux = index into ``const_blob``), ``input`` → ``inp`` (aux =
-    offset into the packed input buffer), ``output`` → ``out`` (aux = index
-    into ``outputs`` or, for state outputs, ``len(outputs) + index`` so the
-    VM can split the two C-ABI buffers), ``where`` → ``where_op``, ``clip``
-    → ``clip`` (aux = index into ``clip_lo``/``clip_hi``).
-
-    Args:
-        g: The composed graph being serialized.
-        i: Node index in ``g.nodes`` (kept for symmetry with the table).
-        node: The Python node to render.
-        const_offsets: Maps const node index → ``(blob offset, is_f32)``.
-        clip_offsets: Maps clip node index → offset into ``clip_lo``/``hi``.
-        gemm_aux: Maps gemm node index → packed aux.
-        elu_aux: Maps elu node index → index into ``elu_alpha``.
-        layernorm_aux: Maps layernorm node index → index into ``layernorm_eps``.
-        input_offsets: Maps input port name → offset into the packed input
-            buffer.
-        outputs: Names of the graph's non-state output ports.
-        state_outputs: Names of the graph's state output ports.
-
-    Returns:
-        A Zig struct literal like ``.{{ .op = .matmul, .inputs = &.{{6, 3}}, ... }}``.
-    """
-    rows, cols = _rows_cols(node.shape)
-    inputs = "&.{" + ", ".join(str(x) for x in node.inputs) + "}"
-    op, aux = _node_vm_info(
-        g,
-        i,
-        node,
-        const_offsets,
-        clip_offsets,
-        gemm_aux,
-        elu_aux,
-        leaky_relu_aux,
-        gru_aux,
-        layernorm_aux,
-        input_offsets,
-        outputs,
-        state_outputs,
-    )
-    vec = str(len(node.shape) == 1).lower()
-
-    return f".{{ .op = .{op}, .inputs = {inputs}, .rows = {rows}, .cols = {cols}, .aux = {aux}, .vec = {vec} }}"
-
-
-def _node_vm_info(
-    g: Graph,
-    i: int,
-    node: Node,
-    const_offsets: dict[int, tuple[int, bool]],
-    clip_offsets: dict[int, int],
-    gemm_aux: dict[int, int],
-    elu_aux: dict[int, int],
-    leaky_relu_aux: dict[int, int],
-    gru_aux: dict[int, int],
-    layernorm_aux: dict[int, int],
-    input_offsets: dict[str, int],
-    outputs: list[str],
-    state_outputs: list[str],
-) -> tuple[str, int]:
-    """Map a Python graph node to its Zig VM ``(op, aux)`` pair.
-
-    This is the single source of truth for the Python→Zig op translation,
-    shared by the emitted table (``_node_line``) and the graph manifest:
-    ``const`` → ``cst`` (aux = index into ``const_blob``), ``input`` → ``inp``
-    (aux = offset into the packed input buffer), ``output`` → ``out`` (aux =
-    index into ``outputs`` or, for state outputs, ``len(outputs) + index`` so
-    the VM can split the two C-ABI buffers), ``where`` → ``where_op``, ``clip``
-    → ``clip`` (aux = index into ``clip_lo``/``clip_hi``), ``slice`` → ``slice``
-    (aux = start offset into its input's data). All other ops map to themselves
-    with aux = 0.
-
-    Args:
-        g: The composed graph being serialized.
-        i: Node index in ``g.nodes``.
-        node: The Python node to translate.
-        const_offsets: Maps const node index → ``(blob offset, is_f32)``.
-        clip_offsets: Maps clip node index → offset into ``clip_lo``/``hi``.
-        gemm_aux: Maps gemm node index → packed aux (``(table_index << 1) | transB``).
-        elu_aux: Maps elu node index → index into ``elu_alpha``.
-        layernorm_aux: Maps layernorm node index → index into ``layernorm_eps``.
-        input_offsets: Maps input port name → offset into the packed input
-            buffer.
-        outputs: Names of the graph's non-state output ports.
-        state_outputs: Names of the graph's state output ports.
-
-    Returns:
-        The ``(vm_op, aux)`` pair for the node.
-    """
-    if node.op == "const":
-        # aux is the offset into the blob this constant was baked into; an
-        # f32-exact gemm weight lives in const_blob_f32 and gets the distinct op
-        # so the VM's gemm arm selects the mixed-dtype kernel at comptime.
-        off, is_f32 = const_offsets[i]
-        return ("cst_f32" if is_f32 else "cst"), off
-    if node.op == "input":
-        return "inp", input_offsets[node.attrs["name"]]
-    if node.op == "output":
-        name = node.attrs["name"]
-        if name in outputs:
-            return "out", outputs.index(name)
-        return "out", len(outputs) + state_outputs.index(name)
-    if node.op == "where":
-        return "where_op", 0
-    if node.op == "clip":
-        return "clip", clip_offsets[i]
-    if node.op == "slice":
-        # slice(x, start, stop): start is the input offset (stop is implicit —
-        # the node's rows*cols is stop - start).
-        return "slice", node.attrs["start"]
-    if node.op == "min":
-        # Minimum reduction: the axis rides in aux (0 = None / full, 1 = axis 0
-        # down columns, 2 = axis 1 across rows) so the VM's switch selects the
-        # right reduction loop without an extra node field.
-        axis = node.attrs.get("axis")
-        return "min", 0 if axis is None else axis + 1
-    if node.op == "gemm":
-        # alpha/beta are baked into gemm_alpha/gemm_beta (index = aux >> 1);
-        # bit 0 is the transB flag — one aux word carries both. The VM reads
-        # g.gemm_alpha[node.aux / 2] etc. (comptime-folded).
-        return "gemm", gemm_aux[i]
-    if node.op == "elu":
-        # alpha is baked into elu_alpha; the VM reads g.elu_alpha[node.aux]
-        # (comptime-folded inside the unrolled node loop).
-        return "elu", elu_aux[i]
-    if node.op == "leaky_relu":
-        # alpha is baked into leaky_relu_alpha; the VM reads
-        # g.leaky_relu_alpha[node.aux] (comptime-folded).
-        return "leaky_relu", leaky_relu_aux[i]
-    if node.op == "layernorm":
-        # eps is baked into layernorm_eps; the VM reads g.layernorm_eps[node.aux]
-        # (comptime-folded inside the unrolled node loop).
-        return "layernorm", layernorm_aux[i]
-    if node.op == "gru":
-        # linear_before_reset rides in aux bit 0; the VM reads it as a comptime
-        # bool so the two reset placements constant-fold.
-        return "gru", gru_aux[i]
-    if node.op in ("concat", "gather"):
-        # The join / index axis (0 or 1) rides in aux; the importer resolves a
-        # negative ONNX axis before emitting, and a Tracer axis is validated at
-        # emit time.
-        return node.op, int(node.attrs.get("axis", 0))
-    if node.op == "mod":
-        # fmod (C fmod vs Python %) rides in aux bit 0, read at comptime inside
-        # the VM's shared ew2 element loop.
-        return "mod", (1 if node.attrs.get("fmod", False) else 0)
-    return node.op, 0
 
 
 def _input_size(g: Graph, name: str) -> int:
