@@ -4,24 +4,30 @@
 This script exercises the XLA-style tracing layer in ``shinro.codegen`` on
 the ``base_tracking`` scenario (KalmanFilter + LQR on the holonomic base).
 
-It does three things, printing the results at each stage:
+It does four things, printing the results at each stage:
 
 1. **Trace a single component** (KalmanFilter) and show the captured graph
    node-by-node, then interpret it and verify the output matches the live
-   ``NumpyBackend`` computation.
+   ``NumpyBackend`` computation. The KF's two array attrs (``x_hat`` and the
+   covariance ``P``) are declared as recurrent state, so they become graph
+   input/output ports rather than being frozen at trace-time values.
 
 2. **Compose** the estimator and controller into one closed-loop step graph
-   (with auto-reshape for the (n,1) ↔ (n,) shape mismatch and clip from the
-   scenario's input_limits), show the combined graph's structure, and verify
-   the composed step matches the live numpy loop.
+   (with the scenario's input_limits clip), show the combined graph's
+   structure, and verify the composed step matches the live numpy loop over
+   several ticks — threading the graph's own ``state_*`` outputs back in, so
+   the KF covariance recursion runs live instead of being frozen.
 
 3. **Swap the estimator** (KalmanFilter → LuenbergerObserver) and re-compose,
    showing the controller's captured graph is reused without re-tracing —
    the modularity proof.
 
+4. **A different plant** (CartPole, 4-state / 1-input) built from scratch,
+   showing the same tracer works with no tracer-side changes.
+
 Run from the repo root:
 
-    python demo_codegen.py
+    python -m demos.demo_codegen
 """
 
 from __future__ import annotations
@@ -68,6 +74,11 @@ def show_graph(graph, max_nodes: int = 25) -> None:
         print(f"  ... ({len(graph.nodes) - max_nodes} more)")
 
 
+def _p0(n: int) -> np.ndarray:
+    """The KF's initial covariance — the same 0.1*I the host seeds at tick 0."""
+    return np.eye(n) * 0.1
+
+
 def main() -> None:
     rng = np.random.default_rng(42)
 
@@ -82,12 +93,17 @@ def main() -> None:
 
     # ─── Stage 1: trace KalmanFilter alone ──────────────────────────────
     banner("Stage 1: Trace KalmanFilter.estimate() alone")
-    kf.P = np.eye(3) * 0.1  # reset covariance to a known state
-    kf.x_hat = np.zeros((3, 1))
+    # The estimator owns two recurrent arrays: the state estimate x_hat and
+    # the covariance P. Both are declared via state_shapes so the tracer
+    # pre-injects them as placeholders — they become graph inputs/outputs,
+    # and the covariance recursion stays LIVE instead of being baked into a
+    # trace-time constant (which compose would reject as a frozen recursion).
+    kf.P = _p0(3)
+    kf.x_hat = np.zeros(3)
     kf_graph = trace_node(
         kf,
-        input_shapes={"measurement": (3, 1), "control_input": (3, 1)},
-        state_shapes={"x_hat": (3, 1)},
+        input_shapes={"measurement": (3,), "control_input": (3,)},
+        state_shapes={"x_hat": (3,), "P": (3, 3)},
     )
     print("  Captured graph:")
     show_graph(kf_graph.graph)
@@ -96,15 +112,16 @@ def main() -> None:
     print(f"  Ops used: {ops_used}")
 
     # Verify: interpret the graph on random inputs, compare to live numpy.
-    y = rng.normal(0, 0.1, (3, 1))
-    u = rng.normal(0, 0.1, (3, 1))
-    x_hat_init = rng.normal(0, 0.1, (3, 1))
-    kf.P = np.eye(3) * 0.1
+    y = rng.normal(0, 0.1, (3,))
+    u = rng.normal(0, 0.1, (3,))
+    x_hat_init = rng.normal(0, 0.1, (3,))
+    kf.P = _p0(3)
     kf.x_hat = x_hat_init.copy()
     expected = kf.estimate(y, u)
     traced = interpret(
         kf_graph.graph,
-        {"measurement": y, "control_input": u, "state_x_hat": x_hat_init},
+        {"measurement": y, "control_input": u,
+         "state_x_hat": x_hat_init, "state_P": _p0(3)},
     )
     got = traced.get("out")
     if got is None:
@@ -138,44 +155,47 @@ def main() -> None:
     print(f"  Outputs: {composed.outputs}")
     print(f"  State (recurrent): {composed.state_inputs}")
 
-    # Verify the composed step matches the live numpy loop over 10 trials.
-    # The KF's P was baked into the traced graph at its initial value
-    # (np.eye(3)*0.1), so the numpy reference must reset P to the same
-    # value each trial — otherwise P accumulates in numpy but stays frozen
-    # in the traced graph, producing a spurious divergence.
-    print("\n  Verifying composed step vs live numpy loop (10 trials, atol=1e-12):")
-    initial_P = np.eye(3) * 0.1
+    # Verify the composed step matches the live numpy loop. Because P is a
+    # recurrent input port (state_P), we thread the graph's own state outputs
+    # back in each tick: the KF covariance must track numpy's live Riccati
+    # recursion rather than stay frozen at its trace-time value.
+    print("\n  Verifying composed step vs live numpy loop (10 trials x 4 ticks):")
     max_err = 0.0
     for trial in range(10):
-        y_flat = rng.normal(0, 0.1, (3,))
+        y_seq = rng.normal(0, 0.1, (4, 3))
         x_ref = rng.normal(0, 0.1, (3,))
-        x_hat_init = rng.normal(0, 0.1, (3, 1))
-        u_prev = rng.normal(0, 0.1, (3,))
+        x_hat_init = rng.normal(0, 0.1, (3,))
 
-        # Ground truth: live numpy loop, reset P to the traced-at value.
-        kf.P = initial_P.copy()
+        # Ground truth: live numpy loop, same start + inputs, full recurrence.
+        kf.P = _p0(3)
         kf.x_hat = x_hat_init.copy()
-        x_hat_np = kf.estimate(y_flat.reshape(-1, 1), u_prev.reshape(-1, 1))
-        u_np = lqr.compute(x_hat_np.ravel(), x_ref)
-        u_np = np.clip(u_np, limits[0], limits[1])
+        u_prev = np.zeros(3)
 
-        # Traced.
-        traced = interpret(
-            composed.graph,
-            {"y": y_flat, "x_ref": x_ref, "u_prev": u_prev, "state_x_hat": x_hat_init},
-        )
-        err = float(np.max(np.abs(traced["u"] - u_np)))
-        max_err = max(max_err, err)
+        # Traced: seed the recurrent ports, then thread them tick by tick.
+        state = {"state_x_hat": x_hat_init.copy(), "state_P": _p0(3)}
+        for t in range(4):
+            x_hat_np = kf.estimate(y_seq[t], u_prev)
+            u_np = np.clip(lqr.compute(x_hat_np, x_ref), limits[0], limits[1])
+
+            traced = interpret(
+                composed.graph,
+                {"y": y_seq[t], "x_ref": x_ref, "u_prev": u_prev,
+                 "state_x_hat": state["state_x_hat"], "state_P": state["state_P"]},
+            )
+            max_err = max(max_err, float(np.max(np.abs(traced["u"] - u_np))))
+            state["state_x_hat"] = traced["state_x_hat"]
+            state["state_P"] = traced["state_P"]
+            u_prev = u_np
     print(f"    max abs err over 10 trials: {max_err:.2e}  "
           f"{'PASS' if max_err < 1e-12 else 'FAIL'}")
 
     # ─── Stage 3: swap estimator, reuse the LQR graph ──────────────────
     banner("Stage 3: Swap estimator (KF → Luenberger), reuse LQR graph")
-    luen.x_hat = np.zeros((3, 1))
+    luen.x_hat = np.zeros(3)
     luen_graph = trace_node(
         luen,
-        input_shapes={"measurement": (3, 1), "control_input": (3, 1)},
-        state_shapes={"x_hat": (3, 1)},
+        input_shapes={"measurement": (3,), "control_input": (3,)},
+        state_shapes={"x_hat": (3,)},
     )
     print(f"  Luenberger graph: {len(luen_graph.graph.nodes)} nodes")
     print(f"  LQR graph: REUSED ({len(ctrl_graph.graph.nodes)} nodes, not re-traced)")
@@ -188,25 +208,29 @@ def main() -> None:
     print(f"  Swapped composed graph: {len(composed_swap.graph.nodes)} nodes")
 
     # Verify the swapped composition matches the live numpy loop.
-    print("\n  Verifying Luenberger+LQR vs live numpy loop (10 trials, atol=1e-12):")
+    print("\n  Verifying Luenberger+LQR vs live numpy loop (10 trials x 4 ticks):")
     max_err = 0.0
     for trial in range(10):
-        y_flat = rng.normal(0, 0.1, (3,))
+        y_seq = rng.normal(0, 0.1, (4, 3))
         x_ref = rng.normal(0, 0.1, (3,))
-        x_hat_init = rng.normal(0, 0.1, (3, 1))
-        u_prev = rng.normal(0, 0.1, (3,))
+        x_hat_init = rng.normal(0, 0.1, (3,))
 
         luen.x_hat = x_hat_init.copy()
-        x_hat_np = luen.estimate(y_flat.reshape(-1, 1), u_prev.reshape(-1, 1))
-        u_np = lqr.compute(x_hat_np.ravel(), x_ref)
-        u_np = np.clip(u_np, limits[0], limits[1])
+        u_prev = np.zeros(3)
 
-        traced = interpret(
-            composed_swap.graph,
-            {"y": y_flat, "x_ref": x_ref, "u_prev": u_prev, "state_x_hat": x_hat_init},
-        )
-        err = float(np.max(np.abs(traced["u"] - u_np)))
-        max_err = max(max_err, err)
+        state = {"state_x_hat": x_hat_init.copy()}
+        for t in range(4):
+            x_hat_np = luen.estimate(y_seq[t], u_prev)
+            u_np = np.clip(lqr.compute(x_hat_np, x_ref), limits[0], limits[1])
+
+            traced = interpret(
+                composed_swap.graph,
+                {"y": y_seq[t], "x_ref": x_ref, "u_prev": u_prev,
+                 "state_x_hat": state["state_x_hat"]},
+            )
+            max_err = max(max_err, float(np.max(np.abs(traced["u"] - u_np))))
+            state["state_x_hat"] = traced["state_x_hat"]
+            u_prev = u_np
     print(f"    max abs err over 10 trials: {max_err:.2e}  "
           f"{'PASS' if max_err < 1e-12 else 'FAIL'}")
 
@@ -256,13 +280,12 @@ def main() -> None:
 
     # Trace both components (4-state, 1-input — different shapes from Stage 1-3).
     print("\n  Tracing KF (cartpole) and LQR (cartpole)...")
-    initial_P_cp = kf_cp.P.copy()
-    kf_cp.P = initial_P_cp.copy()
-    kf_cp.x_hat = np.zeros((4, 1))
+    kf_cp.P = _p0(4)
+    kf_cp.x_hat = np.zeros(4)
     kf_cp_graph = trace_node(
         kf_cp,
-        input_shapes={"measurement": (4, 1), "control_input": (1, 1)},
-        state_shapes={"x_hat": (4, 1)},
+        input_shapes={"measurement": (4,), "control_input": (1,)},
+        state_shapes={"x_hat": (4,), "P": (4, 4)},
     )
     lqr_cp_graph = trace_node(
         lqr_cp,
@@ -285,28 +308,31 @@ def main() -> None:
     print(f"    Outputs: {composed_cp.outputs}")
 
     # Verify the composed cartpole step matches the live numpy loop.
-    print("\n  Verifying cartpole composed step vs live numpy loop (10 trials, atol=1e-12):")
+    print("\n  Verifying cartpole composed step vs live numpy loop (10 trials x 4 ticks):")
     max_err = 0.0
     for trial in range(10):
-        y_flat = rng.normal(0, 0.1, (4,))       # 4 measurements
+        y_seq = rng.normal(0, 0.1, (4, 4))       # 4 measurements per tick
         x_ref = rng.normal(0, 0.1, (4,))         # reference (e.g. upright at x=0)
-        x_hat_init = rng.normal(0, 0.1, (4, 1))  # initial estimate
-        u_prev = rng.normal(0, 0.1, (1,))        # previous force
+        x_hat_init = rng.normal(0, 0.1, (4,))    # initial estimate
 
-        # Ground truth: live numpy loop, reset P to the traced-at value.
-        kf_cp.P = initial_P_cp.copy()
+        kf_cp.P = _p0(4)
         kf_cp.x_hat = x_hat_init.copy()
-        x_hat_np = kf_cp.estimate(y_flat.reshape(-1, 1), u_prev.reshape(-1, 1))
-        u_np = lqr_cp.compute(x_hat_np.ravel(), x_ref)
-        u_np = np.clip(u_np, cp_limits[0], cp_limits[1])
+        u_prev = np.zeros(1)
 
-        # Traced.
-        traced = interpret(
-            composed_cp.graph,
-            {"y": y_flat, "x_ref": x_ref, "u_prev": u_prev, "state_x_hat": x_hat_init},
-        )
-        err = float(np.max(np.abs(traced["u"] - u_np)))
-        max_err = max(max_err, err)
+        state = {"state_x_hat": x_hat_init.copy(), "state_P": _p0(4)}
+        for t in range(4):
+            x_hat_np = kf_cp.estimate(y_seq[t], u_prev)
+            u_np = np.clip(lqr_cp.compute(x_hat_np, x_ref), cp_limits[0], cp_limits[1])
+
+            traced = interpret(
+                composed_cp.graph,
+                {"y": y_seq[t], "x_ref": x_ref, "u_prev": u_prev,
+                 "state_x_hat": state["state_x_hat"], "state_P": state["state_P"]},
+            )
+            max_err = max(max_err, float(np.max(np.abs(traced["u"] - u_np))))
+            state["state_x_hat"] = traced["state_x_hat"]
+            state["state_P"] = traced["state_P"]
+            u_prev = u_np
     print(f"    max abs err over 10 trials: {max_err:.2e}  "
           f"{'PASS' if max_err < 1e-12 else 'FAIL'}")
 
@@ -314,6 +340,7 @@ def main() -> None:
     banner("Summary")
     print("  The tracer captures the control-law math as a primitive graph.")
     print("  The interpreter replays it to float-exactness vs NumpyBackend.")
+    print("  Recurrent state (KF x_hat/P) becomes explicit state_* ports — no frozen recursion.")
     print("  The composition pass stitches per-node graphs with auto-reshape.")
     print("  Swapping a component re-traces only that node; the rest is reused.")
     print("  Works for any plant (3-DOF base, 4-DOF cartpole) — no tracer-side changes.")
