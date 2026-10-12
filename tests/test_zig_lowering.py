@@ -2199,14 +2199,18 @@ class TestBuildManifest:
         # no solver facts: the base graph has no bake compiled into the .so
         assert report["solver"] is None
 
-        # graph facts: op histogram matches the composed graph, ports match
+        # graph facts: the manifest describes the *folded* graph lowering emitted
+        # (constant folding runs inside lower_zig); ports are unaffected.
+        from shinro.codegen.optimize import fold_constants
+
+        folded = fold_constants(build_base_graph())
         g = report["graph"]
-        assert g["nodes_total"] == len(build_base_graph().graph.nodes)
+        assert g["nodes_total"] == len(folded.graph.nodes)
         assert g["buf_len"] > 0
         assert g["has_solve_qp"] is False
         assert g["solve_qp"] is None  # base graph has no QP node
         expected = {}
-        for n in build_base_graph().graph.nodes:
+        for n in folded.graph.nodes:
             expected[n.op] = expected.get(n.op, 0) + 1
         assert g["op_histogram"] == expected
         assert [p["name"] for p in g["inputs"]] == build_base_graph().inputs

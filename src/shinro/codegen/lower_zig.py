@@ -59,6 +59,7 @@ import numpy as np
 from shinro.codegen import vm_schema
 from shinro.codegen.compose import ComposedGraph
 from shinro.codegen.ops import OP_HANDLERS
+from shinro.codegen.optimize import fold_constants
 from shinro.codegen.tracing import Graph, Node
 
 #: The compiled VM and every C-ABI buffer are f64, so the manifest's byte
@@ -77,6 +78,8 @@ def lower_zig(
     cg: ComposedGraph,
     out_path: str = "src/shinro/runtime/graph_data.zig",
     provenance: dict | None = None,
+    *,
+    fold: bool = True,
 ) -> None:
     """Serialize a composed graph into a Zig data table at ``out_path``.
 
@@ -90,7 +93,14 @@ def lower_zig(
     ``"provenance"``. It keeps the lowerer generic — the framework doesn't
     need to know what a generator records — while letting each generator pin
     exactly which inputs produced the graph.
+
+    ``fold`` (default on) runs :func:`shinro.codegen.optimize.fold_constants`
+    first, so the emitted table and manifest describe the folded graph while
+    ``interpret(cg)`` — the oracle — still runs on the original. The fold is
+    bit-exact.
     """
+    if fold:
+        cg = fold_constants(cg)
     g = cg.graph
 
     # Dimensionality contract: the VM is a flat 2-D row-major machine. A
