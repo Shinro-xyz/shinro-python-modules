@@ -59,7 +59,7 @@ import numpy as np
 from shinro.codegen import vm_schema
 from shinro.codegen.compose import ComposedGraph
 from shinro.codegen.ops import OP_HANDLERS
-from shinro.codegen.optimize import fold_constants
+from shinro.codegen.optimize import canonicalize, fold_constants
 from shinro.codegen.tracing import Graph, Node
 
 #: The compiled VM and every C-ABI buffer are f64, so the manifest's byte
@@ -95,12 +95,12 @@ def lower_zig(
     exactly which inputs produced the graph.
 
     ``fold`` (default on) runs :func:`shinro.codegen.optimize.fold_constants`
-    first, so the emitted table and manifest describe the folded graph while
-    ``interpret(cg)`` — the oracle — still runs on the original. The fold is
-    bit-exact.
+    and :func:`shinro.codegen.optimize.canonicalize` first, so the emitted table
+    and manifest describe the optimised graph while ``interpret(cg)`` — the
+    oracle — still runs on the original. Both passes are bit-exact.
     """
     if fold:
-        cg = fold_constants(cg)
+        cg = canonicalize(fold_constants(cg))
     g = cg.graph
 
     # Dimensionality contract: the VM is a flat 2-D row-major machine. A
