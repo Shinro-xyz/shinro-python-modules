@@ -429,14 +429,19 @@ class TestControllabilityCheckerAdversarial:
         assert report["observability"][0] == 0
 
     def test_summary_on_zero_system(self):
-        """summary on a zero system raises ValueError (Gramian does not exist for unstable A)."""
+        """summary on a zero system reports undefined Gramians, not a crash.
+
+        Regression: summary() used the controllability rank test as a stability
+        gate, so a marginally-stable (eigenvalue 0) A raised ValueError instead
+        of reporting that the infinite-horizon Gramians are undefined.
+        """
         from shinro.utils.controllability_checker import LTISystemsAnalyzer
         A = np.zeros((2, 2))
         B = np.zeros((2, 1))
         C = np.eye(2)
         ana = LTISystemsAnalyzer(A, B, C, backend=NumpyBackend())
-        with pytest.raises(ValueError):
-            ana.summary()
+        summary = ana.summary()
+        assert "*not defined* (unstable A)" in summary
 
 
 class TestLQRAdversarial:

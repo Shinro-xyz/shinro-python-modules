@@ -1,10 +1,15 @@
 
+from typing import Any
+
 import numpy as np
 from scipy.integrate import solve_ivp
 from scipy.linalg import solve_continuous_lyapunov, solve_discrete_lyapunov
-from scipy.sparse import csr_matrix, issparse
+from scipy.sparse import csr_matrix, issparse, sparray, spmatrix
 
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend
+
+#: Accepted state-space matrix forms: backend arrays, nested sequences, sparse.
+MatrixLike = np.ndarray | list | sparray | spmatrix
 
 
 class LTISystemsAnalyzer:
@@ -25,21 +30,41 @@ class LTISystemsAnalyzer:
 
     def __init__(
         self,
-        A: np.ndarray,
-        B: np.ndarray | None = None,
-        C: np.ndarray | None = None,
-        D: np.ndarray | None = None,
+        A: MatrixLike,
+        B: MatrixLike | None = None,
+        C: MatrixLike | None = None,
+        D: MatrixLike | None = None,
         dt: float | None = None,
         backend: ArrayBackend | None = None,
     ) -> None:
+        """Initialize the analyzer.
+
+        The state-space matrices may be given as backend arrays or as nested
+        Python sequences; sequences are coerced to backend arrays.
+        """
         self.bk = backend if backend is not None else NumpyBackend()
-        self.A: np.ndarray = A
-        self.B: np.ndarray = B if B is not None else self.bk.zeros((A.shape[0], 0))
-        self.C: np.ndarray = C if C is not None else self.bk.zeros((0, A.shape[0]))
-        self.D: np.ndarray = D if D is not None else self.bk.zeros((self.C.shape[0], self.B.shape[1]))
+        self.A: np.ndarray = self._coerce(A)
+        self.B: np.ndarray = self._coerce(B) if B is not None else self.bk.zeros((self.A.shape[0], 0))
+        self.C: np.ndarray = self._coerce(C) if C is not None else self.bk.zeros((0, self.A.shape[0]))
+        self.D: np.ndarray = (
+            self._coerce(D) if D is not None else self.bk.zeros((self.C.shape[0], self.B.shape[1]))
+        )
         self.dt: float | None = dt
         self._cached_values = {}
         self._validate_dimensions()
+
+    def _coerce(self, x: Any) -> Any:
+        """Coerce a Python list/tuple to a backend array.
+
+        Matrices and sparse inputs are returned unchanged; only raw sequences
+        are converted, so callers may pass e.g. ``A=[[0, 1], [-1, -2]]``
+        without an AttributeError deeper in the analysis.
+        """
+        if x is None or issparse(x):
+            return x
+        if isinstance(x, (list, tuple)):
+            return self.bk.array(x)
+        return x
 
     def _validate_dimensions(self) -> None:
         """Validate dimensions and fill missing matrices with zeros."""
@@ -136,6 +161,11 @@ class LTISystemsAnalyzer:
         Wc_np = solve_continuous_lyapunov(A_np, Q_np)
         return self.bk.from_numpy(Wc_np)
 
+    def _is_hurwitz(self) -> bool:
+        """Return True if every eigenvalue of A has strictly negative real part."""
+        eigA = self.bk.eigvals(self.A)
+        return not bool(self.bk.any(self.bk.real(eigA) >= 0))
+
     def controllability_gramian(self) -> np.ndarray:
         """Infinite-horizon controllability Gramian (continuous-time).
 
@@ -150,8 +180,7 @@ class LTISystemsAnalyzer:
         if "Wc" in self._cached_values:
             return self._cached_values["Wc"]
 
-        eigA = self.bk.eigvals(self.A)
-        if self.bk.any(self.bk.real(eigA) >= 0):
+        if not self._is_hurwitz():
             raise ValueError(
                 "A is not Hurwitz; infinite-horizon controllability Gramian does not exist. "
                 "Use controllability_gramian_finite(T) instead."
@@ -175,8 +204,7 @@ class LTISystemsAnalyzer:
         if "Wo" in self._cached_values:
             return self._cached_values["Wo"]
 
-        eigA = self.bk.eigvals(self.A)
-        if self.bk.any(self.bk.real(eigA) >= 0):
+        if not self._is_hurwitz():
             raise ValueError(
                 "A is not Hurwitz; infinite-horizon observability Gramian does not exist. "
                 "Use observability_gramian_finite(T) instead."
@@ -519,8 +547,9 @@ class LTISystemsAnalyzer:
         """
         n = self.A.shape[0]
         rank_info = self.rank_report()
-        wc = self.controllability_gramian() if self.is_controllable() else None
-        wo = self.observability_gramian() if self.is_observable() else None
+        stable = self._is_hurwitz()
+        wc = self.controllability_gramian() if stable else None
+        wo = self.observability_gramian() if stable else None
 
         lines = [
             f"System order n = {n}",
@@ -547,10 +576,14 @@ class LTISystemsAnalyzer:
         else:
             lines.append("Observability Gramian: *not defined* (unstable A).")
 
-        sigma = self.hankel_singular_values()
-        lines.append("")
-        lines.append("Hankel singular values (σ1 >= σ2 ...):")
-        lines.append("  " + ", ".join(f"{sv:.3e}" for sv in self.bk.to_numpy(sigma)))
+        if wc is not None and wo is not None:
+            sigma = self.hankel_singular_values()
+            lines.append("")
+            lines.append("Hankel singular values (σ1 >= σ2 ...):")
+            lines.append("  " + ", ".join(f"{sv:.3e}" for sv in self.bk.to_numpy(sigma)))
+        else:
+            lines.append("")
+            lines.append("Hankel singular values: *not defined* (unstable A).")
 
         err = self._cached_values.get("balanced_trunc_error_bound")
         if err is not None:

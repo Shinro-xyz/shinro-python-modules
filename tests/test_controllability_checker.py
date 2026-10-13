@@ -378,6 +378,70 @@ class TestUtility:
         assert "Wc" not in ana._cached_values
 
 
+class TestSummaryRobustness:
+    """Regression: ``summary()`` must survive an unstable-but-controllable A.
+
+    ``summary()`` used the controllability rank test as a stability gate, so an
+    unstable A (still rank-controllable) blew up with ``ValueError`` from the
+    infinite-horizon Gramian instead of reporting that the Gramians are
+    undefined.
+    """
+
+    def _unstable_controllable(self):
+        A = np.array([[0.0, 1.0], [1.0, 0.0]], dtype=float)  # eigenvalues +/-1
+        B = np.array([[0.0], [1.0]], dtype=float)
+        C = np.array([[1.0, 0.0]], dtype=float)
+        return _make_ana(A, B, C)
+
+    def test_summary_unstable_system_does_not_raise(self):
+        """An unstable but controllable system reports undefined Gramians."""
+        ana = self._unstable_controllable()
+        assert ana.is_controllable()
+        summary = ana.summary()
+        assert "*not defined* (unstable A)" in summary
+        assert "Hankel singular values: *not defined*" in summary
+
+    def test_summary_stable_system_reports_hankel(self):
+        """A Hurwitz system still gets the Hankel singular values section."""
+        A = np.array([[0, 1], [-1, -2]], dtype=float)
+        B = np.array([[0], [1]], dtype=float)
+        ana = _make_ana(A, B, np.eye(2))
+        assert "Hankel singular values (σ1 >= σ2 ...)" in ana.summary()
+
+    def test_is_hurwitz_matches_eigenvalues(self):
+        """The stability helper tracks the sign of the real eigenvalue part."""
+        stable = _make_ana(np.array([[-1.0]]), np.array([[1.0]]), np.eye(1))
+        marginal = _make_ana(np.array([[0.0]]), np.array([[1.0]]), np.eye(1))
+        assert stable._is_hurwitz()
+        assert not marginal._is_hurwitz()
+
+
+class TestListInputCoercion:
+    """Regression: raw list/tuple matrices must be coerced, not crash later."""
+
+    def test_list_matrices_are_accepted(self):
+        ana = LTISystemsAnalyzer(
+            A=[[0.0, 1.0], [-1.0, -2.0]],
+            B=[[0.0], [1.0]],
+            C=[[1.0, 0.0]],
+            D=[[0.0]],
+        )
+        assert ana.is_controllable()
+        assert ana.is_observable()
+        assert "System order" in ana.summary()
+
+    def test_list_and_array_inputs_agree(self):
+        A = [[0.0, 1.0], [-1.0, -2.0]]
+        B = [[0.0], [1.0]]
+        C = [[1.0, 0.0]]
+        from_lists = LTISystemsAnalyzer(A, B, C)
+        from_arrays = LTISystemsAnalyzer(np.array(A), np.array(B), np.array(C))
+        np.testing.assert_allclose(
+            from_lists.controllability_gramian(), from_arrays.controllability_gramian()
+        )
+        assert from_lists.rank_report() == from_arrays.rank_report()
+
+
 class TestErrorHandling:
     """Verify that invalid inputs raise appropriate errors."""
 
