@@ -27,10 +27,17 @@ So adding an op is one ``@register_op`` in :mod:`shinro.codegen.ops` (handler +
 that stay hand-written are the ones that are not single-node computations:
 array construction (``array``/``zeros``/``eye``/``diag``), shape glue
 (``reshape``/``ravel``/``hstack``), the FD meta-op ``jacobian`` (which emits a
-whole subgraph), and the boundary helpers (``to_numpy``/``from_numpy``/
-``emit_named_output``/``allclose``). Any method with no registered op still
-raises ``NotImplementedError`` naming the op to register — a loud, actionable
-signal when a new component uses a new backend method.
+whole subgraph — see below), and the boundary helpers (``to_numpy``/
+``from_numpy``/``emit_named_output``/``allclose``). Any method with no
+registered op still raises ``NotImplementedError`` naming the op to register —
+a loud, actionable signal when a new component uses a new backend method.
+
+A linear solve is deliberately **not** a tracer op. Write it as
+``inv(A) @ b`` (the SMC precedent) using the already-registered ``inv`` and
+``matmul``: that keeps eager and traced runs identical (gate A is exact) and
+needs no kernel or oracle-tolerance carve-out. ``NumpyBackend.solve`` (LAPACK
+``dgesv``) stays the eager method, but nothing traced calls it — so ``bk.solve``
+under the tracer raises the standard "not registered" error.
 """
 
 from __future__ import annotations
@@ -174,17 +181,6 @@ class TraceBackend:
         stacked = self.stack(arrays)
         n = sum(a.shape[0] for a in arrays)
         return self._emit("reshape", [stacked], (n,), target_shape=(n,))
-
-    # --- linear algebra that is not a single-node op ---
-
-    def solve(self, A: Tracer, b: Tracer) -> Tracer:
-        # solve(A, b) returns x with A.shape[1] (= A.shape[0]) and b.shape[1]
-        # if b is 2D, else b.shape[0] if 1D.
-        if len(b.shape) == 2:
-            out_shape = (A.shape[1], b.shape[1])
-        else:
-            out_shape = (A.shape[1],)
-        return self._emit("solve", [A, b], out_shape)
 
     # --- the FD meta-op: emits a whole subgraph, not a node ---
 

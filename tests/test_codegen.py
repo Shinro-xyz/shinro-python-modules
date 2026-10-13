@@ -660,15 +660,32 @@ class TestTraceBackend:
         assert ti.shape == (3, 3)
         assert bk.g.nodes[ti.node].op == "inv"
 
-    def test_solve_2d_and_1d(self):
+    def test_solve_is_inv_matmul_decomposition(self):
+        # A traced linear solve is `inv(A) @ b` — registered ops only, no `solve`
+        # node; `bk.solve` under the tracer is unregistered and fails loudly.
         bk = self._bk()
         A = _lift(bk.g, np.eye(3))
-        b2 = _lift(bk.g, np.ones((3, 2)))
-        x2 = bk.solve(A, b2)
-        assert x2.shape == (3, 2)
-        b1 = _lift(bk.g, np.ones((3,)))
-        x1 = bk.solve(A, b1)
-        assert x1.shape == (3,)
+        b = _lift(bk.g, np.ones((3,)))
+        x = bk.inv(A) @ b
+        assert x.shape == (3,)
+        ops = [n.op for n in bk.g.nodes]
+        assert "inv" in ops and "matmul" in ops and "solve" not in ops
+        with pytest.raises(NotImplementedError, match="solve"):
+            bk.solve(A, b)
+
+    def test_inv_matmul_matches_solve_within_oracle_tol(self):
+        # The `inv(A) @ b` decomposition stays inside the non-QP oracle
+        # tolerance (1e-12) of np.linalg.solve up to n=12, so a component can
+        # use it with no tolerance carve-out. (A hand-written LU cannot:
+        # ~4.5e-11 at n=6.)
+        rng = np.random.default_rng(0)
+        worst = 0.0
+        for n in (2, 3, 4, 6, 8, 12):
+            for _ in range(50):
+                A = rng.normal(size=(n, n)) + n * np.eye(n)
+                b = rng.normal(size=n)
+                worst = max(worst, float(np.max(np.abs(np.linalg.inv(A) @ b - np.linalg.solve(A, b)))))
+        assert worst < 1e-12
 
     def test_clip_records_lo_hi_attrs(self):
         bk = self._bk()
