@@ -1,44 +1,88 @@
 """A recording :class:`ArrayBackend` that captures ops into a :class:`Graph`.
 
-This is the JAX-style tracing backend — a third :class:`ArrayBackend`
-alongside ``NumpyBackend`` and ``TorchBackend``. Components take
+This is the JAX-style tracing backend — a third array backend alongside
+``NumpyBackend`` and ``TorchBackend``. Components take
 ``backend=TraceBackend(graph)`` and trace themselves by being run once with
-:class:`Tracer` values: every ``bk.*`` call emits a node instead of
-computing a float, and concrete parameters (gain ``K``, matrices ``A``/``B``)
-are frozen into the graph as ``const`` nodes the moment they touch a traced
-operation.
+:class:`Tracer` values: every ``bk.*`` call emits a node instead of computing a
+float, and concrete parameters (gain ``K``, matrices ``A``/``B``) are frozen
+into the graph as ``const`` nodes the moment they touch a traced operation.
 
-The bare operators ``@``, ``+``, ``-``, ``*``, ``.T`` are handled by
-:class:`Tracer`'s overloads (the :class:`ArrayBackend` docstring states that
-``@`` is intentionally not wrapped). This backend implements the *named*
-``ArrayBackend`` methods that components call (``eye``, ``zeros_like``,
-``inv``, ``clip``, ``where``, ``copy``).
+The named-op surface is **data-driven**, not hand-written. For every op
+registered in :mod:`shinro.codegen.ops`, the method is generated on demand by
+:meth:`TraceBackend.__getattr__`:
 
-Any method not yet implemented raises ``NotImplementedError`` naming the op
-to register — a loud, actionable signal when a new component uses a new
-backend method. This is how the op set grows incrementally, driven by real
-components, rather than being guessed up front.
+- the operands are the signature params that are **not** attributes — the
+  attribute set is already declared by the op's :class:`~shinro.codegen.vm_schema.VmOp`
+  (``attrs``/``flags``/``array_attrs``/``slot``) plus any
+  :class:`~shinro.codegen.ops.TraceSpec` extras;
+- the output shape defaults to running the op's numpy handler on
+  ``zeros(input_shape)`` — one source of truth with the interpreter oracle —
+  with a :class:`TraceSpec` shape override where that can't work (e.g. ``inv``
+  of a zero matrix is singular);
+- the call signature comes from the eager ``ArrayBackend`` when it declares the
+  op, else from ``TraceSpec.params``.
+
+So adding an op is one ``@register_op`` in :mod:`shinro.codegen.ops` (handler +
+``VmOp`` + optional ``TraceSpec``), never a new method here. The only methods
+that stay hand-written are the ones that are not single-node computations:
+array construction (``array``/``zeros``/``eye``/``diag``), shape glue
+(``reshape``/``ravel``/``hstack``), the FD meta-op ``jacobian`` (which emits a
+whole subgraph), and the boundary helpers (``to_numpy``/``from_numpy``/
+``emit_named_output``/``allclose``). Any method with no registered op still
+raises ``NotImplementedError`` naming the op to register — a loud, actionable
+signal when a new component uses a new backend method.
 """
 
 from __future__ import annotations
 
+import inspect
 from typing import Any
 
 import numpy as np
 
-from shinro.codegen.ops import missing_op_error
-from shinro.codegen.tracing import Graph, ShapeMismatchError, Tracer, _lift
+from shinro.codegen.ops import OP_HANDLERS, TRACE_SPECS, TraceSpec, missing_op_error
+from shinro.codegen.tracing import Graph, Node, ShapeMismatchError, Tracer, _lift
+from shinro.codegen.vm_schema import VmOp, get_vm_op
+from shinro.utils.array_backend import ArrayBackend
+
+#: backend-method name -> op name, where they differ (the op is emitted under
+#: a different name than the method a component calls).
+_OP_ALIASES = {"slice_": "slice"}
+
+
+def _attr_param_names(vm: VmOp) -> set[str]:
+    """The signature params that are emit attrs (per the op's ``VmOp`` schema)."""
+    names = {a.name for a in vm.attrs} | set(vm.flags) | set(vm.array_attrs)
+    if vm.slot.startswith("attr:"):
+        names.add(vm.slot.split(":", 1)[1])
+    elif vm.slot == "axis_code":
+        names.add("axis")
+    return names
+
+
+def _handler_shape(op: str, operands: list[Tracer], attrs: dict[str, Any]) -> tuple[int, ...]:
+    """Default output shape = the op's numpy handler run on zeros(input_shape).
+
+    The handler is the single source of truth for the oracle value; running it
+    on zero arrays of the operand shapes makes it the shape source too, so the
+    trace-time shape and the interpreted value can't drift. Warnings (log of 0,
+    division by 0, ...) are irrelevant — only the returned shape matters.
+    """
+    node = Node(op=op, inputs=list(range(len(operands))), shape=(), attrs=dict(attrs))
+    values = {i: np.zeros(t.shape, dtype=np.float64) for i, t in enumerate(operands)}
+    with np.errstate(all="ignore"):
+        result = OP_HANDLERS[op](node, values, {})
+    return tuple(np.asarray(result).shape)
 
 
 class TraceBackend:
     """An :class:`ArrayBackend` that records operations into a :class:`Graph`.
 
     Not a subclass of :class:`shinro.utils.array_backend.ArrayBackend` because
-    that ABC requires every method to be implemented. Instead we implement
-    the methods components actually call and ``NotImplementedError`` the rest
-    — the tracer grows its op set incrementally, driven by real components.
-    Components receive this backend via ``self.bk`` and call ``self.bk.<op>``
-    exactly as they would with ``NumpyBackend``.
+    that ABC requires every method to be implemented and, crucially, its
+    declared methods would *shadow* :meth:`__getattr__` (so the generated
+    dispatch would never run). Components receive this backend via ``self.bk``
+    and call ``self.bk.<op>`` exactly as they would with ``NumpyBackend``.
 
     Args:
         graph: The graph to record ops into.
@@ -99,17 +143,39 @@ class TraceBackend:
             raise NotImplementedError("TraceBackend.diag only supports 1D -> 2D")
         return self._emit("diag", [x], out_shape)
 
-    def copy(self, x: Tracer) -> Tracer:
-        return self._emit("copy", [x], x.shape)
+    # --- shape glue (emitted as reshape, not a dedicated op) ---
 
-    # --- linear algebra ---
+    def reshape(self, x: Tracer, *shape: int) -> Tracer:
+        # Converts the (shape,) or *shape call forms, then emits a reshape op.
+        # The reshape node stores its target shape in attrs, same as the
+        # composition pass's auto-inserted reshapes.
+        if len(shape) == 1 and isinstance(shape[0], (tuple, list)):
+            shape = tuple(shape[0])
+        out_shape = tuple(shape)
+        return self._emit("reshape", [x], out_shape, target_shape=out_shape)
 
-    def inv(self, x: Tracer) -> Tracer:
-        return self._emit("inv", [x], x.shape)
+    def ravel(self, x: Tracer) -> Tracer:
+        # Flatten to 1-D. Pure data movement — emitted as a reshape to the
+        # trace-time-known element count, so the VM reuses its reshape arm
+        # rather than growing a dedicated op (same trick as hstack).
+        n = 1
+        for d in x.shape:
+            n *= d
+        return self._emit("reshape", [x], (n,), target_shape=(n,))
 
-    def cholesky(self, x: Tracer) -> Tracer:
-        # Symmetric positive-definite (n, n) -> lower-triangular L, same shape.
-        return self._emit("cholesky", [x], x.shape)
+    def hstack(self, arrays: list[Tracer]) -> Tracer:
+        # 1-D hstack == stack along a new leading axis + flatten: pure data
+        # movement, bit-exact with np.hstack. Lets MPC_DeltaU's
+        # x0_aug = hstack([x0, u_prev]) trace without a new VM op.
+        if not arrays:
+            raise NotImplementedError("TraceBackend.hstack of empty list")
+        if any(len(a.shape) != 1 for a in arrays):
+            raise NotImplementedError(f"TraceBackend.hstack only supports 1-D arrays (got shapes {[a.shape for a in arrays]})")
+        stacked = self.stack(arrays)
+        n = sum(a.shape[0] for a in arrays)
+        return self._emit("reshape", [stacked], (n,), target_shape=(n,))
+
+    # --- linear algebra that is not a single-node op ---
 
     def solve(self, A: Tracer, b: Tracer) -> Tracer:
         # solve(A, b) returns x with A.shape[1] (= A.shape[0]) and b.shape[1]
@@ -120,13 +186,7 @@ class TraceBackend:
             out_shape = (A.shape[1],)
         return self._emit("solve", [A, b], out_shape)
 
-    def solve_qp(self, q: Tracer, H, A, lb, ub) -> Tracer:
-        # H/A/lb/ub are concrete (config-baked at construction) — fold them
-        # into attrs for the interpreter oracle. The Zig VM ignores them: it
-        # drives the codegen static solver global, which has the same problem
-        # baked in. The node's output is the full QP solution, same length as
-        # q; MPC slices out u[:m] with a downstream slice op.
-        return self._emit("solve_qp", [q], q.shape, H=H, A=A, lb=lb, ub=ub)
+    # --- the FD meta-op: emits a whole subgraph, not a node ---
 
     def jacobian(self, f: Any, x: Tracer, eps: float = 1e-6, *, batched: bool = True) -> Tracer:
         # Central finite differences, mirroring NumpyBackend.jacobian — but as
@@ -174,256 +234,6 @@ class TraceBackend:
         minus = self.slice_(out, n, n_probes)
         return ((plus - minus) * (1.0 / (2.0 * eps))).T
 
-    # --- elementwise / selection ---
-
-    def clip(self, x: Tracer, lo: Any, hi: Any) -> Tracer:
-        # lo/hi are concrete (from config) — fold them into attrs as consts.
-        lo_arr = np.asarray(lo, dtype=np.float64) if not isinstance(lo, Tracer) else None
-        hi_arr = np.asarray(hi, dtype=np.float64) if not isinstance(hi, Tracer) else None
-        return self._emit("clip", [x], x.shape, lo=lo_arr, hi=hi_arr)
-
-    def where(self, cond: Tracer, a: Tracer, b: Tracer) -> Tracer:
-        a = _lift(self.g, a)
-        b = _lift(self.g, b)
-        cond = _lift(self.g, cond)
-        return self._emit("where", [cond, a, b], a.shape)
-
-    def any(self, x: Tracer) -> Tracer:
-        out_shape: tuple[int, ...] = ()
-        return self._emit("any", [x], out_shape)
-
-    def stack(self, arrays: list[Tracer]) -> Tracer:
-        # stack along a new leading axis — all inputs same shape.
-        if not arrays:
-            raise NotImplementedError("TraceBackend.stack of empty list")
-        base = arrays[0].shape
-        out_shape = (len(arrays),) + base
-        return self._emit("stack", [a for a in arrays], out_shape)
-
-    def concat(self, arrays: list[Tracer], *, axis: int = 0) -> Tracer:
-        # Concatenate along an existing axis (ONNX Concat). The VM is 1-D/2-D, so
-        # only axis 0 (row blocks, or a flat vector join) and axis 1 (row-wise
-        # column join with equal row counts) are representable.
-        if not arrays:
-            raise NotImplementedError("TraceBackend.concat of empty list")
-        if axis not in (0, 1):
-            raise NotImplementedError(f"TraceBackend.concat axis={axis} (only 0 and 1 are representable)")
-        base = arrays[0].shape
-        if axis == 0:
-            out_shape = (sum(a.shape[0] for a in arrays),) + tuple(base[1:])
-        else:
-            if any(a.shape[0] != base[0] for a in arrays):
-                raise ValueError("TraceBackend.concat axis=1 needs equal row counts")
-            out_shape = (base[0], sum(a.shape[1] for a in arrays))
-        return self._emit("concat", [a for a in arrays], out_shape, axis=axis)
-
-    def gather(self, x: Tracer, idx: Tracer, *, axis: int = 0) -> Tracer:
-        # ONNX Gather: index-select along one axis. `idx` is a flat index vector
-        # (stored as f64; the VM converts per element) and replaces the selected
-        # axis, so the result keeps x's other dimensions.
-        x = _lift(self.g, x)
-        idx = _lift(self.g, idx)
-        if axis not in (0, 1):
-            raise NotImplementedError(f"TraceBackend.gather axis={axis} (only 0 and 1 are representable)")
-        if axis == 1 and len(x.shape) < 2:
-            raise NotImplementedError("TraceBackend.gather axis=1 needs a 2-D operand")
-        n = idx.shape[0]
-        out_shape = (n, x.shape[1]) if axis == 1 else (n,) + tuple(x.shape[1:])
-        return self._emit("gather", [x, idx], out_shape, axis=axis)
-
-    def hstack(self, arrays: list[Tracer]) -> Tracer:
-        # 1-D hstack == stack along a new leading axis + flatten: pure data
-        # movement, bit-exact with np.hstack. Lets MPC_DeltaU's
-        # x0_aug = hstack([x0, u_prev]) trace without a new VM op.
-        if not arrays:
-            raise NotImplementedError("TraceBackend.hstack of empty list")
-        if any(len(a.shape) != 1 for a in arrays):
-            raise NotImplementedError(f"TraceBackend.hstack only supports 1-D arrays (got shapes {[a.shape for a in arrays]})")
-        stacked = self.stack(arrays)
-        n = sum(a.shape[0] for a in arrays)
-        return self._emit("reshape", [stacked], (n,), target_shape=(n,))
-
-    def reshape(self, x: Tracer, *shape: int) -> Tracer:
-        # Converts the (shape,) or *shape call forms, then emits a reshape op.
-        # The reshape node stores its target shape in attrs, same as the
-        # composition pass's auto-inserted reshapes.
-        if len(shape) == 1 and isinstance(shape[0], (tuple, list)):
-            shape = tuple(shape[0])
-        out_shape = tuple(shape)
-        return self._emit("reshape", [x], out_shape, target_shape=out_shape)
-
-    def ravel(self, x: Tracer) -> Tracer:
-        # Flatten to 1-D. Pure data movement — emitted as a reshape to the
-        # trace-time-known element count, so the VM reuses its reshape arm
-        # rather than growing a dedicated op (same trick as hstack).
-        n = 1
-        for d in x.shape:
-            n *= d
-        return self._emit("reshape", [x], (n,), target_shape=(n,))
-
-    # --- deterministic-policy ops (NN controllers in deterministic mode) ---
-
-    def gemm(
-        self,
-        a: Tracer,
-        b: Tracer,
-        c: Tracer,
-        *,
-        alpha: float = 1.0,
-        beta: float = 1.0,
-        transB: bool = False,
-    ) -> Tracer:
-        # Fused dense layer Y = alpha*(A@B') + beta*C. A is (k,) or (m,k); B is
-        # (k,n), or (n,k) with transB (torch nn.Linear layout). The output
-        # follows numpy's matmul rank convention: (n,) for a 1-D activation,
-        # (m,n) otherwise. c broadcasts like numpy. The Zig VM fuses the
-        # contraction, the alpha/beta scales, and the bias add into one kernel
-        # (linalg.gemm); alpha/beta/transB are baked per node — see lower_zig.
-        a = _lift(self.g, a)
-        b = _lift(self.g, b)
-        c = _lift(self.g, c)
-        n = b.shape[0] if transB else b.shape[1]
-        out_shape: tuple[int, ...] = (n,) if len(a.shape) == 1 else (a.shape[0], n)
-        return self._emit("gemm", [a, b, c], out_shape, alpha=alpha, beta=beta, transB=transB)
-
-    def tanh(self, x: Tracer) -> Tracer:
-        return self._emit("tanh", [x], x.shape)
-
-    def sigmoid(self, x: Tracer) -> Tracer:
-        return self._emit("sigmoid", [x], x.shape)
-
-    def softmax(self, x: Tracer) -> Tracer:
-        # Softmax over the last axis (numpy axis=-1); shape-preserving.
-        return self._emit("softmax", [x], x.shape)
-
-    def gelu(self, x: Tracer) -> Tracer:
-        # GELU, tanh approximation (GPT gelu_new); shape-preserving.
-        return self._emit("gelu", [x], x.shape)
-
-    def elu(self, x: Tracer, *, alpha: float = 1.0) -> Tracer:
-        # ELU; alpha is baked per node by the lowerer.
-        return self._emit("elu", [x], x.shape, alpha=alpha)
-
-    def leaky_relu(self, x: Tracer, *, alpha: float = 0.01) -> Tracer:
-        # LeakyReLU; alpha is baked per node by the lowerer (the elu pattern).
-        return self._emit("leaky_relu", [x], x.shape, alpha=alpha)
-
-    def layernorm(self, x: Tracer, scale: Tracer, bias: Tracer, *, eps: float = 1e-5) -> Tracer:
-        # Layer normalization over the last axis (numpy axis=-1), shape-preserving.
-        # scale/bias are the ONNX Scale/B operands (one entry per feature); eps is
-        # baked per node by the lowerer, exactly like elu's alpha.
-        x = _lift(self.g, x)
-        scale = _lift(self.g, scale)
-        bias = _lift(self.g, bias)
-        return self._emit("layernorm", [x, scale, bias], x.shape, eps=eps)
-
-    # --- recurrent cells (fused; ONNX LSTM/GRU/RNN semantics) ---
-
-    def lstm(
-        self,
-        x: Tracer,
-        w: Tracer,
-        r: Tracer,
-        b: Tracer,
-        h_prev: Tracer,
-        c_prev: Tracer,
-    ) -> Tracer:
-        # One fused LSTM step. w is (4H, I), r is (4H, H), b is Wb(4H) ‖ Rb(4H);
-        # the output is [h_next ‖ c_next] (2H,), the ML-Agents recurrent layout.
-        # H comes from the state operand, not the weights, so a mis-shaped h/w
-        # pair surfaces here rather than as silent index drift.
-        operands = [_lift(self.g, t) for t in (x, w, r, b, h_prev, c_prev)]
-        H = operands[4].shape[0]
-        return self._emit("lstm", operands, (2 * H,))
-
-    def gru(
-        self,
-        x: Tracer,
-        w: Tracer,
-        r: Tracer,
-        b: Tracer,
-        h_prev: Tracer,
-        *,
-        linear_before_reset: bool = False,
-    ) -> Tracer:
-        # One fused GRU step. w is (3H, I), r is (3H, H), b is the 6H bias block.
-        # linear_before_reset moves the reset gate across the recurrent matmul
-        # (ONNX semantics); it is baked into the node's aux by the lowerer.
-        operands = [_lift(self.g, t) for t in (x, w, r, b, h_prev)]
-        H = operands[4].shape[0]
-        return self._emit("gru", operands, (H,), linear_before_reset=linear_before_reset)
-
-    def rnn(self, x: Tracer, w: Tracer, r: Tracer, b: Tracer, h_prev: Tracer) -> Tracer:
-        # One fused vanilla-RNN step. w is (H, I), r is (H, H), b is Wb(H) ‖ Rb(H).
-        operands = [_lift(self.g, t) for t in (x, w, r, b, h_prev)]
-        H = operands[4].shape[0]
-        return self._emit("rnn", operands, (H,))
-
-    def sin(self, x: Tracer) -> Tracer:
-        return self._emit("sin", [x], x.shape)
-
-    def cos(self, x: Tracer) -> Tracer:
-        return self._emit("cos", [x], x.shape)
-
-    def relu(self, x: Tracer) -> Tracer:
-        return self._emit("relu", [x], x.shape)
-
-    def div(self, a: Tracer, b: Tracer) -> Tracer:
-        a = _lift(self.g, a)
-        b = _lift(self.g, b)
-        return self._emit("div", [a, b], a.shape)
-
-    def exp(self, x: Tracer) -> Tracer:
-        return self._emit("exp", [x], x.shape)
-
-    def sqrt(self, x: Tracer) -> Tracer:
-        return self._emit("sqrt", [x], x.shape)
-
-    def log(self, x: Tracer) -> Tracer:
-        return self._emit("log", [x], x.shape)
-
-    def mod(self, a: Tracer, b: Tracer, *, fmod: bool = False) -> Tracer:
-        # Elementwise modulo; fmod picks C fmod (@rem, sign of dividend) over
-        # Python % (@mod, sign of divisor). The bit is baked into the node aux.
-        a = _lift(self.g, a)
-        b = _lift(self.g, b)
-        return self._emit("mod", [a, b], a.shape, fmod=fmod)
-
-    def abs(self, x: Tracer) -> Tracer:
-        return self._emit("abs", [x], x.shape)
-
-    def sign(self, x: Tracer) -> Tracer:
-        return self._emit("sign", [x], x.shape)
-
-    def min(self, x: Tracer, axis: int | None = None) -> Tracer:
-        # Minimum reduction. axis=None collapses to a 0-d scalar (shape ()),
-        # axis=0/1 reduce that axis of a 2-D input — numpy's semantics, so the
-        # interpreter handler is a one-liner. The Zig VM carries the axis in
-        # the node's aux (0 = None, 1 = axis 0, 2 = axis 1) and dispatches to
-        # linalg.min_all / min_axis0 / min_axis1.
-        if axis is None:
-            out_shape: tuple[int, ...] = ()
-        elif axis == 0:
-            out_shape = x.shape[1:]
-        elif axis == 1:
-            out_shape = (x.shape[0],) + x.shape[2:]
-        else:
-            raise NotImplementedError(f"TraceBackend.min supports axis in (None, 0, 1), got {axis}")
-        return self._emit("min", [x], out_shape, axis=axis)
-
-    def argmax(self, x: Tracer) -> Tracer:
-        # numpy argmax over the last axis collapses it to a scalar index.
-        return self._emit("argmax", [x], ())
-
-    def one_hot(self, idx: Tracer, depth: int) -> Tracer:
-        # idx is a scalar Tracer (argmax result) → one-hot (depth,) row.
-        return self._emit("one_hot", [idx], (depth,), depth=depth)
-
-    def slice_(self, x: Tracer, start: int, stop: int) -> Tracer:
-        # x[start:stop] along the first axis; start/stop are compile-time.
-        out_shape = (stop - start,) + x.shape[1:]
-        return self._emit("slice", [x], out_shape, start=start, stop=stop)
-
     # --- conversions (no-ops under tracing) ---
 
     def to_numpy(self, x: Tracer) -> Tracer:
@@ -449,10 +259,60 @@ class TraceBackend:
             "values. Rewrite the component to avoid allclose in the compute path."
         )
 
-    # --- everything else: loud NotImplementedError naming the op to add ---
+    # --- everything else: the registry-driven op dispatcher ---
 
     def __getattr__(self, name: str) -> Any:
-        # Called only for attributes not found normally. Emit the standard
-        # "register this op" error so new components surface missing ops
-        # with an actionable message.
-        raise missing_op_error(name)
+        """Generate the method for a registered op (see the module docstring).
+
+        Called only for attributes not found normally — i.e. op methods, which
+        are no longer hand-written. An unknown name raises the standard
+        "register this op" error so new components surface missing ops loudly.
+        """
+        op = _OP_ALIASES.get(name, name)
+        if op not in OP_HANDLERS:
+            raise missing_op_error(name)
+        spec = TRACE_SPECS.get(op, TraceSpec())
+        vm = get_vm_op(op)
+        attr_params = _attr_param_names(vm) | set(spec.attrs)
+        array_attrs = set(vm.array_attrs)
+        sig = _signature(op, spec)
+
+        def method(*args: Any, **kwargs: Any) -> Tracer:
+            bound = sig.bind(*args, **kwargs)
+            bound.apply_defaults()
+            operands: list[Any] = []
+            attrs: dict[str, Any] = {}
+            for pname, val in bound.arguments.items():
+                if spec.variadic is not None and pname == spec.variadic:
+                    operands.extend(val)
+                elif pname in attr_params:
+                    attrs[pname] = np.asarray(val, dtype=np.float64) if pname in array_attrs else val
+                else:
+                    operands.append(val)
+            lifted = [_lift(self.g, x) for x in operands]
+            if spec.validate is not None:
+                spec.validate(tuple(t.shape for t in lifted), attrs)
+            if spec.shape is not None:
+                shape = spec.shape(tuple(t.shape for t in lifted), attrs)
+            else:
+                shape = _handler_shape(op, lifted, attrs)
+            return self._emit(op, lifted, shape, **attrs)
+
+        method.__name__ = name
+        return method
+
+
+def _signature(op: str, spec: TraceSpec) -> inspect.Signature:
+    """The op's public call signature.
+
+    ``TraceSpec.params`` (a throwaway function whose signature *is* the spec)
+    wins; otherwise the eager ``ArrayBackend`` method named ``op`` is the
+    reference (self stripped). Ops that are neither must declare ``params``.
+    """
+    if spec.params is not None:
+        return inspect.signature(spec.params)
+    eager = getattr(ArrayBackend, op, None)
+    if eager is None:
+        raise NotImplementedError(f"op '{op}' has no TraceSpec.params and is not on ArrayBackend")
+    params = list(inspect.signature(eager).parameters.values())[1:]  # drop self
+    return inspect.Signature(parameters=params)

@@ -27,6 +27,7 @@ policy's forward pass traces and lowers like any classical controller.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -41,7 +42,42 @@ OpHandler = Callable[[Node, dict[int, np.ndarray], dict[str, np.ndarray]], np.nd
 OP_HANDLERS: dict[str, OpHandler] = {}
 
 
-def register_op(name: str, *, vm: VmOp) -> Callable[[OpHandler], OpHandler]:
+@dataclass(frozen=True)
+class TraceSpec:
+    """Trace-time metadata for an op — the third facet of its registration.
+
+    The handler is the computation and the :class:`VmOp` is the lowering; this
+    declares how the op is *traced*. For most ops it is unnecessary: the
+    operands are derived as the signature params that are not attributes (the
+    attribute set already comes from ``VmOp``), and the output shape defaults to
+    running the handler on ``zeros(input_shape)``. A field is needed only when
+    that default is wrong.
+
+    Args:
+        params: A throwaway function whose signature is the op's public call
+            signature, e.g. ``lambda a, b, *, alpha=1.0: None``. Only needed when
+            ``ArrayBackend`` does not declare the op (the trace/lower-only ops).
+        attrs: Signature params that are emit attrs but are **not** in the
+            ``VmOp`` (e.g. ``one_hot``'s ``depth``, ``slice``'s ``stop``).
+        variadic: The name of a param holding a *list* of tracers — spliced into
+            N node inputs (:func:`stack`/:func:`concat`).
+        shape: ``(operand_shapes, attrs) -> out_shape``, replacing the default
+            dummy-exec shape (needed where the handler can't run on zeros, e.g.
+            :func:`inv` of a singular zero matrix, or an attr-driven shape).
+    """
+
+    params: Callable[..., Any] | None = None
+    attrs: tuple[str, ...] = ()
+    variadic: str | None = None
+    shape: Callable[[tuple[tuple[int, ...], ...], dict[str, Any]], tuple[int, ...]] | None = None
+    validate: Callable[[tuple[tuple[int, ...], ...], dict[str, Any]], None] | None = None
+
+
+#: op name -> trace spec, populated by ``register_op`` (default: empty).
+TRACE_SPECS: dict[str, TraceSpec] = {}
+
+
+def register_op(name: str, *, vm: VmOp, trace: TraceSpec | None = None) -> Callable[[OpHandler], OpHandler]:
     """Register a handler for an op name. The data-driven switch.
 
     ``vm`` is **mandatory**: it declares the op's Zig lowering schema (see
@@ -51,14 +87,46 @@ def register_op(name: str, *, vm: VmOp) -> Callable[[OpHandler], OpHandler]:
     scalar attributes and no rename still declares ``vm=VmOp()`` explicitly, so
     no op can lower by silent default and the schema set can never drift from
     the handler set.
+
+    ``trace`` is optional: it declares the trace-time behaviour only where the
+    defaults (operands = non-attr params; shape = handler on zeros) don't fit.
+    The tracer is generated from it, so adding an op is one decorator, not a
+    method in :mod:`shinro.codegen.trace_backend`.
     """
 
     def decorator(fn: OpHandler) -> OpHandler:
         OP_HANDLERS[name] = fn
         register_vm_op(name, vm)
+        TRACE_SPECS[name] = trace or TraceSpec()
         return fn
 
     return decorator
+
+
+# ─── trace-time guards (declared here, not as tracer methods) ──────────────
+
+
+def _require_nonempty_stack(shapes: tuple, attrs: dict) -> None:
+    if not shapes:
+        raise NotImplementedError("TraceBackend.stack of empty list")
+
+
+def _validate_concat(shapes: tuple, attrs: dict) -> None:
+    if not shapes:
+        raise NotImplementedError("TraceBackend.concat of empty list")
+    axis = attrs.get("axis", 0)
+    if axis not in (0, 1):
+        raise NotImplementedError(f"TraceBackend.concat axis={axis} (only 0 and 1 are representable)")
+    if axis == 1 and any(s[0] != shapes[0][0] for s in shapes):
+        raise ValueError("TraceBackend.concat axis=1 needs equal row counts")
+
+
+def _validate_gather(shapes: tuple, attrs: dict) -> None:
+    axis = attrs.get("axis", 0)
+    if axis not in (0, 1):
+        raise NotImplementedError(f"TraceBackend.gather axis={axis} (only 0 and 1 are representable)")
+    if axis == 1 and len(shapes[0]) < 2:
+        raise NotImplementedError("TraceBackend.gather axis=1 needs a 2-D operand")
 
 
 # ─── graph-structure ops ──────────────────────────────────────────────────
@@ -94,6 +162,7 @@ def _matmul(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndar
 @register_op(
     "gemm",
     vm=VmOp(attrs=(AttrSpec("alpha", 1.0), AttrSpec("beta", 1.0)), flags=("transB",)),
+    trace=TraceSpec(params=lambda a, b, c, *, alpha=1.0, beta=1.0, transB=False: None),
 )
 def _gemm(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     """Fused dense layer ``Y = alpha * (A @ B') + beta * C``.
@@ -155,12 +224,12 @@ def _transpose(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.n
     return values[node.inputs[0]].T
 
 
-@register_op("inv", vm=VmOp())
+@register_op("inv", vm=VmOp(), trace=TraceSpec(shape=lambda shapes, attrs: shapes[0]))
 def _inv(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     return np.linalg.inv(values[node.inputs[0]])
 
 
-@register_op("cholesky", vm=VmOp())
+@register_op("cholesky", vm=VmOp(), trace=TraceSpec(shape=lambda shapes, attrs: shapes[0]))
 def _cholesky(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     """Lower-triangular Cholesky factor ``L`` with ``L @ L.T == a``.
 
@@ -172,7 +241,7 @@ def _cholesky(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.nd
     return np.linalg.cholesky(values[node.inputs[0]])
 
 
-@register_op("solve_qp", vm=VmOp())
+@register_op("solve_qp", vm=VmOp(), trace=TraceSpec(attrs=("H", "A", "lb", "ub"), shape=lambda shapes, attrs: shapes[0]))
 def _solve_qp(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     """Solve ``min ½ uᵀ H u + qᵀ u`` s.t. ``lb ≤ A u ≤ ub``.
 
@@ -232,7 +301,7 @@ def _any(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray
     return np.asarray(np.any(values[node.inputs[0]]))
 
 
-@register_op("stack", vm=VmOp())
+@register_op("stack", vm=VmOp(), trace=TraceSpec(variadic="arrays", validate=_require_nonempty_stack))
 def _stack(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     # stack([a, b, ...]) along a new leading axis (numpy's default axis=0).
     # All inputs share the same shape; output is (len(inputs),) + that shape.
@@ -289,7 +358,7 @@ def _elu(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray
     return np.where(x > 0.0, x, alpha * (np.exp(x) - 1.0))
 
 
-@register_op("leaky_relu", vm=VmOp(attrs=(AttrSpec("alpha", 0.01),)))
+@register_op("leaky_relu", vm=VmOp(attrs=(AttrSpec("alpha", 0.01),)), trace=TraceSpec(params=lambda x, *, alpha=0.01: None))
 def _leaky_relu(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     """LeakyReLU: ``x if x >= 0 else alpha * x``; ``alpha`` defaults to 0.01.
 
@@ -302,7 +371,7 @@ def _leaky_relu(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.
     return np.where(x >= 0.0, x, alpha * x)
 
 
-@register_op("layernorm", vm=VmOp(attrs=(AttrSpec("eps", 1e-5),)))
+@register_op("layernorm", vm=VmOp(attrs=(AttrSpec("eps", 1e-5),)), trace=TraceSpec(params=lambda x, scale, bias, *, eps=1e-5: None))
 def _layernorm(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     """Layer normalization over the last axis, the torch/ONNX canonical form.
 
@@ -341,7 +410,11 @@ def _logistic(x: np.ndarray) -> np.ndarray:
     return 1.0 / (1.0 + np.exp(-x))
 
 
-@register_op("lstm", vm=VmOp())
+@register_op(
+    "lstm",
+    vm=VmOp(),
+    trace=TraceSpec(params=lambda x, w, r, b, h_prev, c_prev: None, shape=lambda shapes, attrs: (2 * shapes[4][0],)),
+)
 def _lstm(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     """Fused LSTM cell: returns ``[h_next(H) ‖ c_next(H)]``.
 
@@ -367,7 +440,14 @@ def _lstm(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarra
     return np.concatenate([h_next, c_next])
 
 
-@register_op("gru", vm=VmOp(flags=("linear_before_reset",)))
+@register_op(
+    "gru",
+    vm=VmOp(flags=("linear_before_reset",)),
+    trace=TraceSpec(
+        params=lambda x, w, r, b, h_prev, *, linear_before_reset=False: None,
+        shape=lambda shapes, attrs: (shapes[4][0],),
+    ),
+)
 def _gru(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     """Fused GRU cell: returns ``h_next(H)``.
 
@@ -399,7 +479,7 @@ def _gru(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray
     return (1.0 - z) * n + z * h
 
 
-@register_op("rnn", vm=VmOp())
+@register_op("rnn", vm=VmOp(), trace=TraceSpec(params=lambda x, w, r, b, h_prev: None, shape=lambda shapes, attrs: (shapes[4][0],)))
 def _rnn(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     """Vanilla Elman RNN cell: ``h_next = tanh(x·Wᵀ + h·Rᵀ + Wb + Rb)``.
 
@@ -414,7 +494,7 @@ def _rnn(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray
     return np.tanh(x @ w.T + h @ r.T + b[:H] + b[H:])
 
 
-@register_op("concat", vm=VmOp(slot="attr:axis"))
+@register_op("concat", vm=VmOp(slot="attr:axis"), trace=TraceSpec(variadic="arrays", validate=_validate_concat))
 def _concat(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     """Concatenate along an existing axis (ONNX ``Concat``).
 
@@ -426,7 +506,7 @@ def _concat(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndar
     return np.concatenate([values[i] for i in node.inputs], axis=axis)
 
 
-@register_op("gather", vm=VmOp(slot="attr:axis"))
+@register_op("gather", vm=VmOp(slot="attr:axis"), trace=TraceSpec(params=lambda x, idx, *, axis=0: None, validate=_validate_gather))
 def _gather(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     """Index-select along one axis (ONNX ``Gather``).
 
@@ -470,13 +550,13 @@ def _sqrt(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarra
     return np.sqrt(values[node.inputs[0]])
 
 
-@register_op("log", vm=VmOp())
+@register_op("log", vm=VmOp(), trace=TraceSpec(params=lambda x: None))
 def _log(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     """Elementwise natural logarithm (ONNX ``Log``, the C ``log``)."""
     return np.log(values[node.inputs[0]])
 
 
-@register_op("mod", vm=VmOp(flags=("fmod",)))
+@register_op("mod", vm=VmOp(flags=("fmod",)), trace=TraceSpec(params=lambda a, b, *, fmod=False: None))
 def _mod(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     """Elementwise modulo (ONNX ``Mod``), numpy semantics.
 
@@ -529,7 +609,7 @@ def _min(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray
     return np.min(values[node.inputs[0]], axis=node.attrs.get("axis"))
 
 
-@register_op("one_hot", vm=VmOp())
+@register_op("one_hot", vm=VmOp(), trace=TraceSpec(attrs=("depth",), shape=lambda shapes, attrs: (attrs["depth"],)))
 def _one_hot(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     # one_hot(x, depth): x is a scalar index → one-hot row vector.
     depth = node.attrs["depth"]
@@ -539,7 +619,15 @@ def _one_hot(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.nda
     return out
 
 
-@register_op("slice", vm=VmOp(slot="attr:start"))
+@register_op(
+    "slice",
+    vm=VmOp(slot="attr:start"),
+    trace=TraceSpec(
+        params=lambda x, start, stop: None,
+        attrs=("stop",),
+        shape=lambda shapes, attrs: (attrs["stop"] - attrs["start"],) + tuple(shapes[0][1:]),
+    ),
+)
 def _slice(node: Node, values: dict[int, np.ndarray], inputs: dict[str, np.ndarray]) -> np.ndarray:
     # slice(x, start, stop): x[start:stop] along the first axis.
     start = node.attrs["start"]
