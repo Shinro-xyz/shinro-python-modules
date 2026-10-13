@@ -366,10 +366,23 @@ class Quadrotor(Plant):
             B = dt·∂f/∂u is (12, 4).
         """
         if u0 is None:
-            w_hover = (self.m * self.g / (4.0 * self.k)) ** 0.5
-            u0 = self.bk.array([w_hover, w_hover, w_hover, w_hover])
+            u0 = self.operating_control()
         A_c, B_c = linearize_plant(self, x0, u0, eps=eps)
         return discretize_euler(A_c, B_c, self.dt, backend=self.bk)
+
+    def operating_control(self):
+        """Hover rotor speeds — the equilibrium the control matrix is evaluated at.
+
+        The rotors' thrust is quadratic in speed, so ``g(x, 0) = 0``; the
+        tangent model (:meth:`~shinro.components.Plant.model_terms`) must be
+        taken about the hover equilibrium
+        :math:`\\omega_{\\text{hover}} = \\sqrt{mg/(4k)}` rather than zero.
+
+        Returns:
+            Hover rotor speeds (4,).
+        """
+        w_hover = (self.m * self.g / (4.0 * self.k)) ** 0.5
+        return self.bk.array([w_hover, w_hover, w_hover, w_hover])
 
     def step(self, u):
         """Execute one control step with explicit Euler integration.

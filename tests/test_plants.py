@@ -807,6 +807,86 @@ class TestControlMatrix:
             Bare().control_matrix(bk.zeros(1), bk.zeros(1))
 
 
+class TestModelTerms:
+    """``Plant.model_terms`` — the ``(f_x, g_x)`` pair at the operating point.
+
+    The single site the codegen (:func:`_trace_plant_model`) and gate A
+    evaluate, so the live and lowered SMC models cannot drift. Control-affine
+    plants reduce to the drift convention; a rotor plant is linearized about
+    hover.
+    """
+
+    @staticmethod
+    def _quad(bk):
+        from shinro.plants.quadrotor import Quadrotor
+
+        return Quadrotor(backend=bk)
+
+    def _affine_plants(self, bk):
+        from shinro.plants.cartpole import CartPole
+        from shinro.plants.double_pendulum import DoublePendulum
+        from shinro.plants.inverted_pendulum import InvertedPendulum
+
+        # (plant, n_x, n_u) — actuation linear in u for all three.
+        return {
+            "inverted_pendulum": (InvertedPendulum(backend=bk), 2, 1),
+            "cartpole": (CartPole(backend=bk), 4, 1),
+            "double_pendulum": (DoublePendulum(backend=bk), 4, 2),
+        }
+
+    def test_operating_control_defaults_to_none(self, bk):
+        """Control-affine plants need no operating point (g is u-independent)."""
+        for name, (plant, _n_x, _n_u) in self._affine_plants(bk).items():
+            assert plant.operating_control() is None, name
+
+    def test_affine_plants_reduce_to_drift_convention(self, bk):
+        """For u-affine plants, model_terms == (f(x,0), g(x,0)) — unchanged."""
+        rng = np.random.default_rng(7)
+        for name, (plant, n_x, n_u) in self._affine_plants(bk).items():
+            x = bk.array(rng.normal(size=n_x))
+            f_x, g_x = plant.model_terms(x, n_u=n_u)
+            f0 = np.asarray(_to_np(plant.dynamics(x, bk.zeros(n_u)), bk), dtype=float).ravel()
+            g0 = np.asarray(_to_np(plant.control_matrix(x, bk.zeros(n_u)), bk), dtype=float)
+            assert np.allclose(_to_np(f_x, bk), f0, atol=1e-12), name
+            assert np.allclose(_to_np(g_x, bk), g0, atol=1e-12), name
+
+    def test_quadrotor_operating_control_is_hover(self, bk):
+        """The rotor plant trims at the speed that balances gravity."""
+        q = self._quad(bk)
+        w_hover = (q.m * q.g / (4.0 * q.k)) ** 0.5
+        assert np.allclose(_to_np(q.operating_control(), bk), np.full(4, w_hover))
+
+    def test_quadrotor_model_is_the_tangent_at_hover(self, bk):
+        """``f_x + g_x u_op`` reproduces the true dynamics at the operating point,
+        and ``g`` is nonzero there (the whole point of the operating point)."""
+        rng = np.random.default_rng(5)
+        q = self._quad(bk)
+        x = bk.array(rng.normal(size=12) * 0.05)
+        u_op = q.operating_control()
+        f_x, g_x = q.model_terms(x, n_u=4)
+        lhs = np.asarray(_to_np(f_x, bk), dtype=float) + np.asarray(
+            _to_np(g_x, bk), dtype=float
+        ) @ np.asarray(_to_np(u_op, bk), dtype=float)
+        rhs = np.asarray(_to_np(q.dynamics(x, u_op), bk), dtype=float).ravel()
+        assert np.allclose(lhs, rhs, atol=1e-9)
+        assert np.linalg.norm(np.asarray(_to_np(g_x, bk), dtype=float)) > 1.0
+
+    def test_traced_model_terms_match_eager(self):
+        """``_trace_plant_model`` lowers the same pair the live call returns."""
+        from shinro.codegen.build import _trace_plant_model
+        from shinro.codegen.interpreter import interpret
+        from shinro.utils.array_backend import NumpyBackend
+
+        q = self._quad(NumpyBackend())
+        x = np.linspace(-0.1, 0.1, 12)
+        f_live, g_live = q.model_terms(x, n_u=4)
+        ng = _trace_plant_model(q, 12, 4)
+        outs = interpret(ng.graph, {"x": x})
+        assert np.allclose(outs["f_x"], np.asarray(f_live).ravel(), atol=1e-12)
+        assert np.allclose(outs["g_x"], np.asarray(g_live), atol=1e-12)
+        assert outs["g_x"].shape == (12, 4)
+
+
 class TestQuadrotor:
     """Verify quadrotor: rotor mixing, hover equilibrium, 12-state dynamics, linearization, step, from_config."""
 

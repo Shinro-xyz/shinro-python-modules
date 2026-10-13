@@ -28,11 +28,15 @@ vector convention ``(n, 1)``; ``compose`` auto-inserts reshapes from the flat
 from __future__ import annotations
 
 import inspect
+from typing import TYPE_CHECKING
 
 from shinro.codegen.compose import ComposedGraph, _measurement_dim, compose
 from shinro.codegen.trace_node import NodeGraph, trace_node
 from shinro.factories import ControllerFactory, EstimatorFactory
 from shinro.utils.array_backend import NumpyBackend
+
+if TYPE_CHECKING:
+    from shinro.components import Plant
 
 
 def _trace_with_state(component, input_shapes: dict[str, tuple[int, ...]]) -> NodeGraph:
@@ -69,7 +73,7 @@ def build_composed_graph(
     n_x: int,
     n_u: int,
     input_limits: tuple | None = None,
-    plant: object | None = None,
+    plant: Plant | None = None,
 ) -> ComposedGraph:
     """Trace an estimator + controller and compose the closed-loop step graph.
 
@@ -124,19 +128,18 @@ def instantiate(estimator_config, controller_config, plant=None):
     return est, ctrl
 
 
-def _trace_plant_model(plant: object, n_x: int, n_u: int):
+def _trace_plant_model(plant: Plant, n_x: int, n_u: int):
     """Trace the plant-derived model a controller can consume as ``f_x`` / ``g_x``.
 
     Emits the control-affine pair the SMC form assumes — the drift
-    ``f(x) = dynamics(x, 0)`` and the control matrix ``g(x) = control_matrix(x, 0)``
-    — as ONE subgraph whose input is the state estimate. ``compose`` wires it into
-    a controller that declares those inputs, so the model lowers into the binary
-    instead of being evaluated by the host (the SMC gap).
-
-    Both terms are evaluated at zero control, the drift convention of
-    ``ẋ = f(x) + g(x)u``. A plant whose actuation is nonlinear in ``u`` (rotor
-    thrusts ~ ``w²``) has ``g(x, 0) = 0`` and needs an operating control instead —
-    pass one through :meth:`Plant.control_matrix` when that case is plumbed.
+    ``f_x`` and the control matrix ``g_x`` — as ONE subgraph whose input is the
+    state estimate. The pair is taken at the plant's operating point
+    (:meth:`~shinro.components.Plant.model_terms`): ``f(x, 0)`` / ``g(x, 0)`` for
+    control-affine plants, or the tangent linearization about a nonzero
+    equilibrium for plants whose actuation is nonlinear in ``u`` (e.g. rotor
+    thrusts ~ ``w^2``). ``compose`` wires it into a controller that declares
+    those inputs, so the model lowers into the binary instead of being evaluated
+    by the host (the SMC gap).
 
     Args:
         plant: Plant exposing ``dynamics`` and ``control_matrix``.
@@ -162,8 +165,7 @@ def _trace_plant_model(plant: object, n_x: int, n_u: int):
     tb = TraceBackend(g)
     x_node = g.input("x", (n_x,))
     x = Tracer(g, (n_x,), x_node)
-    f_x = plant.dynamics(x, 0.0, bk=tb)
-    g_x = plant.control_matrix(x, 0.0, bk=tb)
+    f_x, g_x = plant.model_terms(x, bk=tb, n_u=n_u)
     g.output("f_x", f_x.node)
     g.output("g_x", g_x.node)
     return NodeGraph(

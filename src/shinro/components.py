@@ -440,6 +440,67 @@ class Plant(ConfigDriven, ABC):
 
         return backend.jacobian(probe, backend.ravel(backend.array(control)))
 
+    def operating_control(self) -> Any | None:
+        """Control at the plant's operating point, or ``None`` for zero.
+
+        :meth:`model_terms` evaluates the control matrix :math:`g(x, u)` at this
+        point. For a plant whose actuation is *linear* in ``u`` (force/torque
+        inputs) the default ``None`` is correct — ``g`` is ``u``-independent, so
+        the drift convention ``f(x, 0)`` / ``g(x, 0)`` holds. A plant whose
+        actuation is *nonlinear* in ``u`` (e.g. rotor thrusts ~ ``w^2``) has
+        ``g(x, 0) = 0`` and must override this to return the equilibrium control
+        (e.g. hover rotor speeds), so the tangent model is taken about the real
+        operating point.
+
+        Returns:
+            Operating control (n_u,), or ``None`` to use zero.
+        """
+        return None
+
+    def model_terms(self, state: Any, bk: Any | None = None, n_u: int | None = None) -> tuple[Any, Any]:
+        """Control-affine model pair ``(f_x, g_x)`` at the operating point.
+
+        Returns the first-order (tangent) model of :meth:`dynamics` about
+        :meth:`operating_control`, in the control-affine form the SMC law
+        assumes:
+
+        .. math::
+
+            \\dot{x} \\approx f_x + g_x u, \\quad
+            g_x = \\left.\\frac{\\partial f}{\\partial u}\\right|_{(x, u_{op})},
+            \\quad f_x = f(x, u_{op}) - g_x u_{op}
+
+        so at ``u = u_op`` it reproduces the true dynamics ``f(x, u_op)``. With
+        the default zero operating control this is exactly ``f(x, 0)`` and
+        ``g(x, 0)`` — the drift convention — so control-affine plants are
+        unaffected.
+
+        This is the single site the codegen (:func:`shinro.codegen.build._trace_plant_model`)
+        and gate A evaluate, so the live and lowered models cannot drift apart.
+
+        Args:
+            state: State vector (n_x,).
+            bk: Backend to evaluate with. Defaults to ``self.bk``.
+            n_u: Control dimension — used to size the zero control when
+                :meth:`operating_control` returns ``None``. Falls back to the
+                historical single-channel scalar probe when omitted.
+
+        Returns:
+            Tuple ``(f_x, g_x)`` with shapes ``(n_x,)`` and ``(n_x, n_u)``.
+
+        Raises:
+            NotImplementedError: If the plant defines no :meth:`dynamics` to
+                differentiate and does not override :meth:`control_matrix`.
+        """
+        backend: ArrayBackend = self.bk if bk is None else bk
+        u_op = self.operating_control()
+        if u_op is None:
+            u_op = 0.0 if n_u is None else backend.zeros(n_u)
+        g_x = self.control_matrix(state, u_op, bk=backend)
+        f_x = self.dynamics(state, u_op, bk=backend) - g_x @ backend.ravel(backend.array(u_op))
+        return f_x, g_x
+
+
 class StateEstimator(ConfigDriven, ABC):
     """
     Abstract base class for state estimators.
