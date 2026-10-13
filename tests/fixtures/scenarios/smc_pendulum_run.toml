@@ -1,0 +1,30 @@
+# SMC + Kalman closed loop on the InvertedPendulum — the live-runner counterpart
+# of smc_pendulum_compile.toml. The controller takes its model as inputs
+# (f_x/g_x); the runner evaluates the plant pair live, at the plant's operating
+# point, each tick (no host port for them).
+[scenario]
+name = "smc_pendulum_run"
+description = "SMC (plant-derived model) + Kalman regulate an inverted pendulum from a 0.2 rad tilt"
+duration = 8.0
+dt = 0.01
+input_limits = { min = [-5.0], max = [5.0] }
+
+[plant]
+type = "InvertedPendulum"
+config = "samples/plants/inverted_pendulum.toml"
+initial_state = [0.2, 0.0]
+
+[controller]
+type = "SMC"
+config = "samples/controllers/smc_inverted_pendulum.toml"
+
+[estimator]
+type = "KalmanFilter"
+config = "samples/estimators/kalman_inverted_pendulum.toml"
+
+[trajectory]
+type = "waypoints"
+config = "tests/fixtures/configs/trajectories/pendulum_upright.toml"
+
+[noise.measurement]
+std = [0.005, 0.02]

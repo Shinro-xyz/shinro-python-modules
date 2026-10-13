@@ -454,6 +454,76 @@ _CONTROLLER_INPUT_ROLES: dict[str, str] = {
 }
 
 
+def controller_input_kwargs(
+    input_names,
+    x_hat,
+    x_ref,
+    u_prev,
+    plant=None,
+    host_values=None,
+) -> dict:
+    """Map a controller's ``compute()`` parameters to live values by role.
+
+    The live mirror of :func:`compose`'s role wiring
+    (:data:`_CONTROLLER_INPUT_ROLES`), so a controller is driven identically
+    whether the closed loop runs live (:mod:`shinro.simulation.runner`) or is
+    lowered into a graph. Roles: ``state`` — the estimate, or the tracking
+    error ``x_hat - x_ref`` for a regulator that declares no reference input;
+    ``reference``; ``u_prev``; ``model`` — the plant pair from
+    :meth:`~shinro.components.Plant.model_terms`, at the plant's operating
+    point; and any other name, a free host input (e.g. MPPI's epsilon), taken
+    from ``host_values`` or left ``None`` (so eager MPPI samples its own).
+
+    Args:
+        input_names: The controller's ``compute()`` parameter names (from
+            :func:`shinro.codegen.infer_contract.infer_contract`).
+        x_hat: State estimate (n_x,).
+        x_ref: Reference (n_x,).
+        u_prev: Previous control (n_u,).
+        plant: Plant supplying the model terms; required iff a name has role
+            ``model``.
+        host_values: Per-tick values for free host inputs.
+
+    Returns:
+        ``{param_name: value}``, to call ``ctrl.compute(**kwargs)``.
+
+    Raises:
+        ValueError: If a model term is requested with no plant to derive it.
+    """
+    host_values = host_values or {}
+    takes_reference = any(_CONTROLLER_INPUT_ROLES.get(n) == "reference" for n in input_names)
+    model_live: dict[str, np.ndarray] = {}
+    if any(_CONTROLLER_INPUT_ROLES.get(n) == "model" for n in input_names):
+        if plant is None:
+            raise ValueError(
+                "controller input is a plant-model term (f_x / g_x) but no plant was "
+                "supplied to derive it from; pass plant=..."
+            )
+        n_u = int(np.asarray(u_prev).reshape(-1).shape[0])
+        f_x, g_x = plant.model_terms(x_hat, n_u=n_u)
+        model_live = {
+            "f_x": np.asarray(f_x, dtype=np.float64),
+            "g_x": np.asarray(g_x, dtype=np.float64),
+        }
+    kwargs: dict = {}
+    for name in input_names:
+        role = _CONTROLLER_INPUT_ROLES.get(name)
+        if role == "reference":
+            kwargs[name] = x_ref
+        elif role == "u_prev":
+            kwargs[name] = u_prev
+        elif role == "state":
+            kwargs[name] = x_hat if takes_reference else (x_hat - x_ref)
+        elif role == "model":
+            if name not in model_live:
+                raise ValueError(f"unknown plant-model term '{name}'; compose knows f_x / g_x.")
+            kwargs[name] = model_live[name]
+        else:
+            # A free host input the host fills each tick (e.g. MPPI's epsilon).
+            kwargs[name] = host_values.get(name, None)
+    return kwargs
+
+
 def _forward_diagnostics(
     combined: Graph,
     subgraph: NodeGraph,

@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from shinro.codegen.compose import _CONTROLLER_INPUT_ROLES, _measurement_dim
+from shinro.codegen.compose import _measurement_dim, controller_input_kwargs
 from shinro.codegen.infer_contract import infer_contract
 from shinro.codegen.interpreter import interpret_step
 
@@ -65,47 +65,6 @@ def _initial_state(cg, est, ctrl, n_u) -> dict[str, np.ndarray]:
             raise ValueError(f"gate A: cannot map state port '{port}' to a component attribute")
         state[port] = np.asarray(getattr(comp, attr), dtype=np.float64).copy()
     return state
-
-
-def _controller_kwargs(input_names, x_hat, x_ref, u_prev, host_values, plant=None) -> dict:
-    """Map the controller's compute() inputs to live values by role (as compose does)."""
-    takes_reference = any(_CONTROLLER_INPUT_ROLES.get(n) == "reference" for n in input_names)
-    model_live: dict[str, np.ndarray] = {}
-    if any(_CONTROLLER_INPUT_ROLES.get(n) == "model" for n in input_names):
-        # A plant-model term (SMC's f_x / g_x). The graph bakes the plant model
-        # in; the live side evaluates the SAME plant at the SAME operating point
-        # through the SAME Plant.model_terms, so the two sides stay comparable —
-        # which is the whole point of gate A.
-        if plant is None:
-            raise ValueError(
-                "controller input is a plant-model term (f_x / g_x) but gate A has no plant "
-                "to derive it from; pass plant=..."
-            )
-        n_u = int(np.asarray(u_prev).reshape(-1).shape[0])
-        f_x_live, g_x_live = plant.model_terms(x_hat, n_u=n_u)
-        model_live = {
-            "f_x": np.asarray(f_x_live, dtype=np.float64),
-            "g_x": np.asarray(g_x_live, dtype=np.float64),
-        }
-    kwargs: dict[str, np.ndarray] = {}
-    for name in input_names:
-        role = _CONTROLLER_INPUT_ROLES.get(name)
-        if role == "reference":
-            kwargs[name] = x_ref
-        elif role == "u_prev":
-            kwargs[name] = u_prev
-        elif role == "state":
-            # Regulator (no reference input) gets the error x_hat - x_ref; a
-            # tracker gets x_hat and x_ref separately (exactly like compose).
-            kwargs[name] = x_hat if takes_reference else (x_hat - x_ref)
-        elif role == "model":
-            if name not in model_live:
-                raise ValueError(f"unknown plant-model term '{name}'; compose knows f_x / g_x.")
-            kwargs[name] = model_live[name]
-        else:
-            # A free host input the host fills each tick (e.g. MPPI's epsilon).
-            kwargs[name] = host_values.get(name, np.array(0.0))
-    return kwargs
 
 
 def run_gate_a(cg, est, ctrl, n_x, n_u, input_limits=None, ticks: int = 50, seed: int = 0, plant=None) -> float:
@@ -146,7 +105,7 @@ def run_gate_a(cg, est, ctrl, n_x, n_u, input_limits=None, ticks: int = 50, seed
         u_graph = np.asarray(outs["u"], dtype=np.float64).ravel()
 
         x_hat = np.asarray(est.estimate(y, u_prev), dtype=np.float64).ravel()
-        kwargs = _controller_kwargs(input_names, x_hat, x_ref, u_prev, host_values, plant=plant)
+        kwargs = controller_input_kwargs(input_names, x_hat, x_ref, u_prev, plant=plant, host_values=host_values)
         u_live = np.asarray(ctrl.compute(**kwargs), dtype=np.float64).ravel()
         if input_limits is not None:
             u_live = np.clip(u_live, np.asarray(input_limits[0], dtype=np.float64), np.asarray(input_limits[1], dtype=np.float64))

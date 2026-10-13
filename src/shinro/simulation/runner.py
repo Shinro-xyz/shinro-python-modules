@@ -21,7 +21,6 @@ minimal install (the physics engine is only needed for sim-backed scenarios).
 
 from __future__ import annotations
 
-import inspect
 import warnings
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -29,7 +28,8 @@ from typing import Any
 
 import numpy as np
 
-from shinro.controllers.smc import SlidingModeController
+from shinro.codegen.compose import controller_input_kwargs
+from shinro.codegen.infer_contract import infer_contract
 
 MAX_CONTROL = 1e6
 DEFAULT_SEED = 42
@@ -234,20 +234,6 @@ def _control_limits(scenario) -> tuple[np.ndarray, np.ndarray]:
     )
 
 
-def _compute_control(ctrl, estimate: np.ndarray, reference: np.ndarray, u_prev: np.ndarray, takes_u_prev: bool) -> np.ndarray:
-    """Compute the control input via the uniform controller signature.
-
-    Every scenario-runnable controller implements
-    ``compute(current_state, target_state=None)`` — LQR/PID/MPC/MPPI all
-    regulate ``current_state`` toward ``target_state`` (MPC internally forms
-    the tracking error). Controllers that declare ``u_prev`` (MPC_DeltaU) get
-    the previous control; the flag is computed once per run, not per step.
-    """
-    if takes_u_prev:
-        return ctrl.compute(estimate, reference, u_prev=u_prev)
-    return ctrl.compute(estimate, reference)
-
-
 def _total_steps(scenario, steps: int | None) -> int:
     """Resolve the step count from ``steps`` or ``[scenario].duration / dt``."""
     dt = float(scenario.config.get("scenario", {}).get("dt", scenario.sim.engine.dt if scenario.sim is not None else 0.01))
@@ -302,12 +288,13 @@ def iter_scenario(scenario, steps: int | None = None, seed: int | None = None) -
     n_u = _control_input_dim(scenario)
     u_prev = np.zeros(n_u)
 
-    # One-time controller contract checks (not per step): SMC needs f_x/g_x
-    # dynamics a scenario does not wire; u_prev is passed only to controllers
-    # that declare it (MPC_DeltaU).
-    if isinstance(ctrl, SlidingModeController):
-        raise NotImplementedError("SMC requires f_x/g_x dynamics — not scenario-runnable")
-    ctrl_takes_u_prev = "u_prev" in inspect.signature(ctrl.compute).parameters
+    # Controller compute() inputs, mapped by role each tick (state / reference /
+    # u_prev / model / free host input) — the SAME mapping compose and gate A
+    # use, so the live loop drives the controller identically to the lowered
+    # graph. A controller that takes its model as inputs (SMC's f_x/g_x) is
+    # therefore runnable: the plant pair is evaluated live, at the plant's
+    # operating point, each tick.
+    ctrl_input_names = infer_contract(ctrl).input_names
 
     dt = float(scenario.config.get("scenario", {}).get("dt", scenario.sim.engine.dt if scenario.sim is not None else 0.01))
     for step in range(total_steps):
@@ -326,7 +313,8 @@ def iter_scenario(scenario, steps: int | None = None, seed: int | None = None) -
                 "NaN/Inf measurements must not corrupt the estimate."
             )
 
-        control = np.clip(_compute_control(ctrl, estimate, reference, u_prev, ctrl_takes_u_prev), lo, hi)
+        ctrl_kwargs = controller_input_kwargs(ctrl_input_names, estimate, reference, u_prev, plant=plant)
+        control = np.clip(ctrl.compute(**ctrl_kwargs), lo, hi)
 
         plant.step(control)
         if scenario.sim is not None:
