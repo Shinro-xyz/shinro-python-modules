@@ -388,6 +388,32 @@ class Plant(ConfigDriven, ABC):
         """
         return None
 
+    def measurement(self, state: Any, bk: Any | None = None) -> Any | None:
+        """Measurement model :math:`h(x)` (the plant's sensor), or ``None``.
+
+        The nonlinear counterpart of a filter's ``measurement_fn``: override in
+        a plant to expose its sensor, so a config/scenario-driven EKF/UKF
+        derives ``h`` from the plant instead of a hand-wired callable — exactly
+        as :meth:`dynamics` supplies :math:`f`. Return the measurement vector
+        ``(n_y,)``.
+
+        Contract, mirroring :meth:`dynamics`: route every backend call through
+        ``bk`` (defaults to ``self.bk``) and accept a leading **batch** axis —
+        ``(n_x,)`` or ``(N, n_x)`` in, same rank out — because the EKF
+        differentiates ``h`` with a probe batch and the UKF pushes its sigma
+        batch through it. The default returns ``None`` (no sensor model); a
+        filter attached to such a plant keeps taking ``h`` from its config's
+        ``measurement_matrix``.
+
+        Args:
+            state: State vector (n_x,) or batch (N, n_x).
+            bk: Backend to evaluate with. Defaults to ``self.bk``.
+
+        Returns:
+            Measurement vector (n_y,) or batch (N, n_y), or ``None``.
+        """
+        return None
+
     def control_matrix(self, state: Any, control: Any, bk: Any | None = None) -> Any:
         """Control matrix :math:`g(x, u) = \\partial f/\\partial u` at ``(state, control)``.
 
@@ -527,6 +553,26 @@ class StateEstimator(ConfigDriven, ABC):
             The estimated state.
         """
         pass
+
+    def measure(self, state: Any) -> Any:
+        """Expected measurement ``y = h(x)`` for a true ``state``.
+
+        The simulation synthesizes each sensor reading by driving the
+        ground-truth state through this model (then adding
+        ``[noise.measurement]``), so the estimator and the simulated sensor stay
+        consistent. The default is the **identity** (the sensor observes the full
+        state); a filter with a measurement model overrides it — the linear
+        ``C`` for KF/Luenberger, or the nonlinear ``h`` (a config ``C`` or the
+        plant's :meth:`~shinro.components.Plant.measurement`) for EKF/UKF.
+
+        Args:
+            state: True state (n_x,).
+
+        Returns:
+            Expected measurement (n_y,).
+        """
+        return state
+
     def reset(self):
         """
         Reset the estimator to its initial condition.

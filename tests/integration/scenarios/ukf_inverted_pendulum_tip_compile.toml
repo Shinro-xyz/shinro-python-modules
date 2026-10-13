@@ -1,0 +1,32 @@
+# UKF + LQR closed loop on InvertedPendulum with a NONLINEAR measurement model:
+# the plant's bob position h(x) = [l sin θ, l cos θ] (n_y = 2). The UKF declares
+# no `measurement_matrix`, so attach_plant derives h from the plant and the sigma
+# batch lowers through it — the live and compiled filters share one sensor model.
+# No oracle carve-out: the UKF does not differentiate h, so there is no FD
+# amplification of the VM-vs-numpy transcendental ulp.
+[scenario]
+name = "ukf_inverted_pendulum_tip_compile"
+description = "UKF (nonlinear bob-position h) + LQR on InvertedPendulum"
+input_limits = { min = [-5.0], max = [5.0] }
+
+[plant]
+type = "InvertedPendulum"
+config = "samples/plants/inverted_pendulum.toml"
+
+[controller]
+type = "LQR"
+config = "samples/controllers/lqr_inverted_pendulum.toml"
+
+[estimator]
+type = "UnscentedKF"
+config = "samples/estimators/ukf_inverted_pendulum_tip.toml"
+
+[compile]
+optimize = "debug"        # "debug" | "release" (release -> ReleaseFast)
+artifact_name = "libbase"   # kernel installs as lib/<name>.so
+# The UKF inverts the measurement covariance S, so the VM's sin/cos differing from
+# numpy's by <1 ulp is amplified through inv(S). (The linear-C UKF scenarios need no
+# carve-out: no transcendentals in h. The process model does not invert, so its
+# sin/cos stay ~1e-15.) Measured ~4e-9.
+oracle_tol = 1e-7
+# n_x = 2, n_u = 1 are derived from the [plant] section.

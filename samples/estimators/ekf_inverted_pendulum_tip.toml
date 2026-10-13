@@ -1,0 +1,11 @@
+# EKF for InvertedPendulum with a NONLINEAR sensor: the bob position
+# [l sin θ, l cos θ] (n_y = 2). There is no `measurement_matrix` — the model is
+# the plant's `measurement` hook, injected by attach_plant, so the live filter
+# and the lowered graph share one sensor model (and it differentiates/lowers
+# through the same trace backend as the process model). dt is inherited from the
+# plant.
+type = "ExtendedKalmanFilter"
+name = "inverted_pendulum_ekf_tip"
+
+process_noise = [0.001, 0.01]
+measurement_noise = [0.0025, 0.0025]

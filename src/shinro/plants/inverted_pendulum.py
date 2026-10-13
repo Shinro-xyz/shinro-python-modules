@@ -175,6 +175,28 @@ class InvertedPendulum(Plant):
         f = bk.stack([bk.ravel(theta_dot), bk.ravel(theta_ddot)]).T
         return as_vector(bk, f, single)
 
+    def measurement(self, state, bk=None):
+        """Bob position ``[l sin θ, l cos θ]`` relative to the pivot — a nonlinear sensor.
+
+        Measuring where the pendulum *is* rather than the angle directly: no
+        linear ``C`` can express this, so it is the model a config/scenario-driven
+        EKF/UKF gets from the plant. Follows the
+        :meth:`~shinro.components.Plant.measurement` contract: ``bk``-aware and
+        batch-capable.
+
+        Args:
+            state: State vector (2,) — [theta, theta_dot] — or a batch (N, 2).
+            bk: Backend to evaluate with. Defaults to the plant's backend.
+
+        Returns:
+            Bob position ``(2,)`` or batch ``(N, 2)``.
+        """
+        bk = self.bk if bk is None else bk
+        x, single = as_batch(bk, state)
+        theta = column(bk, x, 0)
+        y = bk.stack([bk.ravel(self.l * bk.sin(theta)), bk.ravel(self.l * bk.cos(theta))]).T
+        return as_vector(bk, y, single)
+
     def step(self, u):
         """Execute one control step.
 

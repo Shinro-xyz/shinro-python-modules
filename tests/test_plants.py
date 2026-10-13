@@ -100,6 +100,22 @@ class TestInvertedPendulum:
         dx = pend.dynamics(bk.array([0.1, 0.0]), bk.array([0.0]))
         assert _to_np(dx, bk).shape == (2,)
 
+    def test_measurement_is_bob_position_and_batch_capable(self, bk):
+        """h(x) = [l sin θ, l cos θ], the rank of the input, and the default is None."""
+        from shinro.components import Plant
+        from shinro.plants.inverted_pendulum import InvertedPendulum
+
+        pend = InvertedPendulum(backend=bk)
+        theta = 0.3
+        y = np.asarray(_to_np(pend.measurement(bk.array([theta, 0.0])), bk), dtype=float)
+        assert y.shape == (2,)
+        assert np.allclose(y, [pend.l * np.sin(theta), pend.l * np.cos(theta)])
+        # batch contract (the UKF sigma batch / EKF FD probe): same rank out
+        batch = np.asarray(_to_np(pend.measurement(bk.array([[theta, 0.0], [0.5, 0.0]])), bk), dtype=float)
+        assert batch.shape == (2, 2)
+        # the base hook is a no-op (no sensor model)
+        assert Plant.measurement(pend, bk.array([theta, 0.0])) is None
+
     def test_get_model_shape(self, bk):
         from shinro.plants.inverted_pendulum import InvertedPendulum
         pend = InvertedPendulum(backend=bk)

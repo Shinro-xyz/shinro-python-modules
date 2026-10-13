@@ -272,6 +272,14 @@ def iter_scenario(scenario, steps: int | None = None, seed: int | None = None) -
     if est is None:
         raise ValueError("closed-loop run requires an estimator — feedforward scenarios need a phase_list trajectory")
 
+    # The estimator's measurement model is also the simulated sensor: attach the
+    # plant so a nonlinear filter (EKF/UKF with no ``C``) adopts its ``h(x)``, then
+    # synthesize each reading as ``est.measure(true_state) + noise``. An estimator
+    # with its own model (a KF's ``C``) uses that; the base default is identity, so
+    # a linear scenario is unchanged.
+    if hasattr(est, "attach_plant"):
+        est.attach_plant(plant)
+
     total_steps = _total_steps(scenario, steps)
     if len(traj) < total_steps:  # type: ignore[arg-type]
         warnings.warn(
@@ -301,7 +309,7 @@ def iter_scenario(scenario, steps: int | None = None, seed: int | None = None) -
         true_state = np.asarray(plant.get_state(), dtype=np.float64).flatten()
         reference = np.asarray(traj[step], dtype=np.float64).flatten()  # type: ignore[index]
 
-        measurement = _inject_noise(true_state, noise_cfg, rng)
+        measurement = _inject_noise(np.asarray(est.measure(true_state), dtype=np.float64), noise_cfg, rng)
         measurement, faulted = _inject_adversarial(measurement, scenario.config.get("adversarial"), step)
 
         estimate = np.asarray(

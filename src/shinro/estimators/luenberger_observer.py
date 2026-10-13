@@ -96,6 +96,10 @@ class LuenbergerObserver(StateEstimator):
         self.x_hat = x_pred + self.L @ innovations
         return self.x_hat
 
+    def measure(self, state):
+        """Expected measurement ``C x`` for a true ``state`` (feedthrough ``D`` is zero)."""
+        return self.C @ self.bk.ravel(state)
+
     def reset(self, x0: Any | None = None):
         """Reset the observer to its initial state.
 

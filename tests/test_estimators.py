@@ -639,6 +639,42 @@ class TestExtendedKalmanFilter:
         with pytest.raises(ValueError, match="no dynamics"):
             ekf.attach_plant(object())
 
+    def test_attach_plant_injects_the_plant_sensor(self, bk):
+        """attach_plant fills measurement_fn from the plant's measurement hook when
+        the filter has neither a measurement_fn nor a linear C."""
+        from shinro.estimators.extended_kf import ExtendedKalmanFilter
+        from shinro.plants.inverted_pendulum import InvertedPendulum
+
+        plant = InvertedPendulum(backend=bk)
+        ekf = ExtendedKalmanFilter(None, None, dt=0.01, Q=0.01 * bk.eye(2), R=0.01 * bk.eye(2), backend=bk)
+        assert ekf.measurement_fn is None
+        ekf.attach_plant(plant)
+        assert ekf.measurement_fn is not None
+        assert _to_np(ekf.estimate(bk.array([0.2, 0.0]), bk.zeros(1)), bk).shape == (2,)
+
+    def test_attach_plant_leaves_a_linear_C_in_charge(self, bk):
+        """A ``measurement_matrix`` (linear C) wins over the plant sensor."""
+        from shinro.estimators.extended_kf import ExtendedKalmanFilter
+        from shinro.plants.inverted_pendulum import InvertedPendulum
+
+        plant = InvertedPendulum(backend=bk)
+        ekf = ExtendedKalmanFilter(
+            None, None, dt=0.01, Q=0.01 * bk.eye(2), R=0.01 * bk.eye(1),
+            measurement_matrix=[[1.0, 0.0]], backend=bk,
+        )
+        ekf.attach_plant(plant)
+        assert ekf.measurement_fn is None, "the plant sensor must not override a linear C"
+
+    def test_attach_plant_without_a_sensor_leaves_measurement_none(self, bk):
+        """A plant with no sensor model (CartPole) leaves h to the config."""
+        from shinro.estimators.extended_kf import ExtendedKalmanFilter
+        from shinro.plants.cartpole import CartPole
+
+        plant = CartPole(backend=bk)
+        ekf = ExtendedKalmanFilter(None, None, dt=0.01, Q=0.01 * bk.eye(4), R=0.01 * bk.eye(4), backend=bk)
+        ekf.attach_plant(plant)
+        assert ekf.measurement_fn is None
+
 
 class TestUnscentedKF:
     """Verify the UKF: sigma-point weights, UT exactness, convergence, config, reset.
@@ -965,6 +1001,36 @@ class TestUnscentedKF:
         with pytest.raises(ValueError, match="no dynamics"):
             ukf.attach_plant(object())
 
+    def test_attach_plant_injects_the_plant_sensor(self, bk):
+        """attach_plant fills measurement_fn from the plant's measurement hook when
+        the filter has neither a measurement_fn nor a linear C."""
+        from shinro.estimators.unscented_kf import UnscentedKF
+        from shinro.plants.inverted_pendulum import InvertedPendulum
+
+        plant = InvertedPendulum(backend=bk)
+        ukf = UnscentedKF(
+            None, None, dt=0.01, alpha=1.0, beta=2.0, kappa=0.0,
+            Q=0.01 * bk.eye(2), R=0.01 * bk.eye(2), backend=bk,
+        )
+        assert ukf.measurement_fn is None
+        ukf.attach_plant(plant)
+        assert ukf.measurement_fn is not None
+        assert _to_np(ukf.estimate(bk.array([0.2, 0.0]), bk.zeros(1)), bk).shape == (2,)
+
+    def test_attach_plant_leaves_a_linear_C_in_charge(self, bk):
+        """A ``measurement_matrix`` (linear C) wins over the plant sensor."""
+        from shinro.estimators.unscented_kf import UnscentedKF
+        from shinro.plants.inverted_pendulum import InvertedPendulum
+
+        plant = InvertedPendulum(backend=bk)
+        ukf = UnscentedKF(
+            None, None, dt=0.01, alpha=1.0, beta=2.0, kappa=0.0,
+            Q=0.01 * bk.eye(2), R=0.01 * bk.eye(1),
+            measurement_matrix=[[1.0, 0.0]], backend=bk,
+        )
+        ukf.attach_plant(plant)
+        assert ukf.measurement_fn is None, "the plant sensor must not override a linear C"
+
     def test_auto_batching_detects_bk_aware_models(self, bk):
         """Auto mode batches bk-aware (plant/compiled) models, loops plain lambdas."""
         from shinro.estimators.unscented_kf import UnscentedKF
@@ -1164,3 +1230,49 @@ class TestComplementaryFilter:
 
         assert Exported is ComplementaryFilter
         assert _ESTIMATOR_REGISTRY["ComplementaryFilter"] is ComplementaryFilter
+
+
+class TestEstimatorMeasure:
+    """``StateEstimator.measure(state)`` — the sensor model the runner synthesizes from."""
+
+    def test_kf_measure_is_identity_without_c(self, bk):
+        """A KF with the default C observes the full state."""
+        from shinro.estimators.kalman_filter import KalmanFilter
+
+        kf = KalmanFilter(bk.eye(2), bk.zeros((2, 1)), 0.1 * bk.eye(2), 0.1 * bk.eye(2), backend=bk)
+        assert np.allclose(_to_np(kf.measure(bk.array([0.3, -0.1])), bk), [0.3, -0.1])
+
+    def test_kf_measure_is_c_times_state(self, bk):
+        """A KF with a non-identity C maps the state through it."""
+        from shinro.estimators.kalman_filter import KalmanFilter
+
+        kf = KalmanFilter(
+            bk.eye(2), bk.zeros((2, 1)), 0.1 * bk.eye(2), 0.1 * bk.eye(1),
+            C=bk.array([[1.0, 0.0]]), backend=bk,
+        )
+        assert np.allclose(_to_np(kf.measure(bk.array([0.3, -0.1])), bk), [0.3])
+
+    def test_ekf_measure_uses_the_plant_sensor(self, bk):
+        """After attach_plant, h is the plant's nonlinear measurement."""
+        from shinro.estimators.extended_kf import ExtendedKalmanFilter
+        from shinro.plants.inverted_pendulum import InvertedPendulum
+
+        plant = InvertedPendulum(backend=bk)
+        ekf = ExtendedKalmanFilter(None, None, dt=0.01, Q=0.01 * bk.eye(2), R=0.01 * bk.eye(2), backend=bk)
+        ekf.attach_plant(plant)
+        y = np.asarray(_to_np(ekf.measure(bk.array([0.3, -0.1])), bk), dtype=float)
+        assert np.allclose(y, [plant.l * np.sin(0.3), plant.l * np.cos(0.3)])
+
+    def test_ukf_measure_uses_the_plant_sensor(self, bk):
+        """After attach_plant, h is the plant's nonlinear measurement."""
+        from shinro.estimators.unscented_kf import UnscentedKF
+        from shinro.plants.inverted_pendulum import InvertedPendulum
+
+        plant = InvertedPendulum(backend=bk)
+        ukf = UnscentedKF(
+            None, None, dt=0.01, alpha=1.0, beta=2.0, kappa=0.0,
+            Q=0.01 * bk.eye(2), R=0.01 * bk.eye(2), backend=bk,
+        )
+        ukf.attach_plant(plant)
+        y = np.asarray(_to_np(ukf.measure(bk.array([0.3, -0.1])), bk), dtype=float)
+        assert np.allclose(y, [plant.l * np.sin(0.3), plant.l * np.cos(0.3)])

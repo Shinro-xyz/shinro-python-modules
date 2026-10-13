@@ -111,6 +111,10 @@ class KalmanFilter(StateEstimator):
 
         return self.x_hat
 
+    def measure(self, state):
+        """Expected measurement ``C x`` for a true ``state`` (feedthrough ``D`` is zero)."""
+        return self.C @ self.bk.ravel(state)
+
     def reset(self, x0: Any | None = None):
         """Reset the filter to its initial state.
 

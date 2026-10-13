@@ -1,0 +1,31 @@
+# EKF + LQR closed loop on InvertedPendulum with a NONLINEAR measurement model —
+# the runner's live counterpart of ekf_inverted_pendulum_tip_compile.toml. The
+# EKF declares no measurement_matrix, so the runner attaches the plant and the
+# simulated sensor is h(x) = [l sin θ, l cos θ] (the bob position), then noise.
+[scenario]
+name = "ekf_pendulum_tip_balance"
+description = "EKF (nonlinear bob-position sensor) + LQR regulate an inverted pendulum from a 0.2 rad tilt"
+duration = 12.0
+dt = 0.01
+tolerance = { steady_state = 0.05, estimator = 0.05 }
+input_limits = { min = [-2.0], max = [2.0] }
+
+[plant]
+type = "InvertedPendulum"
+config = "samples/plants/inverted_pendulum.toml"
+initial_state = [0.2, 0.0]
+
+[controller]
+type = "LQR"
+config = "tests/fixtures/configs/controllers/lqr_pendulum.toml"
+
+[estimator]
+type = "ExtendedKalmanFilter"
+config = "samples/estimators/ekf_inverted_pendulum_tip.toml"
+
+[trajectory]
+type = "waypoints"
+config = "tests/fixtures/configs/trajectories/pendulum_upright.toml"
+
+[noise.measurement]
+std = [0.002, 0.002]

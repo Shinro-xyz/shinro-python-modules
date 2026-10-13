@@ -2,7 +2,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from shinro.components import StateEstimator
+from shinro.components import Plant, StateEstimator
 from shinro.estimators.model_call import accepts_backend, call_model
 from shinro.factories.registry import register_estimator
 from shinro.utils.array_backend import ArrayBackend, NumpyBackend, parse_matrix
@@ -16,8 +16,10 @@ class UnscentedKFConfig:
     to TOML: :meth:`UnscentedKF.from_config` leaves them ``None`` and the caller
     injects them after construction. ``dt`` is optional — scenario builds inject
     it from the plant. ``measurement_matrix`` (a linear ``C``) is
-    TOML-serializable and supplies ``h`` without a callable, which is how a
-    config-only filter gets a measurement model.
+    TOML-serializable and supplies ``h`` without a callable. Alternatively,
+    :meth:`attach_plant` derives ``h`` from a plant that overrides
+    :meth:`~shinro.components.Plant.measurement`, so a nonlinear sensor also
+    needs no callable in TOML.
     """
 
     process_noise: list[float] | list[list[float]]
@@ -154,6 +156,10 @@ class UnscentedKF(StateEstimator):
             )
         return call_model(self.measurement_fn, x, bk=self.bk)
 
+    def measure(self, state):
+        """Expected measurement ``h(x)`` for a true ``state`` (the linear ``C`` or the callable/plant model)."""
+        return self._measurement(self.bk.ravel(state))
+
     def _batchable(self, fn):
         """Whether a model can consume the whole sigma-point batch in one call.
 
@@ -236,31 +242,43 @@ class UnscentedKF(StateEstimator):
         self.P=self.bk.eye(self.nx)*0.1
 
     def attach_plant(self, plant: Any) -> None:
-        """Inject the plant's process model into a filter that has none.
+        """Inject the plant's process model, and its sensor if it exposes one.
 
         The compiled/served path hands the UKF the plant so its ``dynamics_fn``
         is the plant's model — written with the rank helpers and an optional
-        ``bk``, so it traces and lowers — instead of a hand-wired lambda. Only an
-        **unset** ``dynamics_fn`` is filled, so an explicit injection wins.
+        ``bk``, so it traces and lowers — instead of a hand-wired lambda. When
+        the plant also overrides :meth:`~shinro.components.Plant.measurement`,
+        and the filter has neither a ``measurement_fn`` nor a linear ``C``, that
+        sensor becomes ``h`` too, derived from the same plant so the live and
+        lowered measurement models cannot drift.
 
-        The measurement side is not touched: plants carry no measurement model
-        today, so a config-only UKF takes ``h`` from its ``measurement_matrix``.
+        Each side is filled only when it is **unset**, so an explicit injection
+        (or a ``measurement_matrix``) always wins. A plant with no sensor model
+        leaves ``h`` to the config's ``measurement_matrix``.
 
         Args:
-            plant: The plant whose :meth:`~shinro.components.Plant.dynamics` to use.
+            plant: The plant whose :meth:`~shinro.components.Plant.dynamics`
+                (and optional ``measurement``) to use.
 
         Raises:
             ValueError: If the plant exposes no dynamics and none was injected.
         """
-        if self.dynamics_fn is not None:
-            return
-        dynamics = getattr(plant, "dynamics", None)
-        if dynamics is None or not callable(dynamics):
-            raise ValueError(
-                f"attach_plant: {type(plant).__name__} exposes no dynamics(), and the filter "
-                f"has no dynamics_fn — inject one explicitly (ukf.dynamics_fn = ...)."
-            )
-        self.dynamics_fn = dynamics
+        if self.dynamics_fn is None:
+            dynamics = getattr(plant, "dynamics", None)
+            if dynamics is None or not callable(dynamics):
+                raise ValueError(
+                    f"attach_plant: {type(plant).__name__} exposes no dynamics(), and the filter "
+                    f"has no dynamics_fn — inject one explicitly (ukf.dynamics_fn = ...)."
+                )
+            self.dynamics_fn = dynamics
+        measurement = getattr(type(plant), "measurement", None)
+        if (
+            self.measurement_fn is None
+            and self.C is None
+            and measurement is not None
+            and measurement is not Plant.measurement
+        ):
+            self.measurement_fn = plant.measurement
 
     Config = UnscentedKFConfig
 

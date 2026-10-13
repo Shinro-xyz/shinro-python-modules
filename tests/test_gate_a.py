@@ -46,6 +46,8 @@ def test_gate_a_flags_a_wrong_live_component():
 
 UKF_CARTPOLE = str(REPO_ROOT / "tests" / "integration" / "scenarios" / "ukf_cartpole_compile.toml")
 UKF_PENDULUM = str(REPO_ROOT / "tests" / "integration" / "scenarios" / "ukf_inverted_pendulum_compile.toml")
+EKF_PENDULUM_TIP = str(REPO_ROOT / "tests" / "integration" / "scenarios" / "ekf_inverted_pendulum_tip_compile.toml")
+UKF_PENDULUM_TIP = str(REPO_ROOT / "tests" / "integration" / "scenarios" / "ukf_inverted_pendulum_tip_compile.toml")
 
 
 @pytest.mark.parametrize("scenario", [UKF_CARTPOLE, UKF_PENDULUM], ids=["ukf_cartpole", "ukf_pendulum"])
@@ -85,3 +87,16 @@ def test_gate_a_without_a_plant_for_model_terms_is_loud():
     est, ctrl, n_x, n_u, limits = live_components(spec)
     with pytest.raises(ValueError, match="plant-model term"):
         run_gate_a(cg, est, ctrl, n_x, n_u, input_limits=limits, ticks=5, plant=None)
+
+
+@pytest.mark.parametrize("scenario", [EKF_PENDULUM_TIP, UKF_PENDULUM_TIP], ids=["ekf", "ukf"])
+def test_gate_a_matches_live_plant_derived_measurement(scenario):
+    """A filter whose nonlinear h comes from the plant (no ``measurement_matrix``)
+    reproduces the live filter exactly — h is derived from the same plant the
+    graph lowered it from, so the two cannot drift."""
+    spec = load_scenario(scenario)
+    cg = build_recipe("closed_loop_tracking", spec)
+    est, ctrl, n_x, n_u, limits = live_components(spec)
+    assert est.measurement_fn is not None, "the plant sensor was not attached"
+    err = run_gate_a(cg, est, ctrl, n_x, n_u, input_limits=limits, ticks=50)
+    assert err <= TOL, f"gate A diverged: {err:.3e}"

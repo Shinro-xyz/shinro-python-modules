@@ -99,3 +99,26 @@ class TestPendulumEstimatorVariants:
         records = run_scenario(scenario)
         assert_steady_state(records, tolerance=0.06)
         assert_finite_state(records)
+
+
+TIP_SCENARIO = "tests/integration/scenarios/ekf_pendulum_tip_balance.toml"
+
+
+class TestEkfNonlinearSensorBalance:
+    """EKF with the plant's nonlinear bob-position sensor runs the closed loop.
+
+    The runner synthesizes the simulated sensor from the estimator's measurement
+    model, which adopts the plant's ``h(x) = [l sin θ, l cos θ]`` via
+    ``attach_plant`` — so the sensor is the bob position, not the raw state.
+    """
+
+    def test_regulates_and_estimates(self):
+        scenario = ScenarioFactory(TIP_SCENARIO).build()
+        records = run_scenario(scenario)
+        assert getattr(scenario.estimator, "measurement_fn", None) is not None, "the plant sensor was not attached"
+        assert abs(records[0].plant_state[0]) > 0.1
+        assert abs(records[-1].plant_state[0]) < 0.05
+        # the estimate tracks the true tilt from the nonlinear sensor
+        tail = records[-100:]
+        assert max(abs(r.estimated[0] - r.plant_state[0]) for r in tail) < 0.05
+        assert_finite_state(records)

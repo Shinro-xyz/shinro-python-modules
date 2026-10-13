@@ -29,9 +29,11 @@ SCENARIO = REPO_ROOT / "tests" / "integration" / "scenarios" / "base_tracking.to
 MPC_SCENARIO = REPO_ROOT / "tests" / "integration" / "scenarios" / "mpc_compile.toml"
 EKF_SCENARIO = REPO_ROOT / "tests" / "integration" / "scenarios" / "ekf_cartpole_compile.toml"
 EKF_PENDULUM_SCENARIO = REPO_ROOT / "tests" / "integration" / "scenarios" / "ekf_inverted_pendulum_compile.toml"
+EKF_PENDULUM_TIP_SCENARIO = REPO_ROOT / "tests" / "integration" / "scenarios" / "ekf_inverted_pendulum_tip_compile.toml"
 SMC_SCENARIO = REPO_ROOT / "tests" / "integration" / "scenarios" / "smc_pendulum_compile.toml"
 UKF_SCENARIO = REPO_ROOT / "tests" / "integration" / "scenarios" / "ukf_cartpole_compile.toml"
 UKF_PENDULUM_SCENARIO = REPO_ROOT / "tests" / "integration" / "scenarios" / "ukf_inverted_pendulum_compile.toml"
+UKF_PENDULUM_TIP_SCENARIO = REPO_ROOT / "tests" / "integration" / "scenarios" / "ukf_inverted_pendulum_tip_compile.toml"
 TEMPLATE = REPO_ROOT / "samples" / "scenarios" / "_template.toml"
 
 
@@ -497,14 +499,20 @@ def test_e2e_recurrent_scenario_compiles_with_state_ports(tmp_path):
 
 
 @pytest.mark.skipif(shutil.which("zig") is None, reason="zig not on PATH")
-@pytest.mark.parametrize("scenario", [EKF_SCENARIO, EKF_PENDULUM_SCENARIO], ids=["cartpole", "inverted_pendulum"])
+@pytest.mark.parametrize(
+    "scenario",
+    [EKF_SCENARIO, EKF_PENDULUM_SCENARIO, EKF_PENDULUM_TIP_SCENARIO],
+    ids=["cartpole", "inverted_pendulum", "inverted_pendulum_tip"],
+)
 def test_e2e_ekf_scenario_compiles_and_oracles(tmp_path, scenario):
     """The compiled EKF scenario (batched FD Jacobian) passes gate A and oracle B.
 
     Gate A is exact (interpret == live, same numpy arithmetic). Oracle B carries the
     scenario's relaxed ``oracle_tol``: the finite-difference Jacobian divides by
     2*eps = 2e-6, amplifying last-ulp differences between the VM's transcendentals
-    and numpy's by ~5e5 — measured ~2.5e-11, far below the 1e-9 gate.
+    and numpy's by ~5e5 — measured ~2.5e-11, far below the 1e-9 gate. The
+    ``inverted_pendulum_tip`` case additionally has a *nonlinear* h from the plant
+    (bob position), differentiated the same way.
     """
     out = tmp_path / "ekf"
     gen = _run(GEN, str(scenario), "--out", str(out))
@@ -521,12 +529,20 @@ def test_e2e_ekf_scenario_compiles_and_oracles(tmp_path, scenario):
 
 
 @pytest.mark.skipif(shutil.which("zig") is None, reason="zig not on PATH")
-@pytest.mark.parametrize("scenario", [UKF_SCENARIO, UKF_PENDULUM_SCENARIO], ids=["cartpole", "inverted_pendulum"])
-def test_e2e_ukf_scenario_compiles_and_oracles(tmp_path, scenario):
+@pytest.mark.parametrize(
+    ("scenario", "tol"),
+    [(UKF_SCENARIO, 1e-12), (UKF_PENDULUM_SCENARIO, 1e-12), (UKF_PENDULUM_TIP_SCENARIO, 1e-7)],
+    ids=["cartpole", "inverted_pendulum", "inverted_pendulum_tip"],
+)
+def test_e2e_ukf_scenario_compiles_and_oracles(tmp_path, scenario, tol):
     """The compiled UKF scenario (batched sigma points, cholesky op) passes gate A and oracle B.
 
-    Unlike the EKF there is no finite-difference division, so the non-QP 1e-12
-    oracle gate holds as-is (measured ~3.6e-15).
+    The linear-C cases have no transcendentals in h and no finite-difference
+    division, so the non-QP 1e-12 oracle gate holds as-is (measured ~3.6e-15).
+    The ``inverted_pendulum_tip`` case measures the nonlinear bob position: the
+    UKF *inverts* the measurement covariance S, so the VM's sin/cos differing
+    from numpy's by <1 ulp is amplified (measured ~4e-9) — hence its relaxed
+    tolerance.
     """
     out = tmp_path / "ukf"
     gen = _run(GEN, str(scenario), "--out", str(out))
@@ -538,7 +554,7 @@ def test_e2e_ukf_scenario_compiles_and_oracles(tmp_path, scenario):
 
     rec = json.loads((out / "lib" / "libbase.deployment.json").read_text())
     assert rec["oracle"]["status"] == "passed"
-    assert rec["oracle"]["tolerance"] == 1e-12
+    assert rec["oracle"]["tolerance"] == tol
     assert rec["oracle"]["max_abs_err"] < rec["oracle"]["tolerance"]
 
 
