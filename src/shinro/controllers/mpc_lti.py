@@ -323,7 +323,10 @@ class MPC_LTI_DeltaU(MPC_LTI):
         """Solve MPC with :math:`\\Delta u` regularization.
 
         Regulates the tracking error ``e = current_state - target_state`` to
-        zero, augmenting the state with the previous control input.
+        zero, augmenting the state with the previous control input. The QP
+        variable is the control rate :math:`\\Delta u`; this method returns the
+        **applied** control :math:`u_k = u_{\\text{prev}} + \\Delta u_k`, which is
+        what the host feeds back as ``u_prev`` next tick.
 
         Args:
             current_state: Original (non-augmented) state vector (n_x,).
@@ -331,13 +334,17 @@ class MPC_LTI_DeltaU(MPC_LTI):
             u_prev: Previous control input (n_u,). Defaults to zeros.
 
         Returns:
-            Optimal control action (n_u,).
+            Applied control :math:`u_k = u_{\\text{prev}} + \\Delta u_k` (n_u,).
         """
-        if u_prev is None:
-            u_prev = self.bk.zeros(self.m)
+        u_prev_val: Any = self.bk.zeros(self.m) if u_prev is None else u_prev
         x0 = current_state - target_state if target_state is not None else current_state
-        x0_aug = self.bk.hstack([x0, u_prev])
-        return super().compute(x0_aug)
+        x0_aug = self.bk.hstack([x0, u_prev_val])
+        delta_u = super().compute(x0_aug)
+        # The QP variable is the increment, but the framework treats a
+        # controller's output as the applied control and feeds it back as
+        # u_prev (runner + compose). Return the accumulated value so the
+        # plant receives u = u_prev + du, not the bare increment.
+        return u_prev_val + delta_u
 
 
 @register_controller("MPC_LTI")

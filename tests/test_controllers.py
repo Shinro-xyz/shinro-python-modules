@@ -1310,6 +1310,37 @@ class TestQuadrotorControllers:
         assert u.shape == (4,)
         assert np.all(np.isfinite(u))
 
+    def test_mpc_lti_deltau_returns_accumulated_control(self, bk):
+        """Delta-u MPC returns the applied control u_prev + du, not the bare increment.
+
+        The QP variable is the control *rate*; the framework treats a
+        controller's output as the applied control and feeds it back as
+        u_prev. A large delta-u penalty drives the increment toward zero, so
+        the returned control must stay near u_prev (returning the bare
+        increment would instead yield ~0).
+        """
+        from shinro.controllers.mpc_lti import MPC_LTI_DeltaU
+
+        plant = self._plant(bk)
+        A, B = plant.get_model()
+        mpc = MPC_LTI_DeltaU(
+            delta_u_penalty=1e6 * bk.eye(4),
+            horizon=5,
+            control_cost_matrix=bk.eye(4),
+            state_cost_matrix=bk.eye(12),
+            A_dynamics=A,
+            B_dynamics=B,
+            terminal_cost=5.0 * bk.eye(12),
+            backend=bk,
+        )
+        mpc.constraints(bk.eye(4), 5.0 * bk.array(np.ones(4)), -5.0 * bk.array(np.ones(4)))
+        u_prev = 0.3 * bk.array(np.ones(4))
+        u = _to_np(mpc.compute(bk.zeros(12), bk.zeros(12), u_prev=u_prev), bk)
+        assert np.allclose(u, _to_np(u_prev, bk), atol=1e-3), (
+            f"expected accumulated control ~{_to_np(u_prev, bk)}, got {u}; "
+            "the bare increment would be ~0"
+        )
+
     def test_mppi_attach_quadrotor(self, bk):
         """MPPI attaches the quadrotor's batched dynamics and returns four rotor commands."""
         from shinro.controllers.mppi import MPPIController
