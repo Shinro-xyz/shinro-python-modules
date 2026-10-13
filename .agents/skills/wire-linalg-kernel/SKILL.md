@@ -187,10 +187,18 @@ pub fn gemm(
 }
 ```
 
-Oracle (`ops.py`):
+Oracle + lowering schema + trace spec (`ops.py`) — **one registration**. The
+numpy handler *is* the oracle; `vm=VmOp(...)` declares the lowering; and
+`trace=TraceSpec(...)` is needed here only because `ArrayBackend` doesn't
+declare `gemm` (it carries the call signature). `lower_zig.py` and
+`trace_backend.py` are **not edited** — both derive from this:
 
 ```python
-@register_op("gemm")
+@register_op(
+    "gemm",
+    vm=VmOp(attrs=(AttrSpec("alpha", 1.0), AttrSpec("beta", 1.0)), flags=("transB",)),
+    trace=TraceSpec(params=lambda a, b, c, *, alpha=1.0, beta=1.0, transB=False: None),
+)
 def _gemm(node, values, inputs):
     a = values[node.inputs[0]]
     b = values[node.inputs[1]]
@@ -200,27 +208,10 @@ def _gemm(node, values, inputs):
     return node.attrs.get("alpha", 1.0) * (a @ b) + node.attrs.get("beta", 1.0) * c
 ```
 
-Trace surface (`trace_backend.py`):
-
-```python
-def gemm(self, a, b, c, *, alpha=1.0, beta=1.0, transB=False):
-    a = _lift(self.g, a); b = _lift(self.g, b); c = _lift(self.g, c)
-    n = b.shape[0] if transB else b.shape[1]
-    out_shape = (n,) if len(a.shape) == 1 else (a.shape[0], n)
-    return self._emit("gemm", [a, b, c], out_shape, alpha=alpha, beta=beta, transB=transB)
-```
-
-Serialization (`lower_zig.py`) — **no edit**. The op declares its geometry once
-in the schema, and the serializer derives the enum, tables, aux, and manifest:
-
-```python
-@register_op(
-    "gemm",
-    vm=VmOp(attrs=(AttrSpec("alpha", 1.0), AttrSpec("beta", 1.0)), flags=("transB",)),
-)
-def _gemm(node, values, inputs):
-    ...
-```
+(The op's trace method, output shape (handler on zeros), enum variant, baked
+`gemm_alpha`/`gemm_beta` tables, packed `aux`, and manifest entry all fall out of
+that one block. If `gemm` were declared on `ArrayBackend`, the `trace=` line
+would be unnecessary.)
 
 VM arm (`lower.zig`):
 
