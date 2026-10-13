@@ -63,8 +63,10 @@ The pipeline lives in `src/shinro/codegen/`; the Zig VM lives in `src/shinro/run
    Before layout the graph is **constant-folded** (`codegen/optimize.py`):
    all-constant intrinsic subgraphs are evaluated with the same numpy handlers
    `interpret()` uses (bit-exact), identical constants are deduped, and dead
-   nodes are dropped. The fold runs *inside* lowering, so `interpret()` stays
-   the untouched oracle while the emitted table/manifest describe the folded
+   nodes are dropped. It is then **canonicalized** (same module): identity ops
+   (`x*1`, `x+0`, `--x`, `(x.T).T`, `copy`, nested `reshape`) are simplified
+   away, also bit-exact. Both runs *inside* lowering, so `interpret()` stays
+   the untouched oracle while the emitted table/manifest describe the optimised
 graph.
 
 ## Module map
@@ -80,7 +82,7 @@ graph.
 | `codegen/interpreter.py` | `interpret` / `interpret_step` — replay a graph on real numpy inputs. |
 | `codegen/compose.py` | `compose` — merge per-component graphs into one closed-loop step graph, auto-inserting `reshape`/`clip`. |
 | `codegen/lower_zig.py` | Emit `src/shinro/runtime/graph_data.zig` (the graph as Zig constants) from a composed graph. Schema-driven: no per-op code. |
-| `codegen/optimize.py` | Compile-time constant folding (`fold_constants`): folds all-constant intrinsic subgraphs (bit-exact, via the interpreter's numpy handlers), dedupes identical constants, drops dead nodes. Applied inside `lower_zig`. |
+| `codegen/optimize.py` | Compile-time graph optimisation, applied inside `lower_zig`: `fold_constants` (fold all-constant intrinsic subgraphs bit-exactly via the interpreter's numpy handlers, dedupe constants, drop dead nodes) and `canonicalize` (simplify identity ops — `x*1`, `x+0`, `--x`, `(x.T).T`, `copy`, nested `reshape` — bit-exact). |
 | `demos/demo_codegen.py` | Runnable demo: traces KF+LQR for the base and cartpole plants, composes, and verifies each stage against a live numpy loop. |
 | `src/shinro/runtime/` (Zig) | `build.zig` (build script), `entry.zig` (deployment entry: binds the graph and exports `shinro_step`), `lower.zig` (graph-agnostic comptime-unrolled VM), `linalg.zig` (shared linear-algebra kernels), `graph_data.zig` (generated graph). |
 | `scenarios/recipes.py` | The graph-recipe registry (`@register_graph` / `build_recipe`) + the shipped recipes (`closed_loop_tracking`, `policy_only`) and the two shipped default graphs (`build_base_graph` / `build_mpc_composed_graph`). |

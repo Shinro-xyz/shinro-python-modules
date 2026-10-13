@@ -12,7 +12,7 @@ import numpy as np
 
 from shinro.codegen.compose import ComposedGraph
 from shinro.codegen.interpreter import interpret
-from shinro.codegen.optimize import fold_constants
+from shinro.codegen.optimize import canonicalize, fold_constants
 from shinro.codegen.tracing import Graph
 
 
@@ -184,3 +184,101 @@ class TestFoldConstants:
             interpret(f1.graph, {"x": np.zeros(2)})["y"],
             interpret(f2.graph, {"x": np.zeros(2)})["y"],
         )
+
+
+class TestCanonicalize:
+    """Identity-op simplification: bit-exact, no arithmetic evaluation."""
+
+    def _run(self, g: Graph, feed: dict[str, np.ndarray]) -> ComposedGraph:
+        can = canonicalize(_cg(g, list(feed), ["y"]))
+        np.testing.assert_array_equal(
+            interpret(can.graph, feed)["y"],
+            interpret(g, feed)["y"],  # oracle: identical output
+        )
+        return can
+
+    def test_mul_by_ones_both_sides(self):
+        for first in (True, False):
+            g = Graph()
+            ones = g.const(np.ones(3))
+            x = g.input("x", (3,))
+            ins = [ones, x] if first else [x, ones]
+            g.output("y", g.emit("mul", ins, (3,)))
+            can = self._run(g, {"x": np.array([1.0, -2.0, 3.0])})
+            assert "mul" not in _ops(can) and "const" not in _ops(can)  # operand now dead
+
+    def test_div_by_ones(self):
+        g = Graph()
+        ones = g.const(np.ones(2))
+        x = g.input("x", (2,))
+        g.output("y", g.emit("div", [x, ones], (2,)))
+        assert "div" not in _ops(self._run(g, {"x": np.array([4.0, 5.0])}))
+
+    def test_add_zeros_both_sides(self):
+        for first in (True, False):
+            g = Graph()
+            z = g.const(np.zeros(2))
+            x = g.input("x", (2,))
+            ins = [z, x] if first else [x, z]
+            g.output("y", g.emit("add", ins, (2,)))
+            assert "add" not in _ops(self._run(g, {"x": np.array([7.0, 8.0])}))
+
+    def test_sub_zeros_and_pow_one(self):
+        g = Graph()
+        z = g.const(np.zeros(2))
+        one = g.const(np.ones(2))
+        x = g.input("x", (2,))
+        s = g.emit("sub", [x, z], (2,))
+        p = g.emit("pow", [s, one], (2,))
+        g.output("y", p)
+        assert set(_ops(self._run(g, {"x": np.array([1.5, 2.5])}))) == {"input", "output"}
+
+    def test_copy_and_double_neg(self):
+        g = Graph()
+        x = g.input("x", (2,))
+        n1 = g.emit("neg", [x], (2,))
+        n2 = g.emit("neg", [n1], (2,))
+        c = g.emit("copy", [n2], (2,))
+        g.output("y", c)
+        assert "neg" not in _ops(self._run(g, {"x": np.array([3.0, -4.0])}))
+
+    def test_double_transpose(self):
+        g = Graph()
+        x = g.input("x", (2, 3))
+        t = g.emit("transpose", [g.emit("transpose", [x], (3, 2))], (2, 3))
+        g.output("y", t)
+        assert "transpose" not in _ops(self._run(g, {"x": np.arange(6.0).reshape(2, 3)}))
+
+    def test_nested_reshape_collapses(self):
+        g = Graph()
+        x = g.input("x", (2, 3))
+        r1 = g.emit("reshape", [x], (6,), target_shape=(6,))
+        r2 = g.emit("reshape", [r1], (3, 2), target_shape=(3, 2))
+        g.output("y", r2)
+        can = self._run(g, {"x": np.arange(6.0).reshape(2, 3)})
+        assert _ops(can).count("reshape") == 1  # inner reshape collapsed away
+
+    def test_broadcast_identity_is_not_removed(self):
+        # add((1,), zeros((3,))) -> (3,); dropping the add would change the
+        # shape, so the shape guard must keep it.
+        g = Graph()
+        z = g.const(np.zeros(3))
+        x = g.input("x", (1,))
+        g.output("y", g.emit("add", [x, z], (3,)))
+        assert "add" in _ops(self._run(g, {"x": np.array([2.0])}))
+
+    def test_non_identity_is_preserved(self):
+        g = Graph()
+        two = g.const(np.full(2, 2.0))
+        x = g.input("x", (2,))
+        g.output("y", g.emit("mul", [two, x], (2,)))
+        can = self._run(g, {"x": np.array([1.0, 1.0])})
+        assert "mul" in _ops(can)  # 2 is not an identity
+
+    def test_port_lists_preserved(self):
+        g = Graph()
+        x = g.input("x", (2,))
+        g.output("y", g.emit("copy", [x], (2,)))
+        cg = ComposedGraph(graph=g, inputs=["x"], outputs=["y"], state_inputs=["s"], state_outputs=["o"])
+        can = canonicalize(cg)
+        assert (can.inputs, can.outputs, can.state_inputs, can.state_outputs) == (["x"], ["y"], ["s"], ["o"])

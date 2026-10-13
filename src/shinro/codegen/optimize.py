@@ -27,6 +27,10 @@ The pass is applied inside :func:`shinro.codegen.lower_zig.lower_zig`, so
 ``interpret()`` (the correctness oracle, and gate A) still runs on the
 **unfolded** graph while the emitted table and manifest describe the folded one.
 The ComposedGraph's port lists are copied verbatim, so the C-ABI is unchanged.
+
+:func:`canonicalize` runs alongside it (also lowering-only) to simplify identity
+operations (``x*1``, ``x+0``, ``--x``, ``(x.T).T``, ...) — never arithmetic, so
+it too is bit-exact.
 """
 
 from __future__ import annotations
@@ -149,3 +153,122 @@ def _eliminate_dead(nodes: list[Node]) -> list[Node]:
         )
         for old in keep
     ]
+
+
+def canonicalize(cg: ComposedGraph, *, dce: bool = True) -> ComposedGraph:
+    """Return a copy of ``cg`` with identity operations simplified away.
+
+    Bit-exact: every rule replaces a node with a value that is numerically
+    identical for *all* inputs, so ``interpret(canonicalize(cg))`` equals
+    ``interpret(cg)`` exactly and the oracle stays intact. It never evaluates
+    arithmetic — that is :func:`fold_constants` — so the two compose freely.
+
+    Rules (the identity operand is a ``const`` whose entries all equal the
+    value; ``-0.0`` counts as ``0.0``):
+
+    - ``mul(x, 1)`` / ``mul(1, x)`` -> ``x``
+    - ``div(x, 1)`` -> ``x``
+    - ``add(x, 0)`` / ``add(0, x)`` -> ``x``
+    - ``sub(x, 0)`` -> ``x``
+    - ``pow(x, 1)`` -> ``x``
+    - ``copy(x)`` -> ``x``
+    - ``neg(neg(x))`` -> ``x``
+    - ``transpose(transpose(x))`` -> ``x``
+    - ``reshape(reshape(x, _), s)`` -> ``reshape(x, s)`` (inner reshape has
+      this single consumer)
+
+    Args:
+        cg: The composed graph to simplify. Not mutated.
+        dce: Drop nodes made dead by the rewrites (and their now-unused consts).
+
+    Returns:
+        A new :class:`ComposedGraph` with the same port lists.
+    """
+    nodes = cg.graph.nodes
+    consumers: dict[int, list[int]] = {}
+    for i, n in enumerate(nodes):
+        for j in n.inputs:
+            consumers.setdefault(j, []).append(i)
+    const_val: dict[int, np.ndarray] = {}
+    for i, n in enumerate(nodes):
+        if n.op == "const":
+            const_val[i] = np.asarray(n.attrs["value"], dtype=np.float64)
+
+    canon = list(range(len(nodes)))
+
+    def resolve(i: int) -> int:
+        root = i
+        while canon[root] != root:
+            root = canon[root]
+        while canon[i] != root:  # path compression
+            canon[i], i = root, canon[i]
+        return root
+
+    def _is_const(idx: int, value: float) -> bool:
+        v = const_val.get(idx)
+        return v is not None and bool(np.all(v == value))
+
+    new_inputs: list[list[int]] = [[] for _ in nodes]
+    for i, n in enumerate(nodes):
+        ins = [resolve(j) for j in n.inputs]
+        new_inputs[i] = ins
+        # A surviving operand is only equivalent if it already carries the
+        # node's full shape — otherwise the op was a broadcast (e.g.
+        # add((1,), zeros((n,))) -> (n,)) and dropping it changes the shape.
+        fits = [nodes[j].shape == n.shape for j in ins]
+        if n.op == "mul" and len(ins) == 2:
+            if fits[1] and _is_const(ins[1], 1.0):
+                canon[i] = ins[0]
+            elif fits[0] and _is_const(ins[0], 1.0):
+                canon[i] = ins[1]
+        elif n.op == "div" and len(ins) == 2:
+            if fits[0] and _is_const(ins[1], 1.0):
+                canon[i] = ins[0]
+        elif n.op == "add" and len(ins) == 2:
+            if fits[0] and _is_const(ins[1], 0.0):
+                canon[i] = ins[0]
+            elif fits[1] and _is_const(ins[0], 0.0):
+                canon[i] = ins[1]
+        elif n.op == "sub" and len(ins) == 2:
+            if fits[0] and _is_const(ins[1], 0.0):
+                canon[i] = ins[0]
+        elif n.op == "pow" and len(ins) == 2:
+            if fits[0] and _is_const(ins[1], 1.0):
+                canon[i] = ins[0]
+        elif n.op == "copy" and len(ins) == 1:
+            canon[i] = ins[0]
+        elif n.op == "neg" and len(ins) == 1:
+            inner = resolve(ins[0])
+            if nodes[inner].op == "neg":
+                canon[i] = resolve(nodes[inner].inputs[0])
+        elif n.op == "transpose" and len(ins) == 1:
+            inner = resolve(ins[0])
+            if nodes[inner].op == "transpose":
+                canon[i] = resolve(nodes[inner].inputs[0])
+        elif n.op == "reshape" and len(ins) == 1:
+            inner = resolve(ins[0])
+            if nodes[inner].op == "reshape" and len(consumers.get(inner, [])) == 1:
+                new_inputs[i] = [resolve(nodes[inner].inputs[0])]
+
+    out_nodes: list[Node] = []
+    remap: dict[int, int] = {}
+    for i, n in enumerate(nodes):
+        if canon[i] != i:
+            continue  # simplified away; consumers resolve past it
+        remap[i] = len(out_nodes)
+        out_nodes.append(
+            Node(op=n.op, inputs=[remap[resolve(j)] for j in new_inputs[i]], shape=n.shape, attrs=n.attrs)
+        )
+
+    if dce:
+        out_nodes = _eliminate_dead(out_nodes)
+
+    graph = Graph()
+    graph.nodes = out_nodes
+    return ComposedGraph(
+        graph=graph,
+        inputs=list(cg.inputs),
+        outputs=list(cg.outputs),
+        state_inputs=list(cg.state_inputs),
+        state_outputs=list(cg.state_outputs),
+    )
