@@ -1,23 +1,24 @@
 ---
 name: wire-linalg-kernel
-description: After writing a kernel in src/shinro/runtime/linalg.zig, wire a new VM op end-to-end — register it (ops.py), add the TraceBackend surface, lower_zig enum/tables/aux mapping, the lower.zig VM arm, tests (zig unit + .so oracle + op-shape matrix), regenerate graph_data.zig, lint and test. Use when the user asks to integrate, wire up, finish, or expose a new kernel as a graph op.
+description: After writing a kernel in src/shinro/runtime/linalg.zig, wire a new VM op end-to-end — register it in ops.py (numpy handler + mandatory VmOp lowering schema + optional TraceSpec trace spec), add the lower.zig VM arm, tests (zig unit + .so oracle + op-shape matrix), regenerate graph_data.zig, lint and test. Use when the user asks to integrate, wire up, finish, or expose a new kernel as a graph op.
 ---
 # Wire a Linalg Kernel Into the Graph VM
 
-A new op touches **five surfaces**. Miss one and either the build breaks or a
+A new op touches **four surfaces**. Miss one and either the build breaks or a
 silent shape/stride bug survives. This skill is the checklist plus the traps.
 
 ## When to Use
 
 Use when a kernel has been (or will be) written in
-`src/shinro/runtime/linalg.zig` and needs to become a graph op. Covers the five
-surfaces: the `ops.py` numpy handler **plus its `vm=VmOp(...)` lowering schema**,
-the `TraceBackend` method, the `lower.zig` comptime VM arm, the tests, and the
-ONNX importer when the op is an ONNX op. Also use when adding an ONNX op that
-needs a **new** VM op (as opposed to composing one from existing ops).
+`src/shinro/runtime/linalg.zig` and needs to become a graph op. Covers the four
+surfaces: the `ops.py` numpy handler **plus its `vm=VmOp(...)` lowering schema
+and, only if needed, a `trace=TraceSpec(...)`**, the `lower.zig` comptime VM arm,
+the tests, and the ONNX importer when the op is an ONNX op. Also use when adding
+an ONNX op that needs a **new** VM op (as opposed to composing one from existing
+ops).
 
-`lower_zig.py` is deliberately **not** on the list: it is schema-driven and
-needs no per-op edit.
+`lower_zig.py` and `trace_backend.py` are deliberately **not** on the list:
+both are registry-driven and need no per-op edit.
 
 ## Procedure
 
@@ -37,10 +38,14 @@ needs no per-op edit.
    oracle: `interpret()`, the ONNX importer's eager evaluation, and the Zig
    `.so` are all checked against it. Read scalar attrs from `node.attrs`.
 
-4. **`src/shinro/codegen/trace_backend.py`** — add a `TraceBackend.<op>`
-   method: `_lift` each operand, compute the output shape from input shapes
-   (numpy rank conventions; 1-D stays 1-D), then
-   `self._emit("<op>", [ids...], out_shape, **attrs)`.
+4. **Trace spec (optional).** The tracer *generates* the `<op>` method from the
+   registry: operands = signature params not in the `VmOp` attrs, and shape =
+   the handler run on `zeros(input_shape)`. Add `trace=TraceSpec(...)` to the
+   same `@register_op` only where that default is wrong — `params=` (a throwaway
+   signature lambda) when `ArrayBackend` doesn't declare the op, `attrs=` for an
+   emit attr not in the `VmOp`, `variadic=` for a list-of-tracers operand,
+   `shape=` when the handler can't run on zeros or the shape is attr-driven, and
+   `validate=` for input guards. No `trace_backend.py` edit.
 
 5. **`src/shinro/codegen/ops.py` — declare the lowering schema.** Attach a
    `VmOp` to the same `@register_op` that carries the numpy handler (import

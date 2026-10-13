@@ -37,7 +37,11 @@ The pipeline lives in `src/shinro/codegen/`; the Zig VM lives in `src/shinro/run
    `TraceBackend`, so every `bk.*` call emits a graph node. Concrete
    parameters (gain `K`, matrices `A`/`B`) are lifted to `const` nodes the
    moment they touch a traced operation — this is the "fixed as compiled"
-   property: shapes and parameters are baked at trace time.
+   property: shapes and parameters are baked at trace time. The named `bk.*`
+   methods are **generated from the op registry** (`codegen/ops.py`): operands
+   are the signature params that are not `VmOp` attrs, and the output shape is
+   the op's numpy handler run on `zeros(input_shape)` — one source of truth with
+   the interpreter oracle.
 2. **Compose** (`compose`). Stitch the per-component graphs into a single
    graph representing one tick of the closed loop, wiring them per the fixed
    ABC dataflow. Estimators and controllers share one vector convention — flat
@@ -68,10 +72,10 @@ graph.
 | Module | Role |
 | -------- | ------ |
 | `codegen/tracing.py` | `Tracer` (abstract value), `Graph` / `Node` (graph records), shape checking. Operator overloads (`@`, `+`, `-`, `*`, `.T`) record nodes. |
-| `codegen/trace_backend.py` | `TraceBackend` — a recording `ArrayBackend` that emits nodes for the named `bk.*` methods components call. |
+| `codegen/trace_backend.py` | `TraceBackend` — a recording `ArrayBackend` whose named-op methods are **generated from the op registry** (`__getattr__`): lift the operands, derive the shape from the op's numpy handler on zeros, emit. Only shape glue (`reshape`/`ravel`/`hstack`), `jacobian`, and the boundary helpers are hand-written. |
 | `codegen/trace_node.py` | `trace_node` / `trace_node_with_state` — run one component call under a `TraceBackend` and return a `NodeGraph`. |
 | `codegen/infer_contract.py` | Auto-infer a component's I/O contract from its ABC (`Controller` → `compute`, `StateEstimator` → `estimate`) and `inspect.signature`; detect recurrent state via attr-diff. |
-| `codegen/ops.py` | Op-handler registry (`OP_HANDLERS`). The data-driven "switch" — adding a new op is one `@register_op` decorator carrying its mandatory `vm=VmOp(...)` lowering schema. |
+| `codegen/ops.py` | Op-handler registry (`OP_HANDLERS`). The data-driven "switch" — adding a new op is one `@register_op` decorator carrying its mandatory `vm=VmOp(...)` lowering schema and, only where needed, a `trace=TraceSpec(...)` trace spec. |
 | `codegen/vm_schema.py` | The op → Zig lowering schema (`VmOp`/`AttrSpec`). The single source of truth `lower_zig` derives the `Op` enum, baked f64 tables, `aux` packing, and manifest from. |
 | `codegen/interpreter.py` | `interpret` / `interpret_step` — replay a graph on real numpy inputs. |
 | `codegen/compose.py` | `compose` — merge per-component graphs into one closed-loop step graph, auto-inserting `reshape`/`clip`. |
