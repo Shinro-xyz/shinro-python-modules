@@ -89,58 +89,76 @@ class TestCreatePlant:
         data = json.loads(list_plants())
         assert data["pend"]["type"] == "InvertedPendulum"
 
-    def test_plant_model_returns_discrete_ab(self):
-        """plant_model reports the linearization used by LQR/MPC."""
+    def test_plant_model_returns_one_stable_schema(self):
+        """The response always has both views and an explicit evaluation point.
+
+        No mode-switching: calling without state still reports f / f_x / g_x, at the
+        plant's current state and operating control, and says so in u_source.
+        """
         create_plant("cart", config_path=CARTPOLE)
         data = json.loads(plant_model("cart"))
-        assert np.asarray(data["A"]).shape == (4, 4)
-        assert np.asarray(data["B"]).shape == (4, 1)
+        assert np.asarray(data["linearization"]["A"]).shape == (4, 4)
+        assert np.asarray(data["linearization"]["B"]).shape == (4, 1)
         assert data["n_x"] == 4
         assert data["dt"] is not None
-        # Without an operating point there are no nonlinear terms to report.
-        assert "dynamics" not in data
-        assert "model_terms" not in data
 
-    def test_plant_model_evaluates_the_nonlinear_terms_at_a_point(self):
-        """Passing state also returns f(x, u) and the (f_x, g_x) pair SMC consumes.
+        evaluation = data["evaluation"]
+        assert evaluation["x"] == data["state"]  # defaults to the current state
+        assert evaluation["u_source"] == "zero"  # CartPole has no operating control
+        assert len(evaluation["dynamics"]) == 4
+        assert set(evaluation["model_terms"]) == {"f_x", "g_x"}
 
-        `get_model()` is only the *linearization*; these are the exact nonlinear
-        values at the requested operating point (there is no get_dynamics hook —
-        the vector field is `dynamics(x, u)`).
-        """
+    def test_plant_model_reports_the_evaluation_point_it_used(self):
+        """An explicit operating point is echoed, with u_source=c caller."""
         create_plant("pend", config_path=PENDULUM)
-        data = json.loads(plant_model("pend", state=[0.1, 0.0]))
-        assert data["operating_point"]["x"] == [0.1, 0.0]
-        assert len(data["dynamics"]) == 2
-        assert set(data["model_terms"]) == {"f_x", "g_x"}
-        assert np.asarray(data["model_terms"]["g_x"]).shape == (2, 1)
+        data = json.loads(plant_model("pend", state=[0.1, 0.0], control=[0.5]))
+        evaluation = data["evaluation"]
+        assert evaluation["x"] == [0.1, 0.0]
+        assert evaluation["u"] == [0.5]
+        assert evaluation["u_source"] == "caller"
+        assert len(evaluation["dynamics"]) == 2
+        assert np.asarray(evaluation["model_terms"]["g_x"]).shape == (2, 1)
         # The linearization stays available alongside the nonlinear evaluation.
-        assert np.asarray(data["A"]).shape == (2, 2)
+        assert np.asarray(data["linearization"]["A"]).shape == (2, 2)
 
     def test_plant_model_defaults_to_the_operating_control(self):
-        """A non-affine plant's g is zero at u=0, so the default u is its operating point.
+        """A non-affine plant's g is zero at u=0, so the default is its operating control.
 
-        Rotor thrust is ~w^2, so control_matrix(x, 0) is identically zero. Defaulting
-        to zeros would report a g_x that looks broken; the tool uses
-        operating_control() (hover for a quadrotor), matching model_terms.
+        Rotor thrust is ~w^2, so control_matrix(x, 0) is identically zero. The tool uses
+        operating_control() (hover speeds) and labels it, matching model_terms.
         """
         create_plant("qp", type="Quadrotor", params={"dt": 0.01})
-        data = json.loads(plant_model("qp", state=[0.0] * 12))
-        u = np.asarray(data["operating_point"]["u"])
+        evaluation = json.loads(plant_model("qp", state=[0.0] * 12))["evaluation"]
+        assert evaluation["u_source"] == "operating_control"
+        u = np.asarray(evaluation["u"])
         assert np.all(u > 0), f"expected hover speeds, got {u}"
-        g = np.asarray(data["model_terms"]["g_x"])
+        g = np.asarray(evaluation["model_terms"]["g_x"])
         assert np.count_nonzero(g) > 0, "g_x should not be all zeros at the operating point"
-        # The control-affine reconstruction must reproduce the vector field.
-        recon = np.asarray(data["model_terms"]["f_x"]) + g @ u
-        assert np.allclose(recon, data["dynamics"], atol=1e-9)
+        # The reconstruction is exact AT the operating point, by construction.
+        recon = np.asarray(evaluation["model_terms"]["f_x"]) + g @ u
+        assert np.allclose(recon, evaluation["dynamics"], atol=1e-9)
+        assert evaluation["affine_residual"] < 1e-9
+
+    def test_plant_model_measures_affine_validity_instead_of_asserting_it(self):
+        """affine_exact distinguishes a control-affine plant from a local tangent.
+
+        The question "is f = f_x + g_x*u exact, or only near u_op?" used to live in
+        prose; it is now measured by probing whether g depends on u.
+        """
+        create_plant("pend", config_path=PENDULUM)
+        create_plant("qp", type="Quadrotor", params={"dt": 0.01})
+        affine = json.loads(plant_model("pend", state=[0.1, 0.0]))["evaluation"]
+        tangent = json.loads(plant_model("qp", state=[0.0] * 12))["evaluation"]
+        assert affine["affine_exact"] is True
+        assert tangent["affine_exact"] is False, "rotor thrust ~ w^2 is not control-affine"
 
     def test_plant_model_accepts_an_operating_control(self):
-        """An explicit u is used for f(x, u); otherwise the operating control applies."""
+        """An explicit u changes f(x, u) while the operating control is the default."""
         create_plant("pend", config_path=PENDULUM)
         moved = json.loads(plant_model("pend", state=[0.1, 0.0], control=[0.5]))
-        zeroed = json.loads(plant_model("pend", state=[0.1, 0.0]))
-        assert moved["operating_point"]["u"] == [0.5]
-        assert moved["dynamics"] != zeroed["dynamics"]
+        defaulted = json.loads(plant_model("pend", state=[0.1, 0.0]))
+        assert moved["evaluation"]["u"] == [0.5]
+        assert moved["evaluation"]["dynamics"] != defaulted["evaluation"]["dynamics"]
 
     def test_plant_model_unknown_name_returns_error(self):
         """An unknown plant name reports the miss."""

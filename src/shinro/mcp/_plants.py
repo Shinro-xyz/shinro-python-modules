@@ -167,73 +167,99 @@ def plant_model(
     state: list[float] | None = None,
     control: list[float] | None = None,
 ) -> str:
-    """Report a plant's model: its discrete linearization, and optionally the true
-    non-linear terms evaluated at a point.
+    """Report a plant's model — both the linear view and the nonlinear one — at one
+    explicit evaluation point.
 
-    There is no ``get_dynamics`` on a Plant. The four distinct hooks are:
+    There is no ``get_dynamics`` on a Plant; it exposes four hooks, and this tool
+    reports all of them in one stable shape:
 
-    - ``get_model()`` — discrete ``(A, B)``; **linearized** about the plant's operating
-      point and Euler-discretized at ``dt``. This is what LQR/MPC use, and what this
-      tool always returns. For a nonlinear plant it is an approximation.
-    - ``dynamics(x, u)`` — the continuous-time vector field ``f(x, u)`` itself.
-    - ``model_terms(x, n_u)`` — the control-affine pair ``(f_x, g_x)`` at ``x``; what
-      SMC consumes.
-    - ``control_matrix(x, u)`` — ``g(x, u) = ∂f/∂u``.
+    - ``get_model()`` → the **linearization** ``(A, B)`` (what LQR/MPC use; an
+      approximation for a nonlinear plant).
+    - ``dynamics(x, u)`` → the vector field ``f(x, u)`` (what EKF/UKF/MPPI use).
+    - ``model_terms(x)`` → the control-affine pair ``(f_x, g_x)`` (what SMC uses).
+    - ``control_matrix(x, u)`` → ``g = ∂f/∂u``, used to *measure* whether the
+      control-affine form is exact at this point.
 
-    Pass ``state`` to also get ``f`` and ``model_terms`` at that operating point —
-    the exact nonlinear answer, as opposed to the linearization above.
+    The evaluation point is always echoed, so nothing is implicit: ``state`` defaults
+    to the plant's current state and ``control`` to ``plant.operating_control()``
+    (the same operating point ``model_terms`` uses — hover speeds for a rotor plant),
+    reported as ``evaluation.u_source``. ``evaluation.affine_exact`` answers the
+    question the docs used to answer in prose: is ``f = f_x + g_x·u`` exact here, or
+    only a tangent? ``affine_residual`` is ``‖f − (f_x + g_x·u)‖∞``.
 
     Args:
         name: Name of a stored plant.
-        state: Optional operating point ``x`` (n_x,) to evaluate the nonlinear terms at.
-        control: Optional ``u`` (n_u,) for ``dynamics``; defaults to zeros.
+        state: Operating point ``x`` (n_x,); defaults to the plant's current state.
+        control: Control ``u`` (n_u,); defaults to the plant's operating control.
     """
+    import numpy as np
+
     plant = _plant_store.get(name)
     if plant is None:
         return json.dumps({"error": f"No plant named '{name}'. Create one first."})
     try:
         A, B = plant.get_model()
-    except (ValueError, TypeError) as e:
-        return json.dumps({"error": f"{type(e).__name__}: {e}"})
+    except (ValueError, TypeError, NotImplementedError) as e:
+        return json.dumps({"error": f"{e.__class__.__name__}: {e}"})
 
     summary = _plant_summary(plant)
-    payload = {
+    A_arr = np.asarray(A, dtype=np.float64)
+    B_arr = np.asarray(B, dtype=np.float64)
+    n_u = summary["n_u"] or (B_arr.shape[1] if B_arr.ndim == 2 else 0)
+
+    # The evaluation point: explicit in the response, never a hidden default.
+    x = np.asarray(plant.get_state() if state is None else state, dtype=np.float64).reshape(-1)
+    u_op = plant.operating_control()
+    if control is not None:
+        u = np.asarray(control, dtype=np.float64).reshape(-1)
+        u_source = "caller"
+    elif u_op is not None:
+        u = np.asarray(u_op, dtype=np.float64).reshape(-1)
+        u_source = "operating_control"
+    else:
+        u = np.zeros(int(n_u))
+        u_source = "zero"
+
+    payload: dict = {
         "name": name,
         "type": summary["type"],
         "dt": getattr(plant, "dt", None),
         "n_x": summary["n_x"],
-        "n_u": summary["n_u"],
+        "n_u": int(n_u),
         "state": _flatten(plant.get_state()),
-        "A": _to_nested(A),
-        "B": _to_nested(B),
+        # At the plant's DEFAULT operating point — get_model() takes no x0/u0 portably.
+        "linearization": {"A": _to_nested(A_arr), "B": _to_nested(B_arr)},
+        "evaluation": {
+            "x": _flatten(x),
+            "u": _flatten(u),
+            "u_source": u_source,
+        },
     }
 
-    if state is not None:
-        import numpy as np
+    try:
+        f = np.asarray(plant.dynamics(x, u), dtype=np.float64).reshape(-1)
+        f_x, g_x = plant.model_terms(x, n_u=int(n_u))
+        f_x = np.asarray(f_x, dtype=np.float64).reshape(-1)
+        g_x = np.asarray(g_x, dtype=np.float64)
+        recon = f_x + g_x @ u
+        residual = float(np.max(np.abs(recon - f))) if f.size else 0.0
+        # Is g independent of u at this x? That is exactly "the control-affine form
+        # is exact", measured rather than asserted.
+        probe = u + 1e-3 * (1.0 + np.abs(u))
+        g_probe = np.asarray(plant.control_matrix(x, probe), dtype=np.float64)
+        affine_exact = bool(np.allclose(g_probe, g_x, rtol=1e-6, atol=1e-9))
+    except (ValueError, TypeError, NotImplementedError) as e:
+        payload["evaluation"]["error"] = f"{e.__class__.__name__}: {e}"
+        return json.dumps(payload)
 
-        n_u = summary["n_u"] or 0
-        # model_terms/control_matrix read `state.shape`, so coerce the JSON lists.
-        x = np.asarray(state, dtype=np.float64).reshape(-1)
-        # Default u to the plant's operating control, not zeros: for a non-affine plant
-        # (rotor thrust ~ w^2) control_matrix(x, 0) is identically zero, so a zero
-        # default would report a g_x that looks broken. This mirrors model_terms.
-        default_u = plant.operating_control()
-        if control is not None:
-            u = np.asarray(control, dtype=np.float64).reshape(-1)
-        elif default_u is not None:
-            u = np.asarray(default_u, dtype=np.float64).reshape(-1)
-        else:
-            u = np.zeros(int(n_u))
-        try:
-            f = plant.dynamics(x, u)
-            f_x, g_x = plant.model_terms(x, n_u=int(n_u))
-        except (ValueError, TypeError) as e:
-            payload["nonlinear_error"] = f"{e.__class__.__name__}: {e}"
-            return json.dumps(payload)
-        payload["operating_point"] = {"x": _flatten(x), "u": _flatten(u)}
-        payload["dynamics"] = _flatten(f)  # f(x, u): the true vector field
-        payload["model_terms"] = {"f_x": _flatten(f_x), "g_x": _to_nested(g_x)}  # SMC's pair
-
+    payload["evaluation"].update(
+        {
+            "dynamics": _flatten(f),
+            "model_terms": {"f_x": _flatten(f_x), "g_x": _to_nested(g_x)},
+            "affine_exact": affine_exact,
+            "affine_residual": residual,
+        }
+    )
     return json.dumps(payload)
 
 

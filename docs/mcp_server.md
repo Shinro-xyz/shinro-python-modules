@@ -503,18 +503,32 @@ exposes these instead:
 | `model_terms(x, n_u)` | control-affine pair `(f_x, g_x)` at `x`; `f = f_x + g_x·u` | SMC |
 | `control_matrix(x, u)` | `g(x, u) = ∂f/∂u` | `model_terms` |
 
-`plant_model(name)` returns only the linearization. Pass `state` (and optionally
-`control`) to also get `f(x, u)` and `(f_x, g_x)` at that point — the exact nonlinear
-answer, which is what you need to sanity-check an SMC setup or a nonlinear filter.
-For an inverted pendulum at `x=[0.1, 0]`, `u=0.5`: `f = [0, 21.9587]`,
-`f_x = [0, 1.9587]`, `g_x = [[0], [40.0]]`, and `f_x + g_x·u` reproduces `f`.
+`plant_model(name)` returns **one stable shape** with both views and the exact
+evaluation point it used — no mode-switching and no hidden default:
 
-**`control` defaults to the plant's operating control, not zero.** For a non-affine
-plant (rotor thrust ~ ω²) `control_matrix(x, 0)` is identically zero, so a zero default
-would report a `g_x` that looks broken. A quadrotor therefore defaults to its hover
-speeds. Pass `control` explicitly to evaluate somewhere else. Note also that for such
-a plant `dynamics(x, 0) ≠ f_x`: `f_x` is the tangent-line drift at the operating point,
-and `f_x + g_x·u` reproduces `f` only near that point.
+```json
+{
+  "n_x": 2, "n_u": 1, "state": [0.0, 0.0],
+  "linearization": { "A": [[1.0, 0.01], [0.1962, 1.0]], "B": [[0.0], [0.4]] },
+  "evaluation": {
+    "x": [0.1, 0.0], "u": [0.5], "u_source": "caller",
+    "dynamics": [0.0, 21.9587],
+    "model_terms": { "f_x": [0.0, 1.9587], "g_x": [[0.0], [40.0]] },
+    "affine_exact": true,
+    "affine_residual": 2e-11
+  }
+}
+```
+
+- `linearization` is the plant's default operating point (`get_model()`).
+- `evaluation` is at `x` (default: the plant's current state) and `u` (default:
+  `operating_control()`, reported as `u_source`: `caller` / `operating_control` /
+  `zero`). A rotor plant's default is therefore hover, not zero — `control_matrix(x, 0)`
+  is identically zero there, which would report a `g_x` that looks broken.
+- **`affine_exact` answers the question the prose used to answer:** it probes whether
+  `g` depends on `u` at this `x`. `true` means `f = f_x + g_x·u` holds for all `u`
+  (force/torque plants); `false` means it is the tangent at the operating point
+  (rotor thrust ~ ω²), exact only there — `affine_residual` is `‖f − (f_x + g_x·u)‖∞`.
 
 ---
 
