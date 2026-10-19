@@ -16,6 +16,18 @@ from shinro.mcp._common import (
 )
 from shinro.utils.array_backend import NumpyBackend
 
+
+def _supports_mpc_constraints(ctrl) -> bool:
+    """Whether a controller exposes the MPC constraint interface.
+
+    A capability test rather than a registry-name allowlist, so a third-party QP/MPC
+    controller (any name) gains the constraint tools by implementing ``constraints()``
+    plus the ``N`` / ``m`` / ``bk`` the default-bound helper needs. PID is deliberately
+    *not* included here: its output limits are a different interface.
+    """
+    return callable(getattr(ctrl, "constraints", None)) and hasattr(ctrl, "N") and hasattr(ctrl, "m")
+
+
 # ── Controller tools ──────────────────────────────────────────────────────────
 
 
@@ -51,8 +63,10 @@ def create_controller(
     else:
         return "Provide either 'config_path' or both 'type' and 'params'"
 
-    registry_name = getattr(ctrl, "_registry_name", "")
-    if registry_name in ("MPC_LTI", "MPC_DeltaU"):
+    # Any controller exposing the MPC constraint interface gets default (infinite)
+    # bounds, so a new QP controller works without knowing its registry name. MPPI
+    # has N but no constraints(), so it is correctly excluded.
+    if _supports_mpc_constraints(ctrl):
         _set_mpc_default_constraints(ctrl)
 
     _store[name] = ctrl
@@ -145,9 +159,8 @@ def set_mpc_constraints(
     if name not in _store:
         return f"No controller named '{name}'. Create one first."
     ctrl = _store[name]
-    registry_name = getattr(ctrl, "_registry_name", "")
-    if registry_name not in ("MPC_LTI", "MPC_DeltaU"):
-        return f"Controller '{name}' is not an MPC type."
+    if not _supports_mpc_constraints(ctrl):
+        return f"Controller '{name}' is not an MPC type (no constraints() interface)."
 
     bk = ctrl.bk
     m = ctrl.m
@@ -171,9 +184,8 @@ def get_mpc_constraints(name: str) -> str:
     if name not in _store:
         return json.dumps({"error": f"No controller named '{name}'"})
     ctrl = _store[name]
-    registry_name = getattr(ctrl, "_registry_name", "")
-    if registry_name not in ("MPC_LTI", "MPC_DeltaU"):
-        return json.dumps({"error": f"Controller '{name}' is not an MPC type."})
+    if not _supports_mpc_constraints(ctrl):
+        return json.dumps({"error": f"Controller '{name}' is not an MPC type (no constraints() interface)."})
     if not hasattr(ctrl, "A_constraints"):
         return json.dumps({"error": "No constraints set on this MPC controller."})
 
