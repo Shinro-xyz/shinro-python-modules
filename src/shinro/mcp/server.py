@@ -1,9 +1,10 @@
 """MCP server for shinro-python-modules — controller, estimator, trajectory, and system analysis tools.
 
 Tool implementations live in sibling modules by domain:
-``_controllers.py``, ``_estimators.py``, ``_trajectories.py``, ``_analysis.py``.
-Each registers its tools against the shared FastMCP instance from ``_common.py``
-at import time, so importing this module is what populates the tool list.
+``_controllers.py``, ``_estimators.py``, ``_trajectories.py``, ``_analysis.py``,
+``_codegen.py``, ``_verification.py``. Each registers its tools against the
+shared FastMCP instance from ``_common.py`` at import time, so importing this
+module is what populates the tool list.
 
 This module stays the single import site: it re-exports the tool functions and
 ``_store`` (used by ``tests/test_mcp_server.py``) and provides ``main()``, which
@@ -19,8 +20,20 @@ from shinro.mcp._analysis import (  # noqa: F401
     gramian_finite,
     system_summary,
 )
+from shinro.mcp._codegen import (  # noqa: F401
+    build_composed_graph,
+    check_component,
+    generate_scenario,
+    graph_summary,
+    interpret_graph,
+    list_codegen_ops,
+    lower_graph,
+    measure_graph,
+    trace_component,
+)
 from shinro.mcp._common import (  # noqa: F401
     _from_list,
+    _graph_store,
     _make_analyzer,
     _resolve_backend,
     _set_mpc_default_constraints,
@@ -52,11 +65,19 @@ from shinro.mcp._trajectories import (  # noqa: F401
     trajectory_generate,
     trajectory_position_at,
 )
+from shinro.mcp._verification import (  # noqa: F401
+    build_kernel,
+    run_gate_a,
+    run_oracle,
+    stamp_deployment,
+    verify_deployment,
+)
 
 __all__ = [
     # shared state / helpers
     "server",
     "_store",
+    "_graph_store",
     "_resolve_backend",
     "_to_list",
     "_from_list",
@@ -91,6 +112,22 @@ __all__ = [
     "gramian_finite",
     "system_summary",
     "balanced_truncation",
+    # codegen: trace -> compose -> inspect -> lower
+    "list_codegen_ops",
+    "check_component",
+    "trace_component",
+    "build_composed_graph",
+    "graph_summary",
+    "interpret_graph",
+    "measure_graph",
+    "lower_graph",
+    "generate_scenario",
+    # verification: gates, zig build, stamp, verify
+    "run_gate_a",
+    "build_kernel",
+    "run_oracle",
+    "stamp_deployment",
+    "verify_deployment",
 ]
 
 

@@ -83,15 +83,15 @@ def server():
 class TestServerProtocol:
     """Verify the server starts and speaks correct JSON-RPC."""
 
-    def test_tools_list_returns_all_25_tools(self, server):
-        """tools/list returns 25 tools with expected names."""
+    def test_tools_list_returns_all_tools(self, server):
+        """tools/list returns every registered tool with the expected names."""
         resp = server("tools/list")
         assert resp["jsonrpc"] == "2.0"
         assert "id" in resp
         assert "result" in resp
         tools = resp["result"]["tools"]
         tool_names = [t["name"] for t in tools]
-        assert len(tools) == 25
+        assert len(tools) == 39
         assert "create_controller" in tool_names
         assert "controller_compute" in tool_names
         assert "controller_reset" in tool_names
@@ -117,6 +117,22 @@ class TestServerProtocol:
         assert "gramian_finite" in tool_names
         assert "system_summary" in tool_names
         assert "balanced_truncation" in tool_names
+        # codegen: trace -> compose -> inspect -> lower
+        assert "list_codegen_ops" in tool_names
+        assert "check_component" in tool_names
+        assert "trace_component" in tool_names
+        assert "build_composed_graph" in tool_names
+        assert "graph_summary" in tool_names
+        assert "interpret_graph" in tool_names
+        assert "measure_graph" in tool_names
+        assert "lower_graph" in tool_names
+        assert "generate_scenario" in tool_names
+        # verification: gates, zig stage, stamp, verify
+        assert "run_gate_a" in tool_names
+        assert "build_kernel" in tool_names
+        assert "run_oracle" in tool_names
+        assert "stamp_deployment" in tool_names
+        assert "verify_deployment" in tool_names
 
     def test_tools_list_tool_has_input_schema(self, server):
         """Each tool in tools/list has an inputSchema with properties."""

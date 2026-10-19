@@ -29,6 +29,8 @@ under `src/shinro/mcp/`:
 | `_estimators.py` | Estimator tools (create, estimate, reset, listing) |
 | `_trajectories.py` | Trajectory tools (create, generate, position_at, listing) |
 | `_analysis.py` | LTI analysis tools (rank tests, Gramians, summary, balanced truncation) |
+| `_codegen.py` | Tracing and lowering tools (trace, compose, interpret, lower, gen scenario, measure) |
+| `_verification.py` | Verification tools (gate A, zig build, oracle B, stamp, verify) |
 | `server.py` | Imports the tool modules for their registration side effect, re-exports every tool, and provides `main()` |
 
 Each tool module decorates its functions with `@server.tool()` against the single
@@ -329,9 +331,94 @@ Returns: `{"Ar": [[-1.0]], "Br": [[1.414]], "Cr": [[1.414]], "Dr": [[0]], "reduc
 
 ---
 
+### Codegen — trace and lower
+
+The zig-free half of the compile pipeline (`src/shinro/codegen/` +
+`shinro.scenarios.gen`). Graphs are traced and stored by name in their own
+registry, so a graph and a controller may share a name.
+
+| Tool | Description |
+|------|-------------|
+| `list_codegen_ops` | Registered graph ops + scenario graph recipes |
+| `check_component` | Construct a config and report its trace contract (no trace) |
+| `trace_component` | Trace one component into a graph; reports discovered `state_attrs` + shapes |
+| `build_composed_graph` | Trace an estimator + controller into one closed-loop step graph |
+| `graph_summary` | Ports, op histogram, and lowerability of a stored graph |
+| `interpret_graph` | Run a stored graph on numpy inputs (the Python oracle) |
+| `measure_graph` | Static size metrics: host buffers, VM stack buffer, baked blobs |
+| `lower_graph` | Serialize a stored graph to `graph_data.zig` + manifest (no compiler) |
+| `generate_scenario` | The gen stage: trace + compose + lower an isolated scenario graph |
+
+**Two-stage workflow:** `generate_scenario` (or `build_composed_graph` +
+`lower_graph`) produces the graph; `build_kernel` compiles it.
+
+**Example — trace a Kalman filter:**
+
+```json
+{
+  "name": "trace_component",
+  "arguments": {
+    "name": "kf",
+    "config_path": "samples/estimators/kalman_base.toml",
+    "input_shapes": {"measurement": [3], "control_input": [3]}
+  }
+}
+```
+
+Returns the ports, the op histogram, and `state_attrs` / `state_shapes` — pass the
+latter back as `state_shapes` to re-trace with `state_*` ports instead of
+freezing the recurrence at trace-time values.
+
+**Safety:** the lowering tools refuse any `out_dir` inside the packaged
+`shinro/runtime/` directory, because `runtime/graph_data.zig` is the shipped
+graph that `make zig-gen` regenerates.
+
+---
+
+### Verification — gates and the zig stage
+
+`src/shinro/verification/` plus the build stage. Gate A and oracle B are
+complementary: gate A proves the *graph* reproduces the components, oracle B
+proves the *Zig VM* reproduces the graph. Only both make a stamp's "verified"
+claim true.
+
+| Tool | Description |
+|------|-------------|
+| `run_gate_a` | `interpret(graph)` vs the live estimator + controller (no zig) |
+| `build_kernel` | Integrity + gate A + `zig build` + oracle B + stamp + verify |
+| `run_oracle` | `.so` vs `interpret()` on random inputs (oracle B) |
+| `stamp_deployment` | Write the deployment record (master hash over the four slots) |
+| `verify_deployment` | Re-hash artifacts against the record (drift gate) |
+
+`build_kernel` requires `zig` on PATH and returns an `exit_code` / `status`
+(`ok`, `usage_error`, `oracle_mismatch`, `build_or_verify_failed`,
+`zig_missing`). Omitting `scenario_path` builds and stamps *unverified* — the
+record then carries `oracle.status = "not_run"`.
+
+The pipeline narrates on stdout, which on a stdio server is the JSON-RPC
+channel; these tools capture it and return it as a `log` field.
+
+**Example — build and verify the base kernel:**
+
+```json
+{
+  "name": "build_kernel",
+  "arguments": {
+    "graph_dir": "build/mcp/base",
+    "scenario_path": "tests/integration/scenarios/base_tracking.toml"
+  }
+}
+```
+
+Returns `exit_code`, `status`, `artifact`, `artifact_bytes`, the recorded
+`oracle`, the `master_hash`, and the captured `log`.
+
+---
+
 ## Test Coverage Summary
 
-The test suite (`tests/test_mcp_server.py`) covers:
+The test suites (`tests/test_mcp_server.py`, `tests/test_mcp_codegen.py`,
+`tests/test_mcp_verification.py`) cover:
 
 | Category | Tests | What's tested |
 |----------|-------|---------------|
@@ -352,7 +439,25 @@ The test suite (`tests/test_mcp_server.py`) covers:
 | **MPC constraints** | 8 | Set/get on MPC_LTI/DeltaU, custom matrix, non-MPC error, unknown name, bounds respected in compute |
 | **PID output limits** | 5 | Set success, clamping, anti-windup, non-PID error, unknown name, config-based limits |
 
-**Total: 126 tests** (127 collected; `make test` deselects the large-horizon MPC timeout test)
+**Total: 178 tests** across the three suites (179 collected; `make test` deselects
+the large-horizon MPC timeout test)
+
+Codegen (`tests/test_mcp_codegen.py`, 31) and verification
+(`tests/test_mcp_verification.py`, 21) add:
+
+| Category | Tests | What's tested |
+|----------|-------|---------------|
+| **Introspection** | 3 | Op/recipe inventory, contract probe, missing config |
+| **Tracing** | 6 | KF state discovery + shapes, op capture, re-trace with state ports, wrong-rank error, string/int shape specs, unknown type |
+| **Compose + interpret** | 9 | Port layout, half-specified limits, zero-error control, flat-value reshaping, missing/wrong-size ports, unknown names, summary |
+| **Lowering** | 6 | Writes graph + manifest, manifest matches disk, provenance, refuses runtime dir + subdirs, leaves shipped graph byte-identical, unknown name |
+| **Gen stage** | 4 | Isolated graph, interpretable output, missing scenario, runtime-dir guard |
+| **Measure** | 2 | Buffer/blob metrics, unknown name |
+| **Store isolation** | 1 | A graph and a controller may share a name |
+| **Gate A** | 4 | Passes on base, reports graph size, rejects policy-only, missing scenario |
+| **Zig build** | 6 | Exit 0, passed oracle, deployment record, captured log, zig-missing, no-graph usage error |
+| **Oracle B** | 4 | Passes on built kernel, stored-graph name, missing binary, missing graph source |
+| **Stamp + verify** | 7 | Roundtrip hash, supplied oracle block, missing binary, verify ok, binary drift, graph drift, missing record |
 
 ### Edge cases covered
 
