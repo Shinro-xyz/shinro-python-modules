@@ -27,6 +27,7 @@ from shinro.mcp.server import (
     create_estimator,
     create_plant,
     estimator_estimate,
+    list_controller_types,
     list_plant_types,
     list_plants,
     plant_model,
@@ -371,3 +372,54 @@ class TestDispatcherMatchesSignatures:
         ctrl = _store["mppi"]
         kwargs = controller_input_kwargs(infer_contract(ctrl).input_names, np.zeros(2), np.zeros(2), np.zeros(1))
         assert kwargs["epsilon"] is None
+
+
+class TestThirdPartyController:
+    """A controller registered outside the package must work through the tools.
+
+    Nothing in the tool layer enumerates known controller types: create_* dispatches
+    through the registry, and compute() is driven by role from the inferred contract.
+    This pins that with a controller defined in the test, including one that returns a
+    plain list rather than an ndarray.
+    """
+
+    def test_custom_controller_is_created_and_computed(self):
+        from dataclasses import dataclass
+
+        from shinro.components import Controller
+        from shinro.factories.registry import _CONTROLLER_REGISTRY, register_controller
+        from shinro.utils.array_backend import NumpyBackend
+
+        @dataclass(frozen=True)
+        class BangBangConfig:
+            dt: float = 0.01
+            effort: float = 1.0
+            name: str = "bangbang_test"
+
+        @register_controller("BangBangTest")
+        class BangBangTest(Controller):
+            Config = BangBangConfig
+
+            def __init__(self, effort: float = 1.0, dt: float = 0.01, backend=None):
+                self.bk = backend or NumpyBackend()
+                self.effort = effort
+                self.dt = dt
+
+            @classmethod
+            def from_config(cls, config, backend=None):
+                cfg = config if isinstance(config, BangBangConfig) else cls.load_config(config)
+                return cls(effort=cfg.effort, dt=cfg.dt, backend=backend or NumpyBackend())
+
+            def compute(self, current_state, target_state=None):
+                error = np.asarray(current_state, float) - (
+                    0 if target_state is None else np.asarray(target_state, float)
+                )
+                return (np.sign(error) * self.effort).tolist()  # plain list on purpose
+
+        try:
+            assert "BangBangTest" in json.loads(list_controller_types())["controller_types"]
+            assert "Created" in create_controller("bb", type="BangBangTest", params={"effort": 2.0})
+            data = json.loads(controller_compute("bb", state=[1.0, -0.0], reference=[0.0, 0.0]))
+            assert data["action"] == [2.0, 0.0]
+        finally:
+            _CONTROLLER_REGISTRY.pop("BangBangTest", None)
