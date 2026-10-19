@@ -37,6 +37,110 @@ design and compile.
 
 ---
 
+## Use from your own repository
+
+Everything below was verified from a clean virtualenv against a package install (not a
+source checkout) and an unrelated working directory.
+
+### 1. Install
+
+**There is no PyPI release yet** (`pip install shinro` fails). Install from a wheel or
+the git remote:
+
+```bash
+pip install /path/to/shinro-0.3.1.dev20-py3-none-any.whl
+# or, with repo access:
+pip install "shinro[onnx-rl] @ git+ssh://git@github.com/Shinro-xyz/shinro-python-modules.git"
+```
+
+Extras: `[onnx-rl]` for ONNX policies (adds `onnx`; compile-time only), `[torch]`,
+`[mujoco]`, `[media]`. `zig` must be on `PATH` for `build_kernel` — tracing and
+lowering do not need it.
+
+The wheel ships the Zig runtime (`runtime/build.zig`, `lower.zig`, the baked `emosqp`
+solver) and all four console scripts, so a build works from an installed package.
+
+### 2. Write your own configs
+
+**shinro ships no config files.** The `samples/` directory in the repository is
+documentation; it is not installed. Your project owns its TOMLs — copy the sample you
+need if you have the repo, otherwise write them from `docs/components.md`:
+
+```text
+your-repo/
+  configs/kf.toml            # estimator (type = "KalmanFilter", ...)
+  configs/lqr.toml           # controller (type = "LQR", ...)
+  scenario.toml              # [controller] [estimator] [compile]
+```
+
+```toml
+# scenario.toml
+[controller]
+type = "LQR"
+config = "configs/lqr.toml"
+
+[estimator]
+type = "KalmanFilter"
+config = "configs/kf.toml"
+
+[compile]
+optimize = "debug"            # "debug" | "release" (ReleaseFast)
+artifact_name = "libdemo"     # kernel installs as lib/libdemo.so
+n_x = 3
+n_u = 3
+```
+
+Paths inside a TOML resolve **relative to the server process's working directory**
+(there is no package fallback, by design). So set your client's `cwd` to your repo root.
+
+### 3. Point your MCP client at the server
+
+```json
+{
+  "mcpServers": {
+    "shinro": { "command": "shinro-mcp", "cwd": "/path/to/your-repo" },
+    "shinro-codegen": { "command": "shinro-mcp-codegen", "cwd": "/path/to/your-repo" }
+  }
+}
+```
+
+Add only the codegen server if the session is compile-only (that is the split's
+purpose); add both when a session spans design and compile. Clients that gate
+*project-scoped* server definitions need your approval for each new repository.
+
+### 4. The workflow, and what a healthy run looks like
+
+| Tool | Expected |
+|------|----------|
+| `generate_scenario` | `nodes_traced: 47`, `nodes_lowered: 39`, `has_solve_qp: false` |
+| `build_kernel` | `exit_code: 0`, `artifact_name: "libdemo"`, `artifact_bytes > 0`, `oracle.status: "passed"`, a `master_hash` |
+| `verify_deployment` | `ok: true`, `failures: []` |
+
+The oracle tolerance is 1e-12 for non-QP graphs (1e-3 with a `.solve_qp` node); a
+KF+LQR graph typically lands around 5e-16. Artifacts appear in
+`build/graph/lib/libdemo.{so,manifest.json,deployment.json}`.
+
+### 5. Gotchas specific to a foreign repository
+
+- **CWD is the contract.** `config`, `model_path`, `scenario_path` and `out_dir` are
+  all resolved against the server's working directory. A wrong `cwd` is a loud
+  `FileNotFoundError`, never a silent fallback.
+- **Graph names are process-local.** A graph registered by `generate_scenario` lives
+  in that server process; a new session must re-generate it (deterministic) or pass
+  `scenario_path` to the verification tools.
+- **Build artifacts land where you point them.** `build_kernel` defaults
+  `prefix = graph_dir`; pass `prefix` to separate the lowered graph from the
+  deployable tree, and pass `artifact_name` if it is not `libbase` (auto-detected only
+  when exactly one `.so` is present).
+- **The lowering tools refuse the packaged runtime dir.** They will not write into
+  `shinro/runtime/`, because that is the shipped graph.
+- **Third-party components** need their module imported before the server starts —
+  `shinro-compile --import your_module` does this for the CLI; for the MCP server,
+  import them from a `.pth`/sitecustomize or a thin wrapper script that imports your
+  module and then calls `shinro.mcp.codegen_server.main()`.
+
+---
+
 ## Module layout
 
 Two entry points over one set of domain modules under `src/shinro/mcp/`:
