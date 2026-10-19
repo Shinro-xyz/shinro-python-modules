@@ -17,6 +17,22 @@ Tool-selection accuracy degrades as the visible tool set grows (see arXiv
 `2505.10570`, `2505.03275`, `2606.15508`), so the split is a per-query-relevance
 measure, not just a token one.
 
+### Scope of the codegen server
+
+The codegen server **ends at a verified, stamped `lib<name>.so`** plus its
+deployment record. It deliberately does **not**:
+
+- deploy the kernel to a target or board,
+- drive it closed-loop against a plant,
+- measure it on target (timing, jitter, memory, protocol latency).
+
+Those belong to the consuming project — for shinro's own harness, `shinro-bench`.
+Keeping the boundary here is what lets the server stay free of any robot, transport,
+or hardware knowledge: it needs only your configs, the ONNX weights if any, and
+`zig` on `PATH`. If you want closed-loop behaviour, drive the built `.so` yourself
+(see the `u_prev` note under the external-repository gotchas) or use the simulation
+runner in your own code.
+
 ## Quick Start
 
 Both ship as console scripts (installed with the package; entry points in
