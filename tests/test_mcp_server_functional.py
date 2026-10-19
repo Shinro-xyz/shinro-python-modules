@@ -110,7 +110,7 @@ class TestServerProtocol:
         assert "result" in resp
         tools = resp["result"]["tools"]
         tool_names = [t["name"] for t in tools]
-        assert len(tools) == 25
+        assert len(tools) == 30
         assert "create_controller" in tool_names
         assert "controller_compute" in tool_names
         assert "controller_reset" in tool_names
@@ -136,6 +136,12 @@ class TestServerProtocol:
         assert "gramian_finite" in tool_names
         assert "system_summary" in tool_names
         assert "balanced_truncation" in tool_names
+        # plants: the model seam for nonlinear controllers/estimators
+        assert "create_plant" in tool_names
+        assert "attach_plant" in tool_names
+        assert "list_plant_types" in tool_names
+        assert "list_plants" in tool_names
+        assert "plant_model" in tool_names
 
     def test_component_server_does_not_expose_codegen_tools(self, server):
         """The split is real: tracing/lowering/verification stay off this server."""

@@ -27,6 +27,12 @@ server = FastMCP("shinro")
 #: not leak them onto :data:`server`.
 codegen_server = FastMCP("shinro-codegen")
 _store: dict[str, Any] = {}
+#: Plant instances. A plant is not a component you *call*; it supplies the model
+#: that nonlinear controllers (SMC's f_x/g_x, MPPI's dynamics) and estimators
+#: (the EKF/UKF process model) need, via ``attach_plant``.
+_plant_store: dict[str, Any] = {}
+#: component name -> plant name, the attachment made by the ``attach_plant`` tool.
+_attached: dict[str, str] = {}
 #: Traced/lowered graphs live in their own registry: a ``NodeGraph`` and a
 #: controller can share a name without either tool mistaking one for the other.
 _graph_store: dict[str, Any] = {}
@@ -46,6 +52,16 @@ def _to_list(arr) -> list[float]:
 
 def _from_list(data: list[float]):
     return np.array(data, dtype=np.float64)
+
+
+def attached_plant(component_name: str):
+    """The plant attached to a stored component, or ``None``.
+
+    Nonlinear controllers derive their model terms, and nonlinear estimators their
+    process model, from this; linear components simply ignore it.
+    """
+    plant_name = _attached.get(component_name)
+    return _plant_store.get(plant_name) if plant_name else None
 
 
 def _set_mpc_default_constraints(ctrl: Any) -> None:

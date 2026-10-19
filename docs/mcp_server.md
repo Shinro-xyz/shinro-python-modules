@@ -6,7 +6,7 @@ Cline, custom hosts).
 
 | Server | Console script | Tools | For |
 |--------|----------------|-------|-----|
-| **component** | `shinro-mcp` | 25 | Designing and running controllers, estimators, trajectories, LTI analysis |
+| **component** | `shinro-mcp` | 30 | Designing and running controllers, estimators, trajectories, LTI analysis |
 | **codegen** | `shinro-mcp-codegen` | 14 | Tracing, lowering to Zig, verification gates, building the kernel |
 
 They are separate servers because an MCP client puts **every** tool schema of a
@@ -176,6 +176,7 @@ Two entry points over one set of domain modules under `src/shinro/mcp/`:
 | `_controllers.py` | Controller tools (create, compute, reset, MPC constraints, PID limits, listing) |
 | `_estimators.py` | Estimator tools (create, estimate, reset, listing) |
 | `_trajectories.py` | Trajectory tools (create, generate, position_at, listing) |
+| `_plants.py` | Plant tools (create, attach, list, model) — the model seam for nonlinear components |
 | `_analysis.py` | LTI analysis tools (rank tests, Gramians, summary, balanced truncation) |
 | `_codegen.py` | Tracing and lowering tools (trace, compose, interpret, lower, gen scenario, measure) |
 | `_verification.py` | Verification tools (gate A, zig build, oracle B, stamp, verify) |
@@ -455,6 +456,45 @@ Returns: `{"position": [...], "velocity": [...], "acceleration": [...]}`
 
 ---
 
+### Plants
+
+A plant supplies what non-linear components cannot carry in their own config: SMC's
+`f_x`/`g_x`, MPPI's dynamics and cost, and the EKF/UKF process model. Linear
+components (LQR, PID, MPC, KF, Luenberger) need none of this.
+
+| Tool | Description |
+|------|-------------|
+| `create_plant` | Create a plant from a TOML config or inline params |
+| `attach_plant` | Attach a plant to a controller or estimator |
+| `plant_model` | Discrete-time `(A, B)` at the plant's operating point, plus dims |
+| `list_plant_types` | Registered plant types |
+| `list_plants` | Created plants, their dims, and what they are attached to |
+
+`controller_compute` maps its inputs to the controller's `compute()` parameters **by
+role** (state / reference / `u_prev` / model / free host input) using the same
+dispatcher as the simulation runner and gate A. So once a plant is attached:
+
+- **SMC** receives `f_x`/`g_x` derived from the plant — no extra arguments from you.
+- **MPPI** rolls out the plant's dynamics; `epsilon` is left `None` so it samples.
+- **EKF/UKF** get their process model; `estimate()` is unchanged.
+
+A non-linear controller with **no** plant attached reports a clear error naming the
+plant rather than a `TypeError` about `g_x`.
+
+**Example — SMC on an inverted pendulum:**
+
+```json
+{"name": "create_plant", "arguments": {"name": "pend", "config_path": "configs/pendulum.toml"}}
+{"name": "create_controller", "arguments": {"name": "smc", "type": "SMC", "params": {"dt": 0.02, "c": [1.0, 2.0], "k1": 1.0, "phi": 0.1}}}
+{"name": "attach_plant", "arguments": {"component_name": "smc", "plant_name": "pend"}}
+{"name": "controller_compute", "arguments": {"name": "smc", "state": [0.1, 0.0], "reference": [0.0, 0.0]}}
+```
+
+`attach_plant` on a self-contained component (e.g. LQR) is refused, because its model
+is already in its config.
+
+---
+
 ### System Analysis
 
 | Tool | Description |
@@ -602,8 +642,8 @@ Returns `exit_code`, `status`, `artifact`, `artifact_bytes`, the recorded
 
 ## Test Coverage Summary
 
-The test suites (`tests/test_mcp_server.py`, `tests/test_mcp_codegen.py`,
-`tests/test_mcp_verification.py`) cover:
+The test suites (`tests/test_mcp_server.py`, `tests/test_mcp_plants.py`,
+`tests/test_mcp_codegen.py`, `tests/test_mcp_verification.py`) cover:
 
 | Category | Tests | What's tested |
 |----------|-------|---------------|
@@ -624,7 +664,7 @@ The test suites (`tests/test_mcp_server.py`, `tests/test_mcp_codegen.py`,
 | **MPC constraints** | 8 | Set/get on MPC_LTI/DeltaU, custom matrix, non-MPC error, unknown name, bounds respected in compute |
 | **PID output limits** | 5 | Set success, clamping, anti-windup, non-PID error, unknown name, config-based limits |
 
-**Total: 178 tests** across the three suites (179 collected; `make test` deselects
+**Total: 201 tests** across the four suites (202 collected; `make test` deselects
 the large-horizon MPC timeout test)
 
 Codegen (`tests/test_mcp_codegen.py`, 31) and verification
