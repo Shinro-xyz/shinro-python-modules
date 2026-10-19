@@ -137,7 +137,16 @@ KF+LQR graph typically lands around 5e-16. Artifacts appear in
 - **Third-party components** need their module imported before the server starts —
   `shinro-compile --import your_module` does this for the CLI; for the MCP server,
   import them from a `.pth`/sitecustomize or a thin wrapper script that imports your
-  module and then calls `shinro.mcp.codegen_server.main()`.
+  module and then calls `shinro.mcp.codegen_server.main()`. Registering a custom plant
+  needs a frozen `Config` dataclass plus `physics_engine`, `get_state`, `get_model`,
+  `dynamics` and `step`.
+- **Driving the compiled `.so` yourself: `state_inputs` includes `u_prev`.** In a
+  composed graph `u_prev` is declared with the recurrent ports but has **no** `state_*`
+  slice in the state buffer. Feed it the previous control; treating it as a slice
+  shortens the packed input buffer by `n_u` and the kernel silently reads shifted
+  garbage. `cg.state_outputs`/`state_slices` cover only the real `state_*` buffers.
+- **PID requires `n_x == n_u`** (element-wise gains). A non-square plant needs LQR/MPC
+  or a reduced model — see `docs/components.md`.
 
 ---
 

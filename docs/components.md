@@ -25,6 +25,14 @@ implement `compute(current, target)` and `reset()`.
 | ----------------- | ------- | ------ | -------- |
 | `LQR` | `LQR` | `controllers/lqr.py` | `samples/controllers/lqr_base.toml` |
 | `PID` | `PIDController` | `controllers/pid.py` | `samples/controllers/pid_arm.toml` |
+
+> **PID needs `n_x == n_u`.** PID gains act element-wise on the error vector, so its
+> output has the shape of the state, not of the control. Compiling a PID against a
+> plant whose input dimension differs from its state dimension fails loudly
+> (`controller output shape (3,) does not match the plant's control dimension`).
+> For a non-square plant (e.g. a 3-state DC motor with one voltage input) use LQR/
+> MPC, or control a reduced model whose state and input dims match (a 1-state
+> velocity model, for instance).
 | `MPC_LTI` | `MPC_LTI_Base` | `controllers/mpc_lti.py` | `samples/controllers/mpc_lti_base.toml` |
 | `MPC_DeltaU` | `MPC_LTI_DeltaU` | `controllers/mpc_lti.py` | `samples/controllers/mpc_base.toml` |
 | `MPPI` | `MPPIController` | `controllers/mppi.py` | `samples/controllers/mppi_base.toml`, `mppi.toml` |
