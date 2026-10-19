@@ -6,7 +6,7 @@ Cline, custom hosts).
 
 | Server | Console script | Tools | For |
 |--------|----------------|-------|-----|
-| **component** | `shinro-mcp` | 32 | Designing and running controllers, estimators, trajectories, LTI analysis |
+| **component** | `shinro-mcp` | 33 | Designing and running controllers, estimators, trajectories, LTI analysis |
 | **codegen** | `shinro-mcp-codegen` | 16 | Tracing, lowering to Zig, verification gates, building the kernel |
 | **notebook** | `shinro-mcp-notebook` | 3 | Recording experimental runs to an append-only JSONL file |
 
@@ -179,6 +179,7 @@ Two entry points over one set of domain modules under `src/shinro/mcp/`:
 | `_estimators.py` | Estimator tools (create, estimate, reset, listing) |
 | `_trajectories.py` | Trajectory tools (create, generate, position_at, listing) |
 | `_plants.py` | Plant tools (create, attach, list, model) — the model seam for nonlinear components |
+| `_simulation.py` | Design-time closed-loop simulation (`simulate_scenario`) |
 | `_lifecycle.py` | Instance lifecycle (list every stored object, delete one) |
 | `_notebook.py` | Run-record tools (append one record, list summaries, fetch a record) |
 | `notebook_server.py` | Notebook entry point: imports `_notebook`, provides `main()` |
@@ -548,6 +549,45 @@ evaluation point it used — no mode-switching and no hidden default:
 
 ---
 
+### Simulation
+
+Runs a scenario closed-loop in numpy and reports how well it tracked — what tuning
+needs. Change a gain or weight, re-run, compare `tracking.final` / `tracking.max`.
+
+| Tool | Description |
+|------|-------------|
+| `simulate_scenario` | Run a scenario `steps` times; returns final state, tracking error, action magnitude, and a downsampled trajectory |
+
+It wraps the library's own `run_scenario`, so a number here means the same thing as a
+number anywhere else in the project. It is **numpy** simulation: it neither builds nor
+loads a kernel — the compiled path stays on the codegen server, and the oracle is what
+proves the two agree.
+
+The scenario must declare a `[plant]` (or `[sim]`) — compile-only scenarios, which
+declare their dims in `[compile]`, cannot be simulated.
+
+```json
+{
+  "name": "simulate_scenario",
+  "arguments": {"scenario_path": "scenarios/pendulum.toml", "steps": 800, "seed": 0}
+}
+```
+
+```json
+{"steps": 800, "dt": 0.01,
+ "final": {"plant_state": [0.003, -0.0056], "estimated": [...], "reference": [0.0, 0.0]},
+ "tracking": {"final": 0.00557, "max": 0.20052, "mean": 0.05589},
+ "max_abs_action": 0.1086, "all_finite": true,
+ "check": {"ok": null},
+ "trajectory": {"t": [0.0, 2.66, 5.32, 7.99], "plant_state": [...], ...}}
+```
+
+`tracking` is the L∞ distance from the reference; `check` applies the scenario's own
+`[scenario.tolerance]` block when it declares one (otherwise `ok` is `null` — the tool
+does not invent a threshold). Pass `samples: 0` for summary metrics only.
+
+---
+
 ### System Analysis
 
 | Tool | Description |
@@ -748,7 +788,8 @@ the rest unreadable.
 
 The test suites (`tests/test_mcp_server.py`, `tests/test_mcp_plants.py`,
 `tests/test_mcp_lifecycle.py`, `tests/test_mcp_notebook.py`,
-`tests/test_mcp_codegen.py`, `tests/test_mcp_verification.py`) cover:
+`tests/test_mcp_simulation.py`, `tests/test_mcp_codegen.py`,
+`tests/test_mcp_verification.py`) cover:
 
 | Category | Tests | What's tested |
 |----------|-------|---------------|
@@ -769,7 +810,7 @@ The test suites (`tests/test_mcp_server.py`, `tests/test_mcp_plants.py`,
 | **MPC constraints** | 8 | Set/get on MPC_LTI/DeltaU, custom matrix, non-MPC error, unknown name, bounds respected in compute |
 | **PID output limits** | 5 | Set success, clamping, anti-windup, non-PID error, unknown name, config-based limits |
 
-**Total: 238 tests** across the six suites (239 collected; `make test` deselects
+**Total: 246 tests** across the seven suites (247 collected; `make test` deselects
 the large-horizon MPC timeout test)
 
 Codegen (`tests/test_mcp_codegen.py`, 31) and verification
