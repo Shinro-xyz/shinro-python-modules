@@ -47,7 +47,16 @@ def _resolve_backend(backend: str | None = None):
 
 
 def _to_list(arr) -> list[float]:
-    return arr.flatten().tolist()
+    """Flatten a component result to a list of floats.
+
+    Components normally return ndarrays, but a third-party controller/estimator may
+    return a plain list or tuple; ``.flatten()`` would raise ``AttributeError`` on
+    those. Prefer the native flatten (identically fast for ndarray/torch) and fall
+    back to coercion.
+    """
+    if hasattr(arr, "flatten") and hasattr(arr, "tolist"):
+        return arr.flatten().tolist()
+    return np.asarray(arr, dtype=np.float64).ravel().tolist()
 
 
 def _from_list(data: list[float]):
