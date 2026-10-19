@@ -11,11 +11,14 @@ constructed fine and then failed on the first call. These pin the seam:
   call shapes — the component suite is the regression net for that).
 """
 
+import inspect
 import json
 
 import numpy as np
 import pytest
 
+from shinro.codegen.compose import controller_input_kwargs
+from shinro.codegen.infer_contract import infer_contract
 from shinro.mcp._common import _attached, _plant_store, _store
 from shinro.mcp.server import (
     attach_plant,
@@ -31,6 +34,21 @@ from shinro.mcp.server import (
 
 PENDULUM = "samples/plants/inverted_pendulum.toml"
 CARTPOLE = "samples/plants/cartpole.toml"
+
+#: Inline configs for every controller whose compute() the dispatcher must satisfy.
+#: Module-level (read-only) rather than a class attribute so it is not shared mutable
+#: state between test instances.
+CONTROLLER_CONFIGS = {
+    "PID": {"dt": 0.02, "kp": [1.0], "ki": [0.0], "kd": [0.0]},
+    "LQR": {"dt": 0.1, "state_cost": [1.0], "control_cost": [1.0], "A_dynamics": [[1.0]], "B_dynamics": [[0.1]]},
+    "MPC_LTI": {"dt": 0.02, "horizon": 5, "state_cost": [1.0], "control_cost": [0.1],
+                "A_dynamics": [[1.0]], "B_dynamics": [[0.02]]},
+    "MPC_DeltaU": {"dt": 0.02, "horizon": 5, "state_cost": [1.0], "control_cost": [0.1],
+                   "delta_u_penalty": [0.5], "A_dynamics": [[1.0]], "B_dynamics": [[0.02]]},
+    "MPPI": {"dt": 0.05, "horizon": 5, "num_samples": 10, "temperature": 0.5, "noise_sigma": [0.3],
+             "state_cost": [1.0], "control_cost": [0.1], "u_min": [-1.0], "u_max": [1.0], "seed": 0},
+    "SMC": {"dt": 0.02, "c": [1.0, 2.0], "k1": 1.0, "phi": 0.1, "k2": 0.0, "smoother": "sat", "alpha": 0.0},
+}
 
 
 @pytest.fixture(autouse=True)
@@ -315,3 +333,41 @@ class TestLinearRegression:
         )
         data = json.loads(controller_compute("mpc", state=[0.5, -0.3], u_prev=[0.2, 0.1]))
         assert len(data["action"]) == 2
+
+
+class TestDispatcherMatchesSignatures:
+    """`ctrl.compute(**kwargs)` must receive exactly the controller's own parameters.
+
+    The kwargs dict is built from `infer_contract(ctrl).input_names` and filled by
+    role, so its keys must equal the real `compute` signature — no missing argument
+    (TypeError) and no extra one. The same mapping drives the simulation runner and
+    gate A, so this also pins live/compiled parity.
+    """
+
+    @pytest.mark.parametrize("ctype", sorted(CONTROLLER_CONFIGS))
+    def test_kwargs_equal_the_compute_signature(self, ctype):
+        """The dispatcher's keys are exactly the parameters compute() declares."""
+        create_plant("pend", config_path=PENDULUM)
+        create_controller("c", type=ctype, params=CONTROLLER_CONFIGS[ctype])
+        ctrl = _store["c"]
+        params = [p for p in inspect.signature(ctrl.compute).parameters if p != "self"]
+        kwargs = controller_input_kwargs(
+            infer_contract(ctrl).input_names,
+            np.array([0.1, 0.0]),
+            np.zeros(2),
+            np.zeros(1),
+            plant=_plant_store["pend"],
+        )
+        assert list(kwargs) == params
+
+    def test_unknown_parameter_becomes_a_free_host_input(self):
+        """A name outside the role vocabulary is a host input (None), like MPPI's epsilon.
+
+        This is the deliberate fallback, and it matches what compose() does, so a
+        third-party controller parameter is a host input in both the live and the
+        compiled path rather than a silent error.
+        """
+        create_controller("mppi", type="MPPI", params=CONTROLLER_CONFIGS["MPPI"])
+        ctrl = _store["mppi"]
+        kwargs = controller_input_kwargs(infer_contract(ctrl).input_names, np.zeros(2), np.zeros(2), np.zeros(1))
+        assert kwargs["epsilon"] is None
