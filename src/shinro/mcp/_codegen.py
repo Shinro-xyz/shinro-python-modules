@@ -1,5 +1,9 @@
 """MCP tools for the codegen pipeline: trace a component, compose, inspect, lower.
 
+These register on the **codegen server** (``shinro-mcp-codegen``), not on the
+component server (``shinro-mcp``), so a client designing controllers does not
+carry their schemas in context.
+
 The zig-free half of the compile pipeline (``shinro.codegen`` +
 :func:`shinro.scenarios.gen.gen_scenario`), exposed as tools:
 
@@ -38,7 +42,8 @@ from shinro.codegen.measure import graph_metrics
 from shinro.codegen.ops import OP_HANDLERS, has_op
 from shinro.codegen.runtime_paths import runtime_root
 from shinro.codegen.trace_node import NodeGraph, trace_node
-from shinro.mcp._common import _graph_store, server
+from shinro.mcp._common import _graph_store
+from shinro.mcp._common import codegen_server as server
 from shinro.scenarios.gen import gen_scenario
 from shinro.scenarios.recipes import available_graphs, tool_versions
 

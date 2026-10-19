@@ -107,11 +107,12 @@ joint space**.
 | `src/shinro/codegen/` | Trace → compose → interpret → lower pipeline; `lower_zig.py` serializes a graph to `src/shinro/runtime/graph_data.zig` |
 | `src/shinro/factories/registry.py` | Component registry + config-driven factory |
 | `src/shinro/utils/array_backend.py` | NumpyBackend / TorchBackend abstraction |
-| `src/shinro/mcp/server.py` | MCP server entry point (`shinro-mcp`, wired in `.mcp.json`); tool bodies live in `_common.py` / `_controllers.py` / `_estimators.py` / `_trajectories.py` / `_analysis.py` / `_codegen.py` / `_verification.py` |
+| `src/shinro/mcp/server.py` | Component MCP server entry point (`shinro-mcp`, 25 tools, wired in `.mcp.json`); tool bodies in `_common.py` / `_controllers.py` / `_estimators.py` / `_trajectories.py` / `_analysis.py` |
+| `src/shinro/mcp/codegen_server.py` | Codegen MCP server entry point (`shinro-mcp-codegen`, 14 tools, connect explicitly); tool bodies in `_codegen.py` / `_verification.py` |
 | `src/shinro/simulation/robotsim.py` | Config-driven robot simulation factory |
 | `tests/integration/` | Full-loop physics-backed tests (MuJoCo, opt-in) |
 | `src/shinro/runtime/` | Zig comptime VM + linalg kernels + generated graph |
-| `src/shinro/mcp/_codegen.py`, `_verification.py` | MCP tools for the compile pipeline: trace/compose/lower a graph, then gate A + `zig build` + oracle + stamp/verify |
+| `src/shinro/mcp/_codegen.py`, `_verification.py` | MCP tools for the compile pipeline (on `shinro-mcp-codegen`): trace/compose/lower a graph, then gate A + `zig build` + oracle + stamp/verify |
 
 ## Lab Notebooks
 

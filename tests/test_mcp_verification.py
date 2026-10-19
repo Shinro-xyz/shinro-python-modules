@@ -19,7 +19,7 @@ import shutil
 import pytest
 
 from shinro.mcp._common import _graph_store, _store
-from shinro.mcp.server import (
+from shinro.mcp.codegen_server import (
     build_kernel,
     generate_scenario,
     run_gate_a,

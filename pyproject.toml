@@ -41,6 +41,7 @@ dev = [
 [project.scripts]
 shinro = "shinro.cli:main"
 shinro-mcp = "shinro.mcp.server:main"
+shinro-mcp-codegen = "shinro.mcp.codegen_server:main"
 shinro-compile = "shinro.cli.compile:main"
 
 [tool.setuptools.packages.find]

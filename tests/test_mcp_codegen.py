@@ -17,19 +17,18 @@ import pytest
 
 from shinro.codegen.runtime_paths import runtime_root
 from shinro.mcp._common import _graph_store, _store
-from shinro.mcp.server import (
+from shinro.mcp.codegen_server import (
     build_composed_graph,
     check_component,
-    create_controller,
     generate_scenario,
     graph_summary,
     interpret_graph,
     list_codegen_ops,
-    list_controllers,
     lower_graph,
     measure_graph,
     trace_component,
 )
+from shinro.mcp.server import create_controller, list_controllers
 
 BASE_SCENARIO = "tests/integration/scenarios/base_tracking.toml"
 KALMAN = "samples/estimators/kalman_base.toml"
