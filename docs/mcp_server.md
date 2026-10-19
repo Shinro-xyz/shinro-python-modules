@@ -283,13 +283,22 @@ command at the module form instead:
 | `create_controller` | Create a PID, LQR, MPC_LTI, or MPC_DeltaU controller |
 | `controller_compute` | Compute a control action from a stored controller |
 | `controller_reset` | Reset a controller's internal state |
-| `set_mpc_constraints` | Set input constraints on an MPC controller |
-| `get_mpc_constraints` | Read current MPC constraints |
-| `set_pid_output_limits` | Set output clamping limits on a PID controller |
+| `set_mpc_constraints` | Set input constraints on any controller exposing `constraints()` — MPC_LTI, MPC_DeltaU, or your own QP controller |
+| `get_mpc_constraints` | Read current constraints from such a controller |
+| `set_pid_output_limits` | Set output clamping limits on a PID controller (every PID variant shares this interface) |
 | `list_controller_types` | List all registered controller types |
 | `list_controllers` | List all created controller instances |
 
-**Controller types:** `PID`, `LQR`, `MPC_LTI`, `MPC_DeltaU`
+**Controller types:** every registered controller — `PID`, `LQR`, `MPC_LTI`,
+`MPC_DeltaU`, `MPPI`, `SMC`, `onnx_rl`, plus any you register with
+`@register_controller`. `create_controller` / `controller_compute` dispatch through the
+registry and by input role, so a third-party controller needs no tool changes.
+
+The MPC constraint tools are a **capability test**, not a name allowlist: a controller
+gains them by implementing `constraints(constraint_matrix, upper_bounds, lower_bounds)`
+plus the `N` / `m` / `bk` attributes the default-bound helper needs. `set_pid_output_limits`
+stays PID-specific, since output clamping is part of the PID contract every variant
+shares.
 
 **Example — PID:**
 

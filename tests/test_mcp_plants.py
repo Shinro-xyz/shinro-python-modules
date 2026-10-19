@@ -27,10 +27,12 @@ from shinro.mcp.server import (
     create_estimator,
     create_plant,
     estimator_estimate,
+    get_mpc_constraints,
     list_controller_types,
     list_plant_types,
     list_plants,
     plant_model,
+    set_mpc_constraints,
 )
 
 PENDULUM = "samples/plants/inverted_pendulum.toml"
@@ -423,3 +425,74 @@ class TestThirdPartyController:
             assert data["action"] == [2.0, 0.0]
         finally:
             _CONTROLLER_REGISTRY.pop("BangBangTest", None)
+
+
+class TestThirdPartyMpcController:
+    """MPC constraint tools are a capability test, not a registry-name allowlist.
+
+    A QP controller registered under a name shinro has never seen must get the same
+    treatment as MPC_LTI/MPC_DeltaU: default infinite bounds at creation, and working
+    set/get constraint tools.
+    """
+
+    def test_constraint_tools_follow_the_capability_not_the_name(self):
+        from dataclasses import dataclass
+
+        import scipy.sparse as sp
+
+        from shinro.components import Controller
+        from shinro.factories.registry import _CONTROLLER_REGISTRY, register_controller
+        from shinro.utils.array_backend import NumpyBackend
+
+        @dataclass(frozen=True)
+        class TinyMpcConfig:
+            dt: float = 0.02
+            horizon: int = 3
+            name: str = "tiny_mpc"
+
+        @register_controller("TinyMpcTest")
+        class TinyMpcTest(Controller):
+            Config = TinyMpcConfig
+
+            def __init__(self, horizon: int = 3, dt: float = 0.02, backend=None):
+                self.bk = backend or NumpyBackend()
+                self.N = horizon
+                self.m = 1
+                self.dt = dt
+
+            @classmethod
+            def from_config(cls, config, backend=None):
+                cfg = config if isinstance(config, TinyMpcConfig) else cls.load_config(config)
+                return cls(horizon=cfg.horizon, dt=cfg.dt, backend=backend or NumpyBackend())
+
+            def constraints(self, constraint_matrix, upper_bounds, lower_bounds):
+                # Signature matches the real MPC API: (F, upper, lower), tiled.
+                F_np = self.bk.to_numpy(constraint_matrix)
+                self.A_constraints = sp.csc_matrix(sp.block_diag([sp.coo_array(F_np)] * self.N))
+                self.ucons = self.bk.tile(upper_bounds, self.N)
+                self.lcons = self.bk.tile(lower_bounds, self.N)
+
+            def compute(self, current_state, target_state=None):
+                return np.zeros(self.m)
+
+        try:
+            assert "Created" in create_controller("tiny", type="TinyMpcTest", params={"horizon": 3})
+            # Creation applied the default bounds (the capability path, not the name).
+            assert hasattr(_store["tiny"], "A_constraints")
+
+            assert "Constraints set" in set_mpc_constraints("tiny", upper=[1.0, 1.0], lower=[-1.0, -1.0])
+            data = json.loads(get_mpc_constraints("tiny"))
+            assert data["upper"] == [1.0, 1.0]
+            assert data["lower"] == [-1.0, -1.0]
+        finally:
+            _CONTROLLER_REGISTRY.pop("TinyMpcTest", None)
+
+    def test_self_contained_controller_is_still_rejected(self):
+        """LQR exposes no constraints() interface, so it is refused."""
+        create_controller(
+            "lqr",
+            type="LQR",
+            params={"dt": 0.1, "state_cost": [1.0], "control_cost": [1.0],
+                    "A_dynamics": [[1.0]], "B_dynamics": [[0.1]]},
+        )
+        assert "not an MPC type" in set_mpc_constraints("lqr", upper=[1.0], lower=[-1.0])
