@@ -15,6 +15,7 @@ import pytest
 
 SERVER_PATH = "shinro.mcp.server"
 CODEGEN_SERVER_PATH = "shinro.mcp.codegen_server"
+NOTEBOOK_SERVER_PATH = "shinro.mcp.notebook_server"
 
 # Opt-in marker (like integration): excluded from the default `pytest` run via
 # pyproject `addopts`; run explicitly with `make test-mcp`.
@@ -96,6 +97,13 @@ def server():
 def codegen_server():
     """Client for the codegen server (``shinro-mcp-codegen``)."""
     with _client(CODEGEN_SERVER_PATH) as request:
+        yield request
+
+
+@pytest.fixture
+def notebook_server():
+    """Client for the notebook server (``shinro-mcp-notebook``)."""
+    with _client(NOTEBOOK_SERVER_PATH) as request:
         yield request
 
 
@@ -789,3 +797,48 @@ class TestCodegenServerProtocol:
         data = json.loads(resp["result"]["content"][0]["text"])
         assert "matmul" in data["ops"]
         assert "closed_loop_tracking" in data["recipes"]
+
+
+def _tool_payload(resp):
+    """Decode a tools/call result's JSON text payload."""
+    return json.loads(resp["result"]["content"][0]["text"])
+
+
+class TestNotebookServerProtocol:
+    """The third server persists runs — verify it over the wire, not just in-process."""
+
+    def test_notebook_tools_list_is_just_the_notebook(self, notebook_server):
+        """tools/list returns exactly the three recording tools."""
+        names = {t["name"] for t in notebook_server("tools/list")["result"]["tools"]}
+        assert names == {"record_run", "list_runs", "get_run"}
+
+    def test_record_and_read_back_over_the_protocol(self, notebook_server, tmp_path):
+        """A record written through JSON-RPC is readable by a list and a get."""
+        notebook = str(tmp_path / "runs" / "e2e.jsonl")
+        recorded = _tool_payload(
+            notebook_server(
+                "tools/call",
+                {
+                    "name": "record_run",
+                    "arguments": {
+                        "path": notebook,
+                        "name": "e2e-trial",
+                        "components": {"plant": {"type": "DCMotor"}},
+                        "metrics": {"final_error": 0.0097},
+                        "tags": ["e2e"],
+                    },
+                },
+            )
+        )
+        run_id = recorded["recorded"]
+
+        listed = _tool_payload(
+            notebook_server("tools/call", {"name": "list_runs", "arguments": {"path": notebook}})
+        )
+        assert [r["name"] for r in listed["runs"]] == ["e2e-trial"]
+
+        fetched = _tool_payload(
+            notebook_server("tools/call", {"name": "get_run", "arguments": {"path": notebook, "run": run_id}})
+        )
+        assert fetched["metrics"]["final_error"] == 0.0097
+        assert fetched["provenance"]["shinro_version"]
