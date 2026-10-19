@@ -176,4 +176,4 @@ walkthrough.
 | Symbol | Module | Purpose |
 |--------|--------|---------|
 | `RobotSim`, `ScenarioFactory`, `Scenario` | `simulation/robotsim.py`, `factories/scenario_factory.py` | Config-driven closed-loop simulation; scenarios live in `tests/integration/scenarios/*.toml` |
-| `shinro-mcp` (console script) | `mcp/server.py` | MCP server exposing factories + analysis as tools (see `docs/mcp_server.md`) |
+| `shinro-mcp` (console script) | `mcp/server.py` | MCP server exposing factories + analysis as tools (see `docs/mcp_server.md`); tool bodies split by domain across `mcp/_*.py` |
