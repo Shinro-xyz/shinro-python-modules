@@ -140,7 +140,7 @@ def run_gate_a(scenario_path: str, ticks: int = GATE_A_TICKS, seed: int = 0) -> 
             "tolerance": TOL_GATE_A,
             "ticks": ticks,
             "seed": seed,
-            "nodes": len(cg.graph.nodes),
+            "nodes_traced": len(cg.graph.nodes),
             "log": log.strip(),
         }
     )
@@ -188,7 +188,7 @@ def build_kernel(
         seed: RNG seed for the oracles (default 0).
     """
     prefix_path = Path(prefix) if prefix else Path(graph_dir)
-    artifact = artifact_name or "libbase"
+    lib_dir = prefix_path / "lib"
 
     try:
         code, log = _capture(
@@ -207,27 +207,29 @@ def build_kernel(
     except (ValueError, FileNotFoundError) as e:
         return json.dumps({"error": str(e)})
 
-    manifest = _read_json(prefix_path / "lib" / f"{artifact}.manifest.json")
-    if manifest and artifact_name is None:
-        # The scenario's [compile].artifact_name may differ from the default; the
-        # build wrote that name, so prefer the artifact actually on disk.
-        for candidate in sorted((prefix_path / "lib").glob("*.manifest.json")):
-            manifest = _read_json(candidate) or manifest
-            artifact = candidate.name.removesuffix(".manifest.json")
-    record = _read_json(prefix_path / "lib" / f"{artifact}.deployment.json")
-    so_path = prefix_path / "lib" / f"{artifact}.so"
+    # Resolve the artifact stem AFTER the build: the scenario's
+    # [compile].artifact_name overrides the default, and the caller may not have
+    # passed it. Globbing before the build would look at an empty lib/ and fall
+    # back to the default, nulling every metadata field despite a real artifact.
+    artifact = artifact_name or "libbase"
+    if artifact_name is None and not (lib_dir / f"{artifact}.so").exists():
+        produced = sorted(p.stem for p in lib_dir.glob("*.so"))
+        if len(produced) == 1:
+            artifact = produced[0]
+
+    record = _read_json(lib_dir / f"{artifact}.deployment.json")
+    so_path = lib_dir / f"{artifact}.so"
 
     return json.dumps(
         {
             "exit_code": code,
             "status": _EXIT_STATUS.get(code, f"unknown({code})"),
             "artifact": str(so_path) if so_path.exists() else None,
+            "artifact_name": artifact,
             "artifact_bytes": so_path.stat().st_size if so_path.exists() else None,
             "oracle": (record or {}).get("oracle"),
             "master_hash": (record or {}).get("master_hash"),
-            "deployment_record": str(prefix_path / "lib" / f"{artifact}.deployment.json")
-            if record
-            else None,
+            "deployment_record": str(lib_dir / f"{artifact}.deployment.json") if record else None,
             "log": log.strip().splitlines()[-40:],
         }
     )
@@ -277,22 +279,52 @@ def run_oracle(
     manifest = _read_json(Path(graph_dir or prefix) / "graph_data_manifest.json") or {}
     tol = tolerance if tolerance is not None else tol_for(manifest)
 
+    lib_dir = Path(prefix) / "lib"
+    # The scenario's [compile].artifact_name may differ from the default, and the
+    # caller often will not have passed it. Adopt the built stem when exactly one
+    # .so is present, instead of failing on a hardcoded "libbase".
+    if artifact_name == "libbase" and not (lib_dir / f"{artifact_name}.so").exists():
+        produced = sorted(p.stem for p in lib_dir.glob("*.so"))
+        if len(produced) == 1:
+            artifact_name = produced[0]
+
     try:
         lib = load_so(prefix, artifact_name)
         max_err = _run_oracle(lib, cg, samples, seed)
-    except FileNotFoundError as e:
-        return json.dumps({"error": str(e)})
+    except FileNotFoundError:
+        # load_so's message says "zig build produced no ...", which is misleading
+        # here: this tool does not build. Report what is actually on disk.
+        available = sorted(p.name for p in lib_dir.glob("*.so"))
+        return json.dumps(
+            {
+                "error": f"no lib/{artifact_name}.so under {prefix}",
+                "available_artifacts": available,
+                "hint": "pass artifact_name=<stem> to match the kernel that was built",
+            }
+        )
     except (ValueError, NotImplementedError) as e:
         return json.dumps({"error": f"{type(e).__name__}: {e}"})
 
     return json.dumps(
         {
+            "artifact_name": artifact_name,
             "passed": max_err < tol,
+            "status": "passed" if max_err < tol else "failed",
             "max_abs_err": max_err,
             "tolerance": tol,
             "samples": samples,
             "seed": seed,
             "has_solve_qp": bool(manifest.get("has_solve_qp")),
+            # Ready to hand straight to stamp_deployment(oracle=...): the canonical
+            # deployment-record block, the same shape build_kernel writes.
+            "record": {
+                "status": "passed" if max_err < tol else "failed",
+                "method": ".so shinro_step vs interpret()",
+                "samples": samples,
+                "seed": seed,
+                "max_abs_err": max_err,
+                "tolerance": tol,
+            },
         }
     )
 
@@ -314,7 +346,8 @@ def stamp_deployment(
     Args:
         prefix: The ``zig build --prefix`` dir containing ``lib/``.
         artifact_name: Artifact stem (must match the build's ``-Dname``).
-        oracle: Oracle outcome dict (e.g. from run_oracle: status/max_abs_err/...).
+        oracle: Oracle outcome dict. Pass ``run_oracle``'s ``record`` field — that
+            is exactly the canonical block ``build_kernel`` writes.
         native_record: For a cross build, path to the oracle-verified native
             deployment record to reference.
     """

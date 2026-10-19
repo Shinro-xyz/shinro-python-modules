@@ -214,7 +214,7 @@ class TestComposeAndInterpret:
         data = json.loads(graph_summary("base"))
         assert data["name"] == "base"
         assert data["kind"] == "composed"
-        assert data["nodes"] > 10
+        assert data["nodes_traced"] > 10
         assert "u" in data["outputs"]
 
     def test_graph_summary_unknown_graph_returns_error(self):
@@ -233,7 +233,8 @@ class TestLowerGraph:
         assert "error" not in data
         assert (out / "graph_data.zig").exists()
         assert (out / "graph_data_manifest.json").exists()
-        assert data["nodes_total"] > 10
+        assert data["nodes_traced"] > 10
+        assert data["nodes_lowered"] > 0
         assert data["buf_bytes"] > 0
         assert data["has_solve_qp"] is False
 
@@ -243,7 +244,7 @@ class TestLowerGraph:
         out = tmp_path / "base"
         data = json.loads(lower_graph("base", str(out)))
         manifest = json.loads((out / "graph_data_manifest.json").read_text())
-        assert data["nodes_total"] == manifest["nodes_total"]
+        assert data["nodes_lowered"] == manifest["nodes_total"]
         assert data["buf_len_f64"] == manifest["buf_len"]
 
     def test_lower_graph_records_provenance(self, tmp_path):
@@ -288,7 +289,8 @@ class TestGenerateScenario:
         assert "error" not in data
         assert (out / "graph_data.zig").exists()
         assert (out / "graph_data_manifest.json").exists()
-        assert data["nodes_total"] > 10
+        assert data["nodes_traced"] > 10
+        assert data["nodes_lowered"] > 0
         assert data["stored"] == "base"
         assert "base" in _graph_store
 
@@ -318,7 +320,8 @@ class TestMeasureGraph:
         _base_graph()
         data = json.loads(measure_graph("base"))
         assert "error" not in data
-        assert data["nodes_total"] > 10
+        assert data["nodes_lowered"] > 10
+        assert data["nodes_traced"] > 10
         assert data["buf_len_f64"] > 0
         assert data["buf_bytes"] == data["buf_len_f64"] * 8
         assert data["has_solve_qp"] is False

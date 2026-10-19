@@ -94,7 +94,10 @@ def _summary(name: str, cg: ComposedGraph) -> dict[str, Any]:
     return {
         "name": name,
         "kind": "composed" if isinstance(cg, ComposedGraph) else "node",
-        "nodes": len(cg.graph.nodes),
+        # The captured graph, BEFORE lowering folds constants/canonicalizes —
+        # this is what interpret() (and gate A) run on. The lowered table the VM
+        # compiles can be smaller; lowering tools report that as nodes_lowered.
+        "nodes_traced": len(cg.graph.nodes),
         "ops": dict(sorted(ops.items())),
         "inputs": inputs,
         "outputs": outputs,
@@ -394,6 +397,11 @@ def measure_graph(name: str) -> str:
             metrics = graph_metrics(cg, Path(tmp))
     except (ValueError, RuntimeError, NotImplementedError) as e:
         return json.dumps({"error": f"{type(e).__name__}: {e}"})
+    # Same vocabulary as the other codegen tools, so the two counts are never
+    # confused: traced = pre-optimisation (what interpret() runs), lowered =
+    # post-fold (what the VM compiles).
+    metrics["nodes_traced"] = len(cg.graph.nodes)
+    metrics["nodes_lowered"] = metrics.pop("nodes_total")
     return json.dumps(metrics)
 
 
@@ -453,7 +461,8 @@ def lower_graph(name: str, out_dir: str) -> str:
         {
             "graph_path": str(graph_path),
             "manifest_path": str(manifest_path),
-            "nodes_total": manifest.get("nodes_total"),
+            "nodes_traced": len(cg.graph.nodes),
+            "nodes_lowered": manifest.get("nodes_total"),
             "buf_len_f64": manifest.get("buf_len"),
             "buf_bytes": manifest.get("buf_bytes"),
             "const_blob_bytes": manifest.get("const_blob_bytes"),
@@ -510,7 +519,8 @@ def generate_scenario(name: str, scenario_path: str, out_dir: str) -> str:
             "stored": name,
             "graph_path": str(graph_path),
             "manifest_path": str(manifest_path),
-            "nodes_total": manifest.get("nodes_total", len(cg.graph.nodes)),
+            "nodes_traced": len(cg.graph.nodes),
+            "nodes_lowered": manifest.get("nodes_total", len(cg.graph.nodes)),
             "buf_bytes": manifest.get("buf_bytes"),
             "has_solve_qp": manifest.get("has_solve_qp"),
             **_summary(name, cg),
