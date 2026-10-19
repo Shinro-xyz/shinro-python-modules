@@ -64,6 +64,9 @@ from shinro.mcp._plants import (  # noqa: F401
     list_plants,
     plant_model,
 )
+from shinro.mcp._simulation import (  # noqa: F401
+    simulate_scenario,
+)
 from shinro.mcp._trajectories import (  # noqa: F401
     create_trajectory,
     list_trajectories,
@@ -121,6 +124,8 @@ __all__ = [
     # lifecycle
     "list_instances",
     "delete_instance",
+    # design-time simulation
+    "simulate_scenario",
 ]
 
 
