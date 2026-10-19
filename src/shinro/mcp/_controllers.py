@@ -2,6 +2,8 @@
 
 import json
 
+from shinro.codegen.compose import controller_input_kwargs
+from shinro.codegen.infer_contract import infer_contract
 from shinro.factories.controller_factory import ControllerFactory
 from shinro.factories.registry import _CONTROLLER_REGISTRY
 from shinro.mcp._common import (
@@ -9,6 +11,7 @@ from shinro.mcp._common import (
     _set_mpc_default_constraints,
     _store,
     _to_list,
+    attached_plant,
     server,
 )
 from shinro.utils.array_backend import NumpyBackend
@@ -65,11 +68,17 @@ def controller_compute(
 ) -> str:
     """Compute a control action from a named controller.
 
+    Inputs are mapped to the controller's ``compute()`` parameters **by role** — the
+    same dispatcher the simulation runner and gate A use — so the general form works:
+    SMC receives ``f_x``/``g_x`` derived from its attached plant, MPPI receives
+    ``epsilon=None`` (so it samples its own), and MPC receives ``u_prev``.
+
     Args:
         name: Name of the stored controller instance.
-        state: Current state vector.
-        reference: Target/reference state vector (defaults to zeros).
-        u_prev: Previous control input (required for MPC_DeltaU, ignored otherwise).
+        state: Current state vector (the state estimate in a closed loop).
+        reference: Target/reference state vector (defaults to zeros). A controller
+            declaring no reference input sees the tracking error ``state - reference``.
+        u_prev: Previous control input (required for MPC_DeltaU; defaults to zeros).
     """
     if name not in _store:
         return f"No controller named '{name}'. Create one first."
@@ -78,16 +87,24 @@ def controller_compute(
     bk = ctrl.bk
     state_arr = bk.array(state)
     ref_arr = bk.array(reference) if reference is not None else bk.zeros_like(state_arr)
-    registry_name = getattr(ctrl, "_registry_name", None)
+    plant = attached_plant(name)
+
+    # u_prev is needed by MPC_DeltaU and to size the plant's model terms for SMC
+    # (g_x is n_x x n_u), so take its width from the controller or the plant.
+    n_u = getattr(ctrl, "m", None)
+    if n_u is None and plant is not None:
+        n_u = getattr(plant, "input_dim", None)
+    if u_prev is not None:
+        u_prev_arr = bk.array(u_prev)
+    elif n_u:
+        u_prev_arr = bk.zeros(int(n_u))
+    else:
+        u_prev_arr = bk.zeros_like(state_arr)
 
     try:
-        if registry_name == "MPC_DeltaU":
-            u_prev_arr = bk.array(u_prev) if u_prev is not None else bk.zeros(ctrl.m)
-            action = ctrl.compute(state_arr, u_prev=u_prev_arr)
-        elif registry_name == "MPC_LTI":
-            action = ctrl.compute(state_arr)
-        else:
-            action = ctrl.compute(state_arr, ref_arr)
+        input_names = infer_contract(ctrl).input_names
+        kwargs = controller_input_kwargs(input_names, state_arr, ref_arr, u_prev_arr, plant=plant)
+        action = ctrl.compute(**kwargs)
     except Exception as e:
         return f"Error in compute: {e}"
 

@@ -26,8 +26,10 @@ from shinro.mcp._analysis import (  # noqa: F401
     system_summary,
 )
 from shinro.mcp._common import (  # noqa: F401
+    _attached,
     _from_list,
     _make_analyzer,
+    _plant_store,
     _resolve_backend,
     _set_mpc_default_constraints,
     _store,
@@ -51,6 +53,13 @@ from shinro.mcp._estimators import (  # noqa: F401
     list_estimator_types,
     list_estimators,
 )
+from shinro.mcp._plants import (  # noqa: F401
+    attach_plant,
+    create_plant,
+    list_plant_types,
+    list_plants,
+    plant_model,
+)
 from shinro.mcp._trajectories import (  # noqa: F401
     create_trajectory,
     list_trajectories,
@@ -63,6 +72,8 @@ __all__ = [
     # shared state / helpers
     "server",
     "_store",
+    "_plant_store",
+    "_attached",
     "_resolve_backend",
     "_to_list",
     "_from_list",
@@ -97,6 +108,12 @@ __all__ = [
     "gramian_finite",
     "system_summary",
     "balanced_truncation",
+    # plants: the model seam for nonlinear controllers/estimators
+    "create_plant",
+    "attach_plant",
+    "list_plant_types",
+    "list_plants",
+    "plant_model",
 ]
 
 
