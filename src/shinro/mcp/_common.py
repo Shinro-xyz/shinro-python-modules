@@ -7,6 +7,8 @@ work and a client should not pay for the ones it isn't using:
   controllers, estimators, trajectories, LTI analysis.
 - :data:`codegen_server` (``shinro-mcp-codegen``) — the compile pipeline:
   tracing, lowering, and the verification gates.
+- :data:`notebook_server` (``shinro-mcp-notebook``) — append-only JSONL records of
+  experimental runs.
 
 Each tool module registers against one of them at import time. Nothing in this
 module imports a tool module, so the import graph stays acyclic:
@@ -26,6 +28,11 @@ server = FastMCP("shinro")
 #: client connected to ``shinro-mcp-codegen``; importing the tool modules does
 #: not leak them onto :data:`server`.
 codegen_server = FastMCP("shinro-codegen")
+#: The experiment notebook. Its own server because it is a *record-keeping* surface:
+#: a session that never records a run should not carry its schemas, and it needs no
+#: access to the component or graph stores (records are self-describing and persist to
+#: a file the caller names).
+notebook_server = FastMCP("shinro-notebook")
 _store: dict[str, Any] = {}
 #: Plant instances. A plant is not a component you *call*; it supplies the model
 #: that nonlinear controllers (SMC's f_x/g_x, MPPI's dynamics) and estimators

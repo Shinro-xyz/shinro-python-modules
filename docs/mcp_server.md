@@ -1,6 +1,6 @@
 # Shinro MCP Servers
 
-Two Model Context Protocol (MCP) servers expose the shinro control library, split by
+Three Model Context Protocol (MCP) servers expose the shinro control library, split by
 phase of work. Both run over `stdio` — compatible with any MCP client (Claude Desktop,
 Cline, custom hosts).
 
@@ -8,6 +8,7 @@ Cline, custom hosts).
 |--------|----------------|-------|-----|
 | **component** | `shinro-mcp` | 32 | Designing and running controllers, estimators, trajectories, LTI analysis |
 | **codegen** | `shinro-mcp-codegen` | 16 | Tracing, lowering to Zig, verification gates, building the kernel |
+| **notebook** | `shinro-mcp-notebook` | 3 | Recording experimental runs to an append-only JSONL file |
 
 They are separate servers because an MCP client puts **every** tool schema of a
 connected server into the model's context on each turn. A session that is only tuning
@@ -41,6 +42,7 @@ Both ship as console scripts (installed with the package; entry points in
 ```bash
 shinro-mcp            # component server
 shinro-mcp-codegen    # codegen server
+shinro-mcp-notebook   # experiment notebook
 
 # or, if the console script is not on PATH:
 python -m shinro.mcp.server
@@ -178,6 +180,8 @@ Two entry points over one set of domain modules under `src/shinro/mcp/`:
 | `_trajectories.py` | Trajectory tools (create, generate, position_at, listing) |
 | `_plants.py` | Plant tools (create, attach, list, model) — the model seam for nonlinear components |
 | `_lifecycle.py` | Instance lifecycle (list every stored object, delete one) |
+| `_notebook.py` | Run-record tools (append one record, list summaries, fetch a record) |
+| `notebook_server.py` | Notebook entry point: imports `_notebook`, provides `main()` |
 | `_analysis.py` | LTI analysis tools (rank tests, Gramians, summary, balanced truncation) |
 | `_codegen.py` | Tracing and lowering tools (trace, compose, interpret, lower, gen scenario, measure) |
 | `_verification.py` | Verification tools (gate A, zig build, oracle B, stamp, verify) |
@@ -693,11 +697,58 @@ Returns `exit_code`, `status`, `artifact`, `artifact_bytes`, the recorded
 
 ---
 
+## Notebook
+
+The **notebook** server (``shinro-mcp-notebook``) records experimental runs so trials
+outlive the session that produced them. Records go to an **append-only JSONL file you
+name** — one JSON object per line, nothing rewritten, so a crashed session cannot
+corrupt earlier entries.
+
+| Tool | Description |
+|------|-------------|
+| `record_run` | Append one record: `path`, `name`, `components`, `metrics`, `notes`, `tags` |
+| `list_runs` | Compact summaries (id, name, timestamp, tags, metric names), oldest first |
+| `get_run` | One full record, by `id` first, then by `name` (most recent) |
+
+The server fills **provenance** for you — `created_at`, `shinro_version`, `python`,
+`platform`, `cwd`, and (inside a git repo) `git_sha` / `git_dirty`. That is the part an
+agent could forget or get wrong, and it is what makes a record traceable to the code
+that produced it.
+
+**Record a run:**
+
+```json
+{
+  "name": "record_run",
+  "arguments": {
+    "path": "runs/experiments.jsonl",
+    "name": "pid-motor-ref2",
+    "components": {
+      "plant": {"type": "DCMotor", "config": "configs/plant.toml"},
+      "controller": {"type": "PID", "config": "configs/pid.toml"}
+    },
+    "metrics": {"final_error": 0.0097, "steps": 600, "artifact_bytes": 11706317},
+    "tags": ["motor", "baseline"]
+  }
+}
+```
+
+```json
+{"recorded": "20261019T154518-a1b2", "name": "pid-motor-ref2", "path": "runs/experiments.jsonl"}
+```
+
+Notes: the path is resolved against the server's working directory (parent directories
+are created); a missing notebook reads as an empty list rather than an error; and a
+malformed line is skipped and counted in `skipped_lines` so one bad append does not make
+the rest unreadable.
+
+---
+
 ## Test Coverage Summary
 
 The test suites (`tests/test_mcp_server.py`, `tests/test_mcp_plants.py`,
-`tests/test_mcp_lifecycle.py`, `tests/test_mcp_codegen.py`,
-`tests/test_mcp_verification.py`) cover:
+`tests/test_mcp_lifecycle.py`, `tests/test_mcp_notebook.py`,
+`tests/test_mcp_codegen.py`, `tests/test_mcp_verification.py`) cover:
 
 | Category | Tests | What's tested |
 |----------|-------|---------------|
@@ -718,7 +769,7 @@ The test suites (`tests/test_mcp_server.py`, `tests/test_mcp_plants.py`,
 | **MPC constraints** | 8 | Set/get on MPC_LTI/DeltaU, custom matrix, non-MPC error, unknown name, bounds respected in compute |
 | **PID output limits** | 5 | Set success, clamping, anti-windup, non-PID error, unknown name, config-based limits |
 
-**Total: 225 tests** across the five suites (226 collected; `make test` deselects
+**Total: 238 tests** across the six suites (239 collected; `make test` deselects
 the large-horizon MPC timeout test)
 
 Codegen (`tests/test_mcp_codegen.py`, 31) and verification

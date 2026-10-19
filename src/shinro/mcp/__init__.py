@@ -1,6 +1,6 @@
 """shinro.mcp — Model Context Protocol servers for the shinro control suite.
 
-Two servers, because the tool families serve different phases of work and an MCP
+Three servers, because the tool families serve different phases of work and an MCP
 client loads every tool schema of a connected server into the model's context on
 each turn:
 
@@ -14,6 +14,7 @@ Run either with its console script, or as a module::
 
     shinro-mcp                 # python -m shinro.mcp.server
     shinro-mcp-codegen         # python -m shinro.mcp.codegen_server
+    shinro-mcp-notebook        # python -m shinro.mcp.notebook_server
 
 See ``docs/mcp_server.md`` for the client configuration and the tool reference.
 """
