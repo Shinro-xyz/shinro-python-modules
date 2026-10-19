@@ -66,6 +66,7 @@ from shinro.mcp._plants import (  # noqa: F401
 )
 from shinro.mcp._simulation import (  # noqa: F401
     simulate_scenario,
+    sweep_scenarios,
 )
 from shinro.mcp._trajectories import (  # noqa: F401
     create_trajectory,
@@ -126,6 +127,7 @@ __all__ = [
     "delete_instance",
     # design-time simulation
     "simulate_scenario",
+    "sweep_scenarios",
 ]
 
 

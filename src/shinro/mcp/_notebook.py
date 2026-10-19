@@ -193,3 +193,109 @@ def get_run(path: str, run: str) -> str:
     if named:
         return json.dumps(named[-1])
     return json.dumps({"error": f"No run with id or name '{run}' in {path}"})
+
+
+def _lookup(record: dict, dotted: str):
+    """Read a dotted path (``"metrics.final_error"``) from a record, or ``None``."""
+    current: Any = record
+    for part in dotted.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return None
+        current = current[part]
+    if isinstance(current, bool) or not isinstance(current, (int, float)):
+        return None
+    return float(current)
+
+
+def _metric_paths(records: list[dict]) -> list[str]:
+    """Every numeric metric path seen in the notebook, for a helpful error."""
+    paths: set[str] = set()
+    for record in records:
+        for key, value in (record.get("metrics") or {}).items():
+            if isinstance(value, dict):
+                paths.update(f"metrics.{key}.{sub}" for sub, v in value.items() if isinstance(v, (int, float)))
+            elif isinstance(value, (int, float)) and not isinstance(value, bool):
+                paths.add(f"metrics.{key}")
+    return sorted(paths)
+
+
+@server.tool()
+def compare_runs(
+    path: str,
+    metric: str = "metrics.final_error",
+    direction: str = "min",
+    tags: list[str] | None = None,
+    name: str | None = None,
+    limit: int = 10,
+) -> str:
+    """Rank the runs in a notebook by one metric — the "which should I keep?" call.
+
+    Reading the whole log to pick the next hypothesis is what makes a search loop
+    chatty; this answers it in one call. Records that lack the metric are counted, not
+    ranked, so a notebook with mixed experiments still compares like with like.
+
+    Args:
+        path: Notebook file, relative to the server's working directory.
+        metric: Dotted path into the record — e.g. ``metrics.final_error`` (default),
+            ``metrics.artifact_bytes``, or a nested ``metrics.check.steady_state.error``.
+        direction: ``"min"`` (default, lower is better) or ``"max"``.
+        tags: Only consider records carrying **all** of these tags.
+        name: Only consider records whose ``name`` contains this substring.
+        limit: How many ranked rows to return (default 10).
+    """
+    if direction not in ("min", "max"):
+        return json.dumps({"error": f"direction must be 'min' or 'max', got '{direction}'"})
+
+    records, skipped = _read(_target(path))
+    if not records:
+        return json.dumps({"error": f"no runs in {path}", "skipped_lines": skipped})
+
+    wanted = set(tags or [])
+    considered = [
+        record
+        for record in records
+        if wanted.issubset(set(record.get("tags") or [])) and (name is None or name in str(record.get("name", "")))
+    ]
+    if not considered:
+        return json.dumps({"error": f"no runs match tags={sorted(wanted)} name~={name!r}", "total_runs": len(records)})
+
+    ranked: list[dict] = []
+    missing = 0
+    for record in considered:
+        value = _lookup(record, metric)
+        if value is None:
+            missing += 1
+            continue
+        ranked.append(
+            {
+                "id": record.get("id"),
+                "name": record.get("name"),
+                "created_at": record.get("created_at"),
+                "value": value,
+                "tags": record.get("tags", []),
+            }
+        )
+
+    if not ranked:
+        return json.dumps(
+            {
+                "error": f"none of the {len(considered)} considered runs has a numeric '{metric}'",
+                "available_metrics": _metric_paths(considered),
+            }
+        )
+
+    ranked.sort(key=lambda row: row["value"], reverse=(direction == "max"))
+    for position, row in enumerate(ranked, start=1):
+        row["rank"] = position
+
+    return json.dumps(
+        {
+            "metric": metric,
+            "direction": direction,
+            "considered": len(considered),
+            "missing_metric": missing,
+            "skipped_lines": skipped,
+            "best": ranked[0],
+            "ranked": ranked[: max(1, limit)],
+        }
+    )
