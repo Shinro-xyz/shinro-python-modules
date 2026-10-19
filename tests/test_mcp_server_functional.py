@@ -118,7 +118,7 @@ class TestServerProtocol:
         assert "result" in resp
         tools = resp["result"]["tools"]
         tool_names = [t["name"] for t in tools]
-        assert len(tools) == 33
+        assert len(tools) == 34
         assert "create_controller" in tool_names
         assert "controller_compute" in tool_names
         assert "controller_reset" in tool_names
@@ -154,6 +154,7 @@ class TestServerProtocol:
         assert "list_instances" in tool_names
         assert "delete_instance" in tool_names
         assert "simulate_scenario" in tool_names
+        assert "sweep_scenarios" in tool_names
 
     def test_component_server_does_not_expose_codegen_tools(self, server):
         """The split is real: tracing/lowering/verification stay off this server."""
@@ -811,7 +812,7 @@ class TestNotebookServerProtocol:
     def test_notebook_tools_list_is_just_the_notebook(self, notebook_server):
         """tools/list returns exactly the three recording tools."""
         names = {t["name"] for t in notebook_server("tools/list")["result"]["tools"]}
-        assert names == {"record_run", "list_runs", "get_run"}
+        assert names == {"record_run", "list_runs", "get_run", "compare_runs"}
 
     def test_record_and_read_back_over_the_protocol(self, notebook_server, tmp_path):
         """A record written through JSON-RPC is readable by a list and a get."""

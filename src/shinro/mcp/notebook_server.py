@@ -8,12 +8,13 @@ records a run should not carry these schemas. It also needs neither the componen
 the graph store — a record is self-describing and persists to a file *you* name — so it
 can run entirely on its own.
 
-Tools (3):
+Tools (4):
 
 - ``record_run`` — append one record; the server fills provenance (timestamp, version,
   git SHA, platform, cwd).
 - ``list_runs`` — compact summaries, oldest first.
 - ``get_run`` — one full record, by id or by name (most recent).
+- ``compare_runs`` — rank the notebook by one metric (the "which should I keep?").
 
 Run with the ``shinro-mcp-notebook`` console script, or
 ``python -m shinro.mcp.notebook_server``.
@@ -21,6 +22,7 @@ Run with the ``shinro-mcp-notebook`` console script, or
 
 from shinro.mcp._common import notebook_server as server
 from shinro.mcp._notebook import (  # noqa: F401
+    compare_runs,
     get_run,
     list_runs,
     record_run,
@@ -31,6 +33,7 @@ __all__ = [
     "record_run",
     "list_runs",
     "get_run",
+    "compare_runs",
 ]
 
 

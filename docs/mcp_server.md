@@ -6,9 +6,9 @@ Cline, custom hosts).
 
 | Server | Console script | Tools | For |
 |--------|----------------|-------|-----|
-| **component** | `shinro-mcp` | 33 | Designing and running controllers, estimators, trajectories, LTI analysis |
+| **component** | `shinro-mcp` | 34 | Designing and running controllers, estimators, trajectories, LTI analysis |
 | **codegen** | `shinro-mcp-codegen` | 16 | Tracing, lowering to Zig, verification gates, building the kernel |
-| **notebook** | `shinro-mcp-notebook` | 3 | Recording experimental runs to an append-only JSONL file |
+| **notebook** | `shinro-mcp-notebook` | 4 | Recording experimental runs to an append-only JSONL file |
 
 They are separate servers because an MCP client puts **every** tool schema of a
 connected server into the model's context on each turn. A session that is only tuning
@@ -179,7 +179,7 @@ Two entry points over one set of domain modules under `src/shinro/mcp/`:
 | `_estimators.py` | Estimator tools (create, estimate, reset, listing) |
 | `_trajectories.py` | Trajectory tools (create, generate, position_at, listing) |
 | `_plants.py` | Plant tools (create, attach, list, model) — the model seam for nonlinear components |
-| `_simulation.py` | Design-time closed-loop simulation (`simulate_scenario`) |
+| `_simulation.py` | Design-time simulation: run one scenario (`simulate_scenario`), rank many (`sweep_scenarios`) |
 | `_lifecycle.py` | Instance lifecycle (list every stored object, delete one) |
 | `_notebook.py` | Run-record tools (append one record, list summaries, fetch a record) |
 | `notebook_server.py` | Notebook entry point: imports `_notebook`, provides `main()` |
@@ -556,7 +556,8 @@ needs. Change a gain or weight, re-run, compare `tracking.final` / `tracking.max
 
 | Tool | Description |
 |------|-------------|
-| `simulate_scenario` | Run a scenario `steps` times; returns final state, tracking error, action magnitude, and a downsampled trajectory |
+| `simulate_scenario` | Run one scenario: final state, tracking error, action magnitude, downsampled trajectory |
+| `sweep_scenarios` | Run several trials and rank them by one metric (the compare step of a design loop) |
 
 It wraps the library's own `run_scenario`, so a number here means the same thing as a
 number anywhere else in the project. It is **numpy** simulation: it neither builds nor
@@ -585,6 +586,37 @@ declare their dims in `[compile]`, cannot be simulated.
 `tracking` is the L∞ distance from the reference; `check` applies the scenario's own
 `[scenario.tolerance]` block when it declares one (otherwise `ok` is `null` — the tool
 does not invent a threshold). Pass `samples: 0` for summary metrics only.
+
+**Sweeping — the compare step.** A **trial is a config file**: each candidate is a
+scenario path, or an object naming replacement component configs
+(`controller_config` / `estimator_config` / `plant_config`). Those paths are applied in
+memory — nothing on disk is rewritten — so every trial stays a reviewable diff and the
+winner is a file you can point at, not a value only that call knows.
+
+```json
+{
+  "name": "sweep_scenarios",
+  "arguments": {
+    "scenario_path": "scenarios/pendulum.toml",
+    "candidates": [
+      {"label": "soft", "controller_config": "configs/smc_k1_0.5.toml"},
+      {"label": "stiff", "controller_config": "configs/smc_k1_8.toml"}
+    ],
+    "steps": 800, "seed": 0,
+    "objective": "tracking.final", "direction": "min"
+  }
+}
+```
+
+```text
+#1 stiff  value=0.00337  max=0.1997  |u|max=0.179
+#2 soft   value=0.00679  max=0.2027  |u|max=0.106
+```
+
+`objective` is any dotted numeric path in the per-trial summary (`tracking.final`,
+`tracking.max`, `max_abs_action`, `duration`). A candidate that fails to build lands
+in `failed` instead of aborting the sweep, and `max_trials` (default 50) caps a runaway
+search. `best` reports the winning files to keep.
 
 ---
 
@@ -749,6 +781,7 @@ corrupt earlier entries.
 | `record_run` | Append one record: `path`, `name`, `components`, `metrics`, `notes`, `tags` |
 | `list_runs` | Compact summaries (id, name, timestamp, tags, metric names), oldest first |
 | `get_run` | One full record, by `id` first, then by `name` (most recent) |
+| `compare_runs` | Rank the notebook by one metric — the "which should I keep?" call |
 
 The server fills **provenance** for you — `created_at`, `shinro_version`, `python`,
 `platform`, `cwd`, and (inside a git repo) `git_sha` / `git_dirty`. That is the part an
@@ -776,6 +809,12 @@ that produced it.
 ```json
 {"recorded": "20261019T154518-a1b2", "name": "pid-motor-ref2", "path": "runs/experiments.jsonl"}
 ```
+
+**Comparing runs.** `compare_runs(path, metric="metrics.final_error", direction="min",
+tags=[...])` ranks the history by any dotted numeric path (nested ones too, e.g.
+`metrics.check.steady_state.error`). Records that lack the metric are counted in
+`missing_metric` rather than ranked, so a notebook of mixed experiments still compares
+like with like; if nothing has the metric it returns the available ones.
 
 Notes: the path is resolved against the server's working directory (parent directories
 are created); a missing notebook reads as an empty list rather than an error; and a
@@ -810,7 +849,7 @@ The test suites (`tests/test_mcp_server.py`, `tests/test_mcp_plants.py`,
 | **MPC constraints** | 8 | Set/get on MPC_LTI/DeltaU, custom matrix, non-MPC error, unknown name, bounds respected in compute |
 | **PID output limits** | 5 | Set success, clamping, anti-windup, non-PID error, unknown name, config-based limits |
 
-**Total: 246 tests** across the seven suites (247 collected; `make test` deselects
+**Total: 260 tests** across the seven suites (261 collected; `make test` deselects
 the large-horizon MPC timeout test)
 
 Codegen (`tests/test_mcp_codegen.py`, 31) and verification
