@@ -97,6 +97,33 @@ class TestCreatePlant:
         assert np.asarray(data["B"]).shape == (4, 1)
         assert data["n_x"] == 4
         assert data["dt"] is not None
+        # Without an operating point there are no nonlinear terms to report.
+        assert "dynamics" not in data
+        assert "model_terms" not in data
+
+    def test_plant_model_evaluates_the_nonlinear_terms_at_a_point(self):
+        """Passing state also returns f(x, u) and the (f_x, g_x) pair SMC consumes.
+
+        `get_model()` is only the *linearization*; these are the exact nonlinear
+        values at the requested operating point (there is no get_dynamics hook —
+        the vector field is `dynamics(x, u)`).
+        """
+        create_plant("pend", config_path=PENDULUM)
+        data = json.loads(plant_model("pend", state=[0.1, 0.0]))
+        assert data["operating_point"]["x"] == [0.1, 0.0]
+        assert len(data["dynamics"]) == 2
+        assert set(data["model_terms"]) == {"f_x", "g_x"}
+        assert np.asarray(data["model_terms"]["g_x"]).shape == (2, 1)
+        # The linearization stays available alongside the nonlinear evaluation.
+        assert np.asarray(data["A"]).shape == (2, 2)
+
+    def test_plant_model_accepts_an_operating_control(self):
+        """An explicit u is used for f(x, u); it defaults to zeros otherwise."""
+        create_plant("pend", config_path=PENDULUM)
+        moved = json.loads(plant_model("pend", state=[0.1, 0.0], control=[0.5]))
+        zeroed = json.loads(plant_model("pend", state=[0.1, 0.0]))
+        assert moved["operating_point"]["u"] == [0.5]
+        assert moved["dynamics"] != zeroed["dynamics"]
 
     def test_plant_model_unknown_name_returns_error(self):
         """An unknown plant name reports the miss."""

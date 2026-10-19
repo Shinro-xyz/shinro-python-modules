@@ -162,16 +162,31 @@ def list_plants() -> str:
 
 
 @server.tool()
-def plant_model(name: str) -> str:
-    """Report a plant's discrete-time model and dims.
+def plant_model(
+    name: str,
+    state: list[float] | None = None,
+    control: list[float] | None = None,
+) -> str:
+    """Report a plant's model: its discrete linearization, and optionally the true
+    non-linear terms evaluated at a point.
 
-    The linearization used by LQR/MPC and by the compile path: ``get_model()``
-    linearizes the plant's dynamics at its operating point and Euler-discretizes at
-    the plant's ``dt``. Use it to size ``state_cost``/``control_cost`` before
-    creating a controller.
+    There is no ``get_dynamics`` on a Plant. The four distinct hooks are:
+
+    - ``get_model()`` — discrete ``(A, B)``; **linearized** about the plant's operating
+      point and Euler-discretized at ``dt``. This is what LQR/MPC use, and what this
+      tool always returns. For a nonlinear plant it is an approximation.
+    - ``dynamics(x, u)`` — the continuous-time vector field ``f(x, u)`` itself.
+    - ``model_terms(x, n_u)`` — the control-affine pair ``(f_x, g_x)`` at ``x``; what
+      SMC consumes.
+    - ``control_matrix(x, u)`` — ``g(x, u) = ∂f/∂u``.
+
+    Pass ``state`` to also get ``f`` and ``model_terms`` at that operating point —
+    the exact nonlinear answer, as opposed to the linearization above.
 
     Args:
         name: Name of a stored plant.
+        state: Optional operating point ``x`` (n_x,) to evaluate the nonlinear terms at.
+        control: Optional ``u`` (n_u,) for ``dynamics``; defaults to zeros.
     """
     plant = _plant_store.get(name)
     if plant is None:
@@ -182,18 +197,35 @@ def plant_model(name: str) -> str:
         return json.dumps({"error": f"{type(e).__name__}: {e}"})
 
     summary = _plant_summary(plant)
-    return json.dumps(
-        {
-            "name": name,
-            "type": summary["type"],
-            "dt": getattr(plant, "dt", None),
-            "n_x": summary["n_x"],
-            "n_u": summary["n_u"],
-            "state": _flatten(plant.get_state()),
-            "A": _to_nested(A),
-            "B": _to_nested(B),
-        }
-    )
+    payload = {
+        "name": name,
+        "type": summary["type"],
+        "dt": getattr(plant, "dt", None),
+        "n_x": summary["n_x"],
+        "n_u": summary["n_u"],
+        "state": _flatten(plant.get_state()),
+        "A": _to_nested(A),
+        "B": _to_nested(B),
+    }
+
+    if state is not None:
+        import numpy as np
+
+        n_u = summary["n_u"] or 0
+        # model_terms/control_matrix read `state.shape`, so coerce the JSON lists.
+        x = np.asarray(state, dtype=np.float64).reshape(-1)
+        u = np.asarray(control if control is not None else [0.0] * int(n_u), dtype=np.float64).reshape(-1)
+        try:
+            f = plant.dynamics(x, u)
+            f_x, g_x = plant.model_terms(x, n_u=int(n_u))
+        except (ValueError, TypeError) as e:
+            payload["nonlinear_error"] = f"{e.__class__.__name__}: {e}"
+            return json.dumps(payload)
+        payload["operating_point"] = {"x": _flatten(x), "u": _flatten(u)}
+        payload["dynamics"] = _flatten(f)  # f(x, u): the true vector field
+        payload["model_terms"] = {"f_x": _flatten(f_x), "g_x": _to_nested(g_x)}  # SMC's pair
+
+    return json.dumps(payload)
 
 
 def _flatten(value) -> list[float]:
