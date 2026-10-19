@@ -335,6 +335,46 @@ def graph_summary(name: str) -> str:
     return json.dumps(_summary(name, cg))
 
 
+@server.tool()
+def list_graphs() -> str:
+    """List the graphs held in this server session, compactly.
+
+    Stored graphs hold a full copy of the traced graph, so a long session can
+    accumulate them. Use this to see what is live before ``delete_graph``.
+    """
+    import json
+
+    return json.dumps(
+        {
+            name: {
+                "kind": "composed" if isinstance(cg, ComposedGraph) else "node",
+                "nodes_traced": len(cg.graph.nodes),
+                "inputs": list(cg.inputs),
+                "outputs": list(cg.outputs),
+            }
+            for name, cg in _graph_store.items()
+        }
+    )
+
+
+@server.tool()
+def delete_graph(name: str) -> str:
+    """Delete a stored graph, freeing it for the rest of the session.
+
+    Artifacts already lowered or built from it are untouched — this only drops the
+    in-memory graph (and therefore the ability to ``interpret_graph`` it by name).
+
+    Args:
+        name: Name of a stored graph.
+    """
+    import json
+
+    if name not in _graph_store:
+        return json.dumps({"error": f"No graph named '{name}'."})
+    del _graph_store[name]
+    return json.dumps({"deleted": name})
+
+
 # ── numeric / size inspection ────────────────────────────────────────────────
 
 

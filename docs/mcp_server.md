@@ -6,8 +6,8 @@ Cline, custom hosts).
 
 | Server | Console script | Tools | For |
 |--------|----------------|-------|-----|
-| **component** | `shinro-mcp` | 30 | Designing and running controllers, estimators, trajectories, LTI analysis |
-| **codegen** | `shinro-mcp-codegen` | 14 | Tracing, lowering to Zig, verification gates, building the kernel |
+| **component** | `shinro-mcp` | 32 | Designing and running controllers, estimators, trajectories, LTI analysis |
+| **codegen** | `shinro-mcp-codegen` | 16 | Tracing, lowering to Zig, verification gates, building the kernel |
 
 They are separate servers because an MCP client puts **every** tool schema of a
 connected server into the model's context on each turn. A session that is only tuning
@@ -177,6 +177,7 @@ Two entry points over one set of domain modules under `src/shinro/mcp/`:
 | `_estimators.py` | Estimator tools (create, estimate, reset, listing) |
 | `_trajectories.py` | Trajectory tools (create, generate, position_at, listing) |
 | `_plants.py` | Plant tools (create, attach, list, model) — the model seam for nonlinear components |
+| `_lifecycle.py` | Instance lifecycle (list every stored object, delete one) |
 | `_analysis.py` | LTI analysis tools (rank tests, Gramians, summary, balanced truncation) |
 | `_codegen.py` | Tracing and lowering tools (trace, compose, interpret, lower, gen scenario, measure) |
 | `_verification.py` | Verification tools (gate A, zig build, oracle B, stamp, verify) |
@@ -288,6 +289,8 @@ command at the module form instead:
 | `set_pid_output_limits` | Set output clamping limits on a PID controller (every PID variant shares this interface) |
 | `list_controller_types` | List all registered controller types |
 | `list_controllers` | List all created controller instances |
+| `list_instances` | List **every** stored controller, estimator, trajectory and plant, with kind, type, and attachments |
+| `delete_instance` | Delete a stored instance; refuses to delete a plant that components are attached to |
 
 **Controller types:** every registered controller — `PID`, `LQR`, `MPC_LTI`,
 `MPC_DeltaU`, `MPPI`, `SMC`, `onnx_rl`, plus any you register with
@@ -602,6 +605,8 @@ registry, so a graph and a controller may share a name.
 | `measure_graph` | Static size metrics: host buffers, VM stack buffer, baked blobs |
 | `lower_graph` | Serialize a stored graph to `graph_data.zig` + manifest (no compiler) |
 | `generate_scenario` | The gen stage: trace + compose + lower an isolated scenario graph |
+| `list_graphs` | List the graphs held in this session (name, trace size, ports) |
+| `delete_graph` | Drop a stored graph — already-built artifacts are untouched |
 
 **Two-stage workflow:** `generate_scenario` (or `build_composed_graph` +
 `lower_graph`) produces the graph; `build_kernel` compiles it.
@@ -610,9 +615,11 @@ registry, so a graph and a controller may share a name.
 constants/canonicalizes — this is what `interpret_graph` (and gate A) run on.
 `nodes_lowered` is the table the Zig VM actually compiles, and can be smaller.
 
-**Stored graphs are process-local.** A graph registered by `generate_scenario`
-lives in that server process's registry. A new client session must re-generate
-it (cheap, deterministic) or pass `scenario_path` to the verification tools.
+**Stored graphs are process-local — and now evictable.** A graph registered by
+`generate_scenario` lives in that server process's registry, and holds a full copy of
+the traced graph. A new client session must re-generate it (cheap, deterministic) or
+pass `scenario_path` to the verification tools; a long session should `list_graphs`
+and `delete_graph` what it no longer needs.
 
 **Example — trace a Kalman filter:**
 
@@ -689,7 +696,8 @@ Returns `exit_code`, `status`, `artifact`, `artifact_bytes`, the recorded
 ## Test Coverage Summary
 
 The test suites (`tests/test_mcp_server.py`, `tests/test_mcp_plants.py`,
-`tests/test_mcp_codegen.py`, `tests/test_mcp_verification.py`) cover:
+`tests/test_mcp_lifecycle.py`, `tests/test_mcp_codegen.py`,
+`tests/test_mcp_verification.py`) cover:
 
 | Category | Tests | What's tested |
 |----------|-------|---------------|
@@ -710,7 +718,7 @@ The test suites (`tests/test_mcp_server.py`, `tests/test_mcp_plants.py`,
 | **MPC constraints** | 8 | Set/get on MPC_LTI/DeltaU, custom matrix, non-MPC error, unknown name, bounds respected in compute |
 | **PID output limits** | 5 | Set success, clamping, anti-windup, non-PID error, unknown name, config-based limits |
 
-**Total: 201 tests** across the four suites (202 collected; `make test` deselects
+**Total: 225 tests** across the five suites (226 collected; `make test` deselects
 the large-horizon MPC timeout test)
 
 Codegen (`tests/test_mcp_codegen.py`, 31) and verification

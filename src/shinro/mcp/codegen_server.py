@@ -26,10 +26,12 @@ Run with the ``shinro-mcp-codegen`` console script, or
 from shinro.mcp._codegen import (  # noqa: F401
     build_composed_graph,
     check_component,
+    delete_graph,
     generate_scenario,
     graph_summary,
     interpret_graph,
     list_codegen_ops,
+    list_graphs,
     lower_graph,
     measure_graph,
     trace_component,
@@ -58,6 +60,9 @@ __all__ = [
     "measure_graph",
     "lower_graph",
     "generate_scenario",
+    # graph lifecycle
+    "list_graphs",
+    "delete_graph",
     # verification: gates, zig build, stamp, verify
     "run_gate_a",
     "build_kernel",
