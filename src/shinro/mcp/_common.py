@@ -16,6 +16,9 @@ from shinro.utils.controllability_checker import LTISystemsAnalyzer
 
 server = FastMCP("shinro")
 _store: dict[str, Any] = {}
+#: Traced/lowered graphs live in their own registry: a ``NodeGraph`` and a
+#: controller can share a name without either tool mistaking one for the other.
+_graph_store: dict[str, Any] = {}
 
 
 def _resolve_backend(backend: str | None = None):
