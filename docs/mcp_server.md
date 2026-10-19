@@ -17,6 +17,27 @@ The server listens on `stdio` and registers all tools below. Connect via an MCP 
 
 ---
 
+## Module layout
+
+`shinro.mcp.server` is the entry point; the tool implementations are split by domain
+under `src/shinro/mcp/`:
+
+| Module | Contents |
+|--------|----------|
+| `_common.py` | The shared `FastMCP` instance, the instance `_store`, and the conversion/analyzer helpers |
+| `_controllers.py` | Controller tools (create, compute, reset, MPC constraints, PID limits, listing) |
+| `_estimators.py` | Estimator tools (create, estimate, reset, listing) |
+| `_trajectories.py` | Trajectory tools (create, generate, position_at, listing) |
+| `_analysis.py` | LTI analysis tools (rank tests, Gramians, summary, balanced truncation) |
+| `server.py` | Imports the tool modules for their registration side effect, re-exports every tool, and provides `main()` |
+
+Each tool module decorates its functions with `@server.tool()` against the single
+instance in `_common.py`, so tools register simply by importing `server.py`. Adding a
+tool means adding it to the relevant domain module — no registry to update. Import from
+`shinro.mcp.server` (not the private modules) to keep that contract.
+
+---
+
 ## Client Configuration
 
 The project ships with `.mcp.json` at the root — the standard file for distributing MCP config with a project. Most clients (Claude Code, OpenCode, Cline) auto-discover it.
@@ -310,7 +331,7 @@ Returns: `{"Ar": [[-1.0]], "Br": [[1.414]], "Cr": [[1.414]], "Dr": [[0]], "reduc
 
 ## Test Coverage Summary
 
-The test suite (`tests/test_mcp_server.py`, 1213 lines) covers:
+The test suite (`tests/test_mcp_server.py`) covers:
 
 | Category | Tests | What's tested |
 |----------|-------|---------------|
@@ -331,7 +352,7 @@ The test suite (`tests/test_mcp_server.py`, 1213 lines) covers:
 | **MPC constraints** | 8 | Set/get on MPC_LTI/DeltaU, custom matrix, non-MPC error, unknown name, bounds respected in compute |
 | **PID output limits** | 5 | Set success, clamping, anti-windup, non-PID error, unknown name, config-based limits |
 
-**Total: 108 tests**
+**Total: 126 tests** (127 collected; `make test` deselects the large-horizon MPC timeout test)
 
 ### Edge cases covered
 
