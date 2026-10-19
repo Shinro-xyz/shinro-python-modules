@@ -1,42 +1,63 @@
-# Shinro MCP Server
+# Shinro MCP Servers
 
-A Model Context Protocol (MCP) server exposing the shinro control library as callable tools. Runs over `stdio` transport — compatible with any MCP client (Claude Desktop, Cline, custom hosts).
+Two Model Context Protocol (MCP) servers expose the shinro control library, split by
+phase of work. Both run over `stdio` — compatible with any MCP client (Claude Desktop,
+Cline, custom hosts).
+
+| Server | Console script | Tools | For |
+|--------|----------------|-------|-----|
+| **component** | `shinro-mcp` | 25 | Designing and running controllers, estimators, trajectories, LTI analysis |
+| **codegen** | `shinro-mcp-codegen` | 14 | Tracing, lowering to Zig, verification gates, building the kernel |
+
+They are separate servers because an MCP client puts **every** tool schema of a
+connected server into the model's context on each turn. A session that is only tuning
+a controller should not carry 14 tracing/lowering/verification schemas (~48% of the
+combined tool payload), and a compile session should not carry the component tools.
+Tool-selection accuracy degrades as the visible tool set grows (see arXiv
+`2505.10570`, `2505.03275`, `2606.15508`), so the split is a per-query-relevance
+measure, not just a token one.
 
 ## Quick Start
 
-The server ships as the `shinro-mcp` console script (installed with the package; entry point
-`shinro.mcp.server:main` in `pyproject.toml`):
+Both ship as console scripts (installed with the package; entry points in
+`pyproject.toml`):
 
 ```bash
-shinro-mcp
+shinro-mcp            # component server
+shinro-mcp-codegen    # codegen server
+
 # or, if the console script is not on PATH:
 python -m shinro.mcp.server
+python -m shinro.mcp.codegen_server
 ```
 
-The server listens on `stdio` and registers all tools below. Connect via an MCP client that supports the stdio transport.
+Each listens on `stdio` and registers only its own tools. Connect via an MCP client
+that supports the stdio transport — either server alone, or both when a session spans
+design and compile.
 
 ---
 
 ## Module layout
 
-`shinro.mcp.server` is the entry point; the tool implementations are split by domain
-under `src/shinro/mcp/`:
+Two entry points over one set of domain modules under `src/shinro/mcp/`:
 
 | Module | Contents |
 |--------|----------|
-| `_common.py` | The shared `FastMCP` instance, the instance `_store`, and the conversion/analyzer helpers |
+| `_common.py` | The two `FastMCP` instances (`server`, `codegen_server`), the instance stores, and the conversion/analyzer helpers |
 | `_controllers.py` | Controller tools (create, compute, reset, MPC constraints, PID limits, listing) |
 | `_estimators.py` | Estimator tools (create, estimate, reset, listing) |
 | `_trajectories.py` | Trajectory tools (create, generate, position_at, listing) |
 | `_analysis.py` | LTI analysis tools (rank tests, Gramians, summary, balanced truncation) |
 | `_codegen.py` | Tracing and lowering tools (trace, compose, interpret, lower, gen scenario, measure) |
 | `_verification.py` | Verification tools (gate A, zig build, oracle B, stamp, verify) |
-| `server.py` | Imports the tool modules for their registration side effect, re-exports every tool, and provides `main()` |
+| `server.py` | Component entry point: imports its tool modules, re-exports every tool, provides `main()` |
+| `codegen_server.py` | Codegen entry point: same for the compile-pipeline tools |
 
-Each tool module decorates its functions with `@server.tool()` against the single
-instance in `_common.py`, so tools register simply by importing `server.py`. Adding a
-tool means adding it to the relevant domain module — no registry to update. Import from
-`shinro.mcp.server` (not the private modules) to keep that contract.
+Each tool module decorates its functions with `@server.tool()` against one of the two
+instances in `_common.py`, so a tool registers on exactly one server by importing the
+matching entry module. Adding a tool means adding it to the relevant domain module —
+no registry to update. Import from `shinro.mcp.server` or `shinro.mcp.codegen_server`
+(not the private modules) to keep that contract.
 
 ---
 
@@ -48,9 +69,27 @@ The project ships with `.mcp.json` at the root — the standard file for distrib
 
 No setup needed — `.mcp.json` is picked up automatically. Claude Code prompts for approval on first use.
 
+`.mcp.json` ships **only the component server** (`shinro`), because the default working
+set is controller/estimator design. Add the codegen server to the same file when a
+session will trace, lower, or verify:
+
+```json
+{
+  "mcpServers": {
+    "shinro": { "command": "shinro-mcp" },
+    "shinro-codegen": { "command": "shinro-mcp-codegen" }
+  }
+}
+```
+
+Connecting both is fine — they are separate processes with independent state, and each
+advertises only its own tools. Enable the second one when you need it rather than by
+default: that is the whole point of the split.
+
 ### Claude Desktop
 
-Add to `claude_desktop_config.json`:
+Add to `claude_desktop_config.json` (add a second entry from the block above for the
+codegen server):
 
 ```json
 {

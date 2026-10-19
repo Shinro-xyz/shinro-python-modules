@@ -1,9 +1,12 @@
-"""Functional tests for the MCP server — spawns the actual process and talks JSON-RPC over stdio.
+"""Functional tests for the MCP servers — spawn the actual processes and talk JSON-RPC over stdio.
 
-Tests verify protocol-level correctness: server starts, responds to tools/list,
-handles tool calls with correct JSON-RPC structure, and handles errors gracefully.
+Both servers are covered: the component server (``shinro-mcp``) and the codegen
+server (``shinro-mcp-codegen``). Tests verify protocol-level correctness: the
+process starts, responds to tools/list with its own tool set, handles calls with
+correct JSON-RPC structure, and handles errors gracefully.
 """
 
+import contextlib
 import json
 import subprocess
 import sys
@@ -11,17 +14,18 @@ import sys
 import pytest
 
 SERVER_PATH = "shinro.mcp.server"
+CODEGEN_SERVER_PATH = "shinro.mcp.codegen_server"
 
 # Opt-in marker (like integration): excluded from the default `pytest` run via
 # pyproject `addopts`; run explicitly with `make test-mcp`.
 pytestmark = [pytest.mark.mcp]
 
 
-@pytest.fixture
-def server():
-    """Spawn the MCP server as a subprocess, perform initialize handshake, yield a client helper."""
+@contextlib.contextmanager
+def _client(server_path: str):
+    """Spawn an MCP server subprocess, handshake, yield a request helper."""
     proc = subprocess.Popen(
-        [sys.executable, "-m", SERVER_PATH],
+        [sys.executable, "-m", server_path],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -71,13 +75,28 @@ def server():
     # Notify initialized (no response expected)
     _notify("notifications/initialized")
 
-    yield _request
-
-    proc.terminate()
     try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        proc.kill()
+        yield _request
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
+@pytest.fixture
+def server():
+    """Client for the component server (``shinro-mcp``)."""
+    with _client(SERVER_PATH) as request:
+        yield request
+
+
+@pytest.fixture
+def codegen_server():
+    """Client for the codegen server (``shinro-mcp-codegen``)."""
+    with _client(CODEGEN_SERVER_PATH) as request:
+        yield request
 
 
 class TestServerProtocol:
@@ -91,7 +110,7 @@ class TestServerProtocol:
         assert "result" in resp
         tools = resp["result"]["tools"]
         tool_names = [t["name"] for t in tools]
-        assert len(tools) == 39
+        assert len(tools) == 25
         assert "create_controller" in tool_names
         assert "controller_compute" in tool_names
         assert "controller_reset" in tool_names
@@ -117,22 +136,22 @@ class TestServerProtocol:
         assert "gramian_finite" in tool_names
         assert "system_summary" in tool_names
         assert "balanced_truncation" in tool_names
-        # codegen: trace -> compose -> inspect -> lower
-        assert "list_codegen_ops" in tool_names
-        assert "check_component" in tool_names
-        assert "trace_component" in tool_names
-        assert "build_composed_graph" in tool_names
-        assert "graph_summary" in tool_names
-        assert "interpret_graph" in tool_names
-        assert "measure_graph" in tool_names
-        assert "lower_graph" in tool_names
-        assert "generate_scenario" in tool_names
-        # verification: gates, zig stage, stamp, verify
-        assert "run_gate_a" in tool_names
-        assert "build_kernel" in tool_names
-        assert "run_oracle" in tool_names
-        assert "stamp_deployment" in tool_names
-        assert "verify_deployment" in tool_names
+
+    def test_component_server_does_not_expose_codegen_tools(self, server):
+        """The split is real: tracing/lowering/verification stay off this server."""
+        tool_names = {t["name"] for t in server("tools/list")["result"]["tools"]}
+        for name in (
+            "trace_component",
+            "build_composed_graph",
+            "lower_graph",
+            "generate_scenario",
+            "build_kernel",
+            "run_gate_a",
+            "run_oracle",
+            "stamp_deployment",
+            "verify_deployment",
+        ):
+            assert name not in tool_names
 
     def test_tools_list_tool_has_input_schema(self, server):
         """Each tool in tools/list has an inputSchema with properties."""
@@ -709,3 +728,44 @@ class TestPIDOutputLimitsFunctional:
         })
         data = json.loads(resp["result"]["content"][0]["text"])
         assert abs(data["action"][0]) <= 0.5 + 1e-4
+
+
+class TestCodegenServerProtocol:
+    """Verify the second server serves only the compile-pipeline tools."""
+
+    def test_codegen_tools_list_returns_its_own_tools(self, codegen_server):
+        """tools/list on shinro-mcp-codegen returns the 14 codegen/verification tools."""
+        resp = codegen_server("tools/list")
+        assert "result" in resp
+        tool_names = {t["name"] for t in resp["result"]["tools"]}
+        assert len(tool_names) == 14
+        expected = {
+            "list_codegen_ops",
+            "check_component",
+            "trace_component",
+            "build_composed_graph",
+            "graph_summary",
+            "interpret_graph",
+            "measure_graph",
+            "lower_graph",
+            "generate_scenario",
+            "run_gate_a",
+            "build_kernel",
+            "run_oracle",
+            "stamp_deployment",
+            "verify_deployment",
+        }
+        assert tool_names == expected
+
+    def test_codegen_server_does_not_expose_component_tools(self, codegen_server):
+        """The split is symmetric: controller/estimator tools are not on this server."""
+        tool_names = {t["name"] for t in codegen_server("tools/list")["result"]["tools"]}
+        for name in ("create_controller", "controller_compute", "create_estimator", "create_trajectory"):
+            assert name not in tool_names
+
+    def test_codegen_tool_call_round_trips(self, codegen_server):
+        """A real tool call works over the protocol on this server."""
+        resp = codegen_server("tools/call", {"name": "list_codegen_ops", "arguments": {}})
+        data = json.loads(resp["result"]["content"][0]["text"])
+        assert "matmul" in data["ops"]
+        assert "closed_loop_tracking" in data["recipes"]

@@ -1,5 +1,8 @@
 """MCP tools for the verification gates and the zig stage.
 
+These register on the **codegen server** (``shinro-mcp-codegen``), alongside the
+tracing/lowering tools they verify.
+
 The checks that sit between a lowered graph and a deployment
 (``shinro.verification`` + the build stage in ``shinro.scenarios.build``):
 
@@ -26,7 +29,8 @@ import shutil
 from pathlib import Path
 
 from shinro.codegen.runtime_paths import runtime_root
-from shinro.mcp._common import _graph_store, server
+from shinro.mcp._common import _graph_store
+from shinro.mcp._common import codegen_server as server
 from shinro.scenarios.build import GATE_A_TICKS, TOL_GATE_A
 from shinro.scenarios.build import build_scenario as _build_scenario
 from shinro.scenarios.gen import load_scenario

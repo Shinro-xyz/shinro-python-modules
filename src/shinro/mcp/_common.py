@@ -1,9 +1,16 @@
-"""Shared MCP state and conversion helpers.
+"""Shared MCP state and conversion helpers for both servers.
 
-The FastMCP instance, the instance store, and the small helpers every tool
-module needs live here so the tool modules register against one server object
-and read/write one store. Nothing in this module imports a tool module, so the
-import graph stays acyclic: ``_common`` <- tool modules <- ``server``.
+There are **two** servers, because the tool families serve different phases of
+work and a client should not pay for the ones it isn't using:
+
+- :data:`server` (``shinro-mcp``) — designing and running components:
+  controllers, estimators, trajectories, LTI analysis.
+- :data:`codegen_server` (``shinro-mcp-codegen``) — the compile pipeline:
+  tracing, lowering, and the verification gates.
+
+Each tool module registers against one of them at import time. Nothing in this
+module imports a tool module, so the import graph stays acyclic:
+``_common`` <- tool modules <- ``server`` / ``codegen_server``.
 """
 
 from typing import Any
@@ -15,6 +22,10 @@ from shinro.utils.array_backend import NumpyBackend, TorchBackend
 from shinro.utils.controllability_checker import LTISystemsAnalyzer
 
 server = FastMCP("shinro")
+#: The compile-pipeline server. Tools registered here are only reachable from a
+#: client connected to ``shinro-mcp-codegen``; importing the tool modules does
+#: not leak them onto :data:`server`.
+codegen_server = FastMCP("shinro-codegen")
 _store: dict[str, Any] = {}
 #: Traced/lowered graphs live in their own registry: a ``NodeGraph`` and a
 #: controller can share a name without either tool mistaking one for the other.
