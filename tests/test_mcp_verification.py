@@ -15,6 +15,7 @@ Two things these pin beyond "it returns 0":
 
 import json
 import shutil
+from pathlib import Path
 
 import pytest
 
@@ -67,7 +68,7 @@ class TestGateA:
     def test_gate_a_reports_the_compared_graph_size(self):
         """The result reports the graph it compared, so a stale graph is visible."""
         data = json.loads(run_gate_a(BASE_SCENARIO, ticks=5))
-        assert data["nodes"] > 10
+        assert data["nodes_traced"] > 10
 
     def test_gate_a_rejects_a_policy_only_scenario(self, tmp_path):
         """A graph with no live estimator/controller pair is refused, not faked."""
@@ -100,6 +101,33 @@ class TestBuildKernel:
         assert result["status"] == "ok"
         assert result["artifact"] is not None
         assert result["artifact_bytes"] > 0
+        assert result["artifact_name"] == "libbase"
+
+    def test_build_resolves_a_non_default_artifact_name(self, tmp_path):
+        """A scenario whose artifact_name is not 'libbase' still reports metadata.
+
+        Regression: the manifest glob used to be guarded on the *default* stem
+        existing, so a custom artifact name returned null for artifact, bytes,
+        oracle and master_hash despite exit_code 0 (found by an external agent
+        running this workflow end to end).
+        """
+        scenario = tmp_path / "custom.toml"
+        scenario.write_text(Path(BASE_SCENARIO).read_text().replace('artifact_name = "libbase"', 'artifact_name = "lib_custom"'))
+        out = tmp_path / "graph"
+        assert "error" not in json.loads(generate_scenario("custom", str(scenario), str(out)))
+
+        data = json.loads(build_kernel(str(out), scenario_path=str(scenario)))
+        assert data["exit_code"] == 0, data["log"]
+        assert data["artifact_name"] == "lib_custom"
+        assert data["artifact"] is not None
+        assert data["artifact_bytes"] > 0
+        assert data["oracle"]["status"] == "passed"
+        assert data["master_hash"]
+
+        # run_oracle must find the same non-default stem without being told it.
+        oracle = json.loads(run_oracle(str(out), name="custom", samples=5))
+        assert oracle["passed"] is True, oracle
+        assert oracle["artifact_name"] == "lib_custom"
 
     def test_build_records_a_passed_oracle(self, built):
         """The deployment record carries the oracle outcome it verified."""
@@ -149,6 +177,16 @@ class TestOracleB:
         assert data["max_abs_err"] < data["tolerance"]
         assert data["has_solve_qp"] is False
 
+    def test_oracle_returns_a_stampable_record_block(self, built):
+        """run_oracle's `record` is exactly what stamp_deployment consumes."""
+        data = json.loads(run_oracle(str(built["out"]), scenario_path=BASE_SCENARIO, samples=5))
+        record = data["record"]
+        assert record["status"] == "passed"
+        assert set(record) == {"status", "method", "samples", "seed", "max_abs_err", "tolerance"}
+
+        stamped = json.loads(stamp_deployment(str(built["out"]), oracle=record))
+        assert stamped["oracle"]["status"] == "passed"
+
     def test_oracle_accepts_a_stored_graph_name(self, built, tmp_path):
         """A graph generated through the tool can be verified without a scenario.
 
@@ -165,6 +203,15 @@ class TestOracleB:
         data = json.loads(run_oracle(str(tmp_path), scenario_path=BASE_SCENARIO))
         assert "error" in data
         assert "libbase.so" in data["error"]
+
+    def test_oracle_reports_available_artifacts_on_a_stem_mismatch(self, built):
+        """A wrong explicit stem lists what is actually on disk, not 'zig build produced none'."""
+        data = json.loads(
+            run_oracle(str(built["out"]), scenario_path=BASE_SCENARIO, artifact_name="nonexistent")
+        )
+        assert "error" in data
+        assert data["available_artifacts"] == ["libbase.so"]
+        assert "artifact_name" in data["hint"]
 
     def test_oracle_requires_a_graph_source(self, built):
         """Neither a name nor a scenario is a usage error."""

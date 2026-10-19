@@ -391,6 +391,14 @@ registry, so a graph and a controller may share a name.
 **Two-stage workflow:** `generate_scenario` (or `build_composed_graph` +
 `lower_graph`) produces the graph; `build_kernel` compiles it.
 
+**Node counts.** `nodes_traced` is the captured graph before lowering folds
+constants/canonicalizes — this is what `interpret_graph` (and gate A) run on.
+`nodes_lowered` is the table the Zig VM actually compiles, and can be smaller.
+
+**Stored graphs are process-local.** A graph registered by `generate_scenario`
+lives in that server process's registry. A new client session must re-generate
+it (cheap, deterministic) or pass `scenario_path` to the verification tools.
+
 **Example — trace a Kalman filter:**
 
 ```json
@@ -432,7 +440,16 @@ claim true.
 `build_kernel` requires `zig` on PATH and returns an `exit_code` / `status`
 (`ok`, `usage_error`, `oracle_mismatch`, `build_or_verify_failed`,
 `zig_missing`). Omitting `scenario_path` builds and stamps *unverified* — the
-record then carries `oracle.status = "not_run"`.
+record then carries `oracle.status = "not_run"`. The artifact stem is resolved
+from `lib/*.so` after the build, so a scenario whose `[compile].artifact_name`
+is not `libbase` still reports its oracle and master hash.
+
+**Known gap — policy-only graphs have no gate A.** With `[estimator]` absent
+there is no live component pair to drive, so oracle B is the only equivalence
+check. Oracle B compares the `.so` against `interpret()` of *the same graph*, so
+it cannot catch a mis-wired state port or a wrong observation encoder — those
+would have to be caught against the eager `onnx_rl` adapter. For policies, also
+read the port layout from `graph_summary` and confirm the recurrence yourself.
 
 The pipeline narrates on stdout, which on a stdio server is the JSON-RPC
 channel; these tools capture it and return it as a `log` field.
