@@ -110,7 +110,7 @@ class TestServerProtocol:
         assert "result" in resp
         tools = resp["result"]["tools"]
         tool_names = [t["name"] for t in tools]
-        assert len(tools) == 30
+        assert len(tools) == 32
         assert "create_controller" in tool_names
         assert "controller_compute" in tool_names
         assert "controller_reset" in tool_names
@@ -142,6 +142,9 @@ class TestServerProtocol:
         assert "list_plant_types" in tool_names
         assert "list_plants" in tool_names
         assert "plant_model" in tool_names
+        # lifecycle
+        assert "list_instances" in tool_names
+        assert "delete_instance" in tool_names
 
     def test_component_server_does_not_expose_codegen_tools(self, server):
         """The split is real: tracing/lowering/verification stay off this server."""
@@ -156,6 +159,8 @@ class TestServerProtocol:
             "run_oracle",
             "stamp_deployment",
             "verify_deployment",
+            "list_graphs",
+            "delete_graph",
         ):
             assert name not in tool_names
 
@@ -744,7 +749,7 @@ class TestCodegenServerProtocol:
         resp = codegen_server("tools/list")
         assert "result" in resp
         tool_names = {t["name"] for t in resp["result"]["tools"]}
-        assert len(tool_names) == 14
+        assert len(tool_names) == 16
         expected = {
             "list_codegen_ops",
             "check_component",
@@ -755,6 +760,8 @@ class TestCodegenServerProtocol:
             "measure_graph",
             "lower_graph",
             "generate_scenario",
+            "list_graphs",
+            "delete_graph",
             "run_gate_a",
             "build_kernel",
             "run_oracle",
@@ -766,7 +773,14 @@ class TestCodegenServerProtocol:
     def test_codegen_server_does_not_expose_component_tools(self, codegen_server):
         """The split is symmetric: controller/estimator tools are not on this server."""
         tool_names = {t["name"] for t in codegen_server("tools/list")["result"]["tools"]}
-        for name in ("create_controller", "controller_compute", "create_estimator", "create_trajectory"):
+        for name in (
+            "create_controller",
+            "controller_compute",
+            "create_estimator",
+            "create_trajectory",
+            "list_instances",
+            "delete_instance",
+        ):
             assert name not in tool_names
 
     def test_codegen_tool_call_round_trips(self, codegen_server):

@@ -53,6 +53,10 @@ from shinro.mcp._estimators import (  # noqa: F401
     list_estimator_types,
     list_estimators,
 )
+from shinro.mcp._lifecycle import (  # noqa: F401
+    delete_instance,
+    list_instances,
+)
 from shinro.mcp._plants import (  # noqa: F401
     attach_plant,
     create_plant,
@@ -114,6 +118,9 @@ __all__ = [
     "list_plant_types",
     "list_plants",
     "plant_model",
+    # lifecycle
+    "list_instances",
+    "delete_instance",
 ]
 
 
