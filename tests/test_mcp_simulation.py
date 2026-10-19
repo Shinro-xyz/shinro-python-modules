@@ -124,6 +124,8 @@ class TestSweepScenarios:
         values = [r["value"] for r in data["ranked"]]
         assert values == sorted(values), "min direction must sort ascending"
         assert data["best"]["label"] == data["ranked"][0]["label"]
+        # Each row carries its tolerance verdict, so a constrained search can filter.
+        assert "check" in data["ranked"][0]
         # The winner's file is reported so the caller can keep it.
         assert data["best"]["controller_config"] in (soft, stiff)
 

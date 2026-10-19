@@ -258,6 +258,9 @@ def sweep_scenarios(
                 "tracking": summary["tracking"],
                 "max_abs_action": summary["max_abs_action"],
                 "all_finite": summary["all_finite"],
+                # The scenario's own tolerance verdict travels with each row, so a
+                # sweep can be filtered to passing trials without a second read.
+                "check": summary["check"],
             }
         )
 
