@@ -509,6 +509,13 @@ answer, which is what you need to sanity-check an SMC setup or a nonlinear filte
 For an inverted pendulum at `x=[0.1, 0]`, `u=0.5`: `f = [0, 21.9587]`,
 `f_x = [0, 1.9587]`, `g_x = [[0], [40.0]]`, and `f_x + g_x·u` reproduces `f`.
 
+**`control` defaults to the plant's operating control, not zero.** For a non-affine
+plant (rotor thrust ~ ω²) `control_matrix(x, 0)` is identically zero, so a zero default
+would report a `g_x` that looks broken. A quadrotor therefore defaults to its hover
+speeds. Pass `control` explicitly to evaluate somewhere else. Note also that for such
+a plant `dynamics(x, 0) ≠ f_x`: `f_x` is the tangent-line drift at the operating point,
+and `f_x + g_x·u` reproduces `f` only near that point.
+
 ---
 
 ### System Analysis

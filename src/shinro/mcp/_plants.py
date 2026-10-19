@@ -214,7 +214,16 @@ def plant_model(
         n_u = summary["n_u"] or 0
         # model_terms/control_matrix read `state.shape`, so coerce the JSON lists.
         x = np.asarray(state, dtype=np.float64).reshape(-1)
-        u = np.asarray(control if control is not None else [0.0] * int(n_u), dtype=np.float64).reshape(-1)
+        # Default u to the plant's operating control, not zeros: for a non-affine plant
+        # (rotor thrust ~ w^2) control_matrix(x, 0) is identically zero, so a zero
+        # default would report a g_x that looks broken. This mirrors model_terms.
+        default_u = plant.operating_control()
+        if control is not None:
+            u = np.asarray(control, dtype=np.float64).reshape(-1)
+        elif default_u is not None:
+            u = np.asarray(default_u, dtype=np.float64).reshape(-1)
+        else:
+            u = np.zeros(int(n_u))
         try:
             f = plant.dynamics(x, u)
             f_x, g_x = plant.model_terms(x, n_u=int(n_u))
