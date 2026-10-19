@@ -117,8 +117,25 @@ class TestCreatePlant:
         # The linearization stays available alongside the nonlinear evaluation.
         assert np.asarray(data["A"]).shape == (2, 2)
 
+    def test_plant_model_defaults_to_the_operating_control(self):
+        """A non-affine plant's g is zero at u=0, so the default u is its operating point.
+
+        Rotor thrust is ~w^2, so control_matrix(x, 0) is identically zero. Defaulting
+        to zeros would report a g_x that looks broken; the tool uses
+        operating_control() (hover for a quadrotor), matching model_terms.
+        """
+        create_plant("qp", type="Quadrotor", params={"dt": 0.01})
+        data = json.loads(plant_model("qp", state=[0.0] * 12))
+        u = np.asarray(data["operating_point"]["u"])
+        assert np.all(u > 0), f"expected hover speeds, got {u}"
+        g = np.asarray(data["model_terms"]["g_x"])
+        assert np.count_nonzero(g) > 0, "g_x should not be all zeros at the operating point"
+        # The control-affine reconstruction must reproduce the vector field.
+        recon = np.asarray(data["model_terms"]["f_x"]) + g @ u
+        assert np.allclose(recon, data["dynamics"], atol=1e-9)
+
     def test_plant_model_accepts_an_operating_control(self):
-        """An explicit u is used for f(x, u); it defaults to zeros otherwise."""
+        """An explicit u is used for f(x, u); otherwise the operating control applies."""
         create_plant("pend", config_path=PENDULUM)
         moved = json.loads(plant_model("pend", state=[0.1, 0.0], control=[0.5]))
         zeroed = json.loads(plant_model("pend", state=[0.1, 0.0]))
