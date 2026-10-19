@@ -466,7 +466,7 @@ components (LQR, PID, MPC, KF, Luenberger) need none of this.
 |------|-------------|
 | `create_plant` | Create a plant from a TOML config or inline params |
 | `attach_plant` | Attach a plant to a controller or estimator |
-| `plant_model` | Discrete-time `(A, B)` at the plant's operating point, plus dims |
+| `plant_model` | Discrete-time `(A, B)` + dims; pass `state` for the true nonlinear `f(x,u)` and `(f_x, g_x)` |
 | `list_plant_types` | Registered plant types |
 | `list_plants` | Created plants, their dims, and what they are attached to |
 
@@ -492,6 +492,22 @@ plant rather than a `TypeError` about `g_x`.
 
 `attach_plant` on a self-contained component (e.g. LQR) is refused, because its model
 is already in its config.
+
+**Four model hooks, and what each is for.** There is no `get_dynamics`; a plant
+exposes these instead:
+
+| Hook | Meaning | Consumed by |
+|------|---------|-------------|
+| `get_model()` | discrete `(A, B)` — **linearized** at the operating point, Euler-discretized at `dt` | LQR, MPC, `plant_model` |
+| `dynamics(x, u)` | continuous-time vector field `f(x, u)` — the exact nonlinear model | EKF/UKF process model, MPPI rollouts |
+| `model_terms(x, n_u)` | control-affine pair `(f_x, g_x)` at `x`; `f = f_x + g_x·u` | SMC |
+| `control_matrix(x, u)` | `g(x, u) = ∂f/∂u` | `model_terms` |
+
+`plant_model(name)` returns only the linearization. Pass `state` (and optionally
+`control`) to also get `f(x, u)` and `(f_x, g_x)` at that point — the exact nonlinear
+answer, which is what you need to sanity-check an SMC setup or a nonlinear filter.
+For an inverted pendulum at `x=[0.1, 0]`, `u=0.5`: `f = [0, 21.9587]`,
+`f_x = [0, 1.9587]`, `g_x = [[0], [40.0]]`, and `f_x + g_x·u` reproduces `f`.
 
 ---
 
