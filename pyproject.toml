@@ -1,5 +1,7 @@
 [build-system]
-requires = ["setuptools>=68", "setuptools-scm[toml]>=8.0"]
+# setuptools>=77 is required for PEP 639 (`license` expression + `license-files`
+# under [project]); older versions ignore both fields in build isolation.
+requires = ["setuptools>=77", "setuptools-scm[toml]>=8.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,12 +10,15 @@ description = "Whole-body control framework: controllers, plants, estimators, tr
 readme = "README.md"
 requires-python = ">=3.12"
 dynamic = ["version"]
-# NOTE: no `license` field, deliberately. The outbound license for this project
-# is undecided pending legal review, and the LICENSE file is intentionally empty.
-# The field previously read `{ text = "MIT" }`, which was emitted as packaging
-# boilerplate rather than chosen — see the license audit. Do not add a permissive
-# license here until the organization has decided, and commit the license text
-# at the same time. Third-party attribution lives in THIRD-PARTY.md.
+# Outbound license: Apache-2.0 (the LICENSE file at the repo root is the
+# Apache License 2.0 text). PEP 639 license expression + license-files, so the
+# license and third-party attribution travel into the wheel METADATA as well as
+# the sdist. Apache-2.0 §4(b) requires recipients of redistributed OSQP code to
+# receive the license text; third-party attribution lives in THIRD-PARTY.md.
+# NOTE: do not add `License :: OSI Approved :: ...` classifiers — setuptools
+# rejects them when a PEP 639 `license` expression is present.
+license = "Apache-2.0"
+license-files = ["LICENSE", "THIRD-PARTY.md", "licenses/*"]
 authors = [{ name = "Shinro" }]
 dependencies = [
     "numpy>=2.0",
